@@ -1,0 +1,39 @@
+[Unit]
+Description=Zeloo Gateway Socket
+Documentation=https://docs.zeloo.io
+Before=zeloo.service
+After=network-online.target
+ConditionPathIsReadWrite=/var/lib/Zeloo
+
+[Socket]
+# IPv4 listener
+ListenStream=9119
+# IPv6 listener (dual-stack)
+ListenStream=[::]:9119
+# Stream socket (SOCK_STREAM), NOT accept()-style
+Accept=false
+# Cap concurrent connections to prevent resource exhaustion
+MaxConnections=1024
+# Reuse TIME_WAIT sockets for faster recovery
+ReusePort=true
+# Enable TCP keepalive for half-open connection detection
+KeepAlive=true
+KeepAliveTimeSec=30
+KeepAliveProbes=3
+KeepAliveIntervalSec=15
+# Disable Nagle's algorithm for low-latency RPC traffic
+NoDelay=true
+# Defer accept() until data arrives (kernel-side optimisation)
+DeferAcceptSec=5
+# Allow binding to non-local addresses (for transparent proxying if ever needed)
+FreeBind=true
+# We do NOT need transparent proxying in the default deployment
+Transparent=false
+# Clean up the socket file when zeloo.service stops
+RemoveOnStop=true
+# Mount the journal directory into the socket's namespace
+# so error logs can be collected even before the main service is up
+DirectoryMode=0750
+
+[Install]
+WantedBy=sockets.target

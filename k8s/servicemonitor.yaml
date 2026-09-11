@@ -1,0 +1,13 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: zeloo
+  labels:
+    app: zeloo
+spec:
+  selector:
+    matchLabels:
+      app: zeloo
+  endpoints:
+  - port: metrics
+    interval: 30s

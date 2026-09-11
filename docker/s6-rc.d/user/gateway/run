@@ -1,0 +1,4 @@
+#!/bin/sh
+# docker/s6-rc.d/user/gateway/run — s6 service run script for the gateway API server
+
+exec setuidgid zeloo env ZELOO_MODE=gateway zeloo gateway

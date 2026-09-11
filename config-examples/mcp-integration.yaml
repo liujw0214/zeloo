@@ -1,0 +1,43 @@
+﻿# MCP integration configuration — connect to external tools via Model Context Protocol.
+# Demonstrates stdio and HTTP MCP server configurations.
+
+model: gpt-4o
+provider: openai
+temperature: 0.0
+max_tokens: 4096
+max_iterations: 90
+
+terminal:
+  backend: local
+  timeout: 30
+
+mcp:
+  servers:
+    # Local filesystem MCP server (stdio transport)
+    - name: filesystem
+      transport: stdio
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/your/project"]
+
+    # Remote MCP server (HTTP/SSE transport)
+    - name: remote-utils
+      transport: http
+      url: https://mcp.example.com/sse
+      headers:
+        Authorization: Bearer ${MCP_SERVER_TOKEN}
+      dangerous: false
+
+    # PostgreSQL MCP server for database operations
+    - name: postgres
+      transport: stdio
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-postgres", "postgresql://user:pass@localhost:5432/db"]
+
+memory:
+  enabled: true
+  user_profile_enabled: true
+  max_chars: 8000
+
+self_evolution:
+  background_review:
+    enabled: false

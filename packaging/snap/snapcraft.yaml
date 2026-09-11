@@ -1,0 +1,83 @@
+name: zeloo
+version: '0.1.0'
+summary: Self-hosted AI Agent runtime
+description: |
+  Zeloo is a self-hosted, self-evolving resident AI Agent runtime framework.
+
+  It ships with a three-layer System Prompt (stable / context / volatile),
+  multi-provider LLM routing across 40+ backends, more than 90 built-in
+  tools (file, web, shell, code execution, browser, image gen), 18+
+  messaging platform adapters (Telegram, Discord, Slack, WeChat, Lark,
+  ...) and 39 web search providers (Tavily, Brave, Perplexity, Google,
+  Bing, SerpAPI, ...).
+
+  Workspace state is persisted in SQLite with FTS5 indexing; skills can
+  be hot reloaded, evolved, and audited via the curator lifecycle.
+
+grade: stable
+confinement: strict
+base: core22
+compression: lzo
+
+apps:
+  zeloo:
+    command: usr/bin/zeloo
+    extensions: [python]
+    plugs:
+      - home
+      - network
+      - network-bind
+      - removable-media
+      - ssh-keys
+      - ssh-public-keys
+    environment:
+      ZELOO_HOME: "$SNAP_USER_COMMON/zeloo"
+      PYTHONUNBUFFERED: "1"
+    daemon: simple
+    restart-condition: on-failure
+    restart-delay: 5s
+    common-id: zeloo
+    passthrough:
+      install-mode: disable
+
+parts:
+  zeloo:
+    plugin: python
+    source: .
+    python-version: 'python3'
+    python-packages:
+      - pip
+      - zeloo==0.1.0
+    build-packages:
+      - cargo
+      - libssl-dev
+      - libffi-dev
+      - build-essential
+    stage-packages:
+      - ca-certificates
+      - libssl3
+    override-build: |
+      set -eux
+      if [ -d native/fts5_cjk ]; then
+          (cd native/fts5_cjk && cargo build --release)
+      fi
+      craftctl default
+    override-stage: |
+      set -eux
+      mkdir -p usr/bin
+      cat > usr/bin/zeloo <<'EOF'
+      #!/bin/sh
+      exec "$SNAP"/usr/bin/python3 -m zeloo_cli "$@"
+      EOF
+      chmod 0755 usr/bin/zeloo
+      craftctl default
+
+layout:
+  /var/lib/zeloo:
+    bind: $SNAP_USER_COMMON/zeloo
+
+hooks:
+  install:
+    plugs: [home, network]
+  configure:
+    plugs: [home, network]

@@ -1,0 +1,20 @@
+Zeloo has been installed!
+
+Release name: {{ .Release.Name }}
+Namespace:    {{ .Release.Namespace }}
+
+To access the application:
+{{- if .Values.ingress.enabled }}
+  https://{{ .Values.ingress.host }}
+{{- else }}
+  kubectl port-forward svc/{{ include "zeloo.fullname" . }} 8080:{{ .Values.service.httpPort }}
+  then open http://localhost:8080
+{{- end }}
+
+{{- if .Values.autoscaling.enabled }}
+Autoscaling is enabled ({{ .Values.autoscaling.minReplicas }} - {{ .Values.autoscaling.maxReplicas }} replicas).
+{{- end }}
+
+{{- if .Values.serviceMonitor.enabled }}
+Prometheus ServiceMonitor has been created.
+{{- end }}

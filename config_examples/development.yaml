@@ -1,0 +1,144 @@
+# Zeloo Development Environment Configuration
+# 用途：本地开发，verbose 日志，所有功能启用
+# 使用：ZELOO_ENV=development 或将本文件复制为 config.yaml
+
+zeloo:
+  log_level: DEBUG
+  verbose: true
+  quiet: false
+  # 开发环境默认开启 trace，便于排查调用链路
+  trace_enabled: true
+  # 不上报生产遥测端点
+  telemetry_dry_run: true
+
+llm:
+  default_provider: openai
+  default_model: gpt-4o
+  # 开发时启用所有常用 provider，便于切换对比
+  providers:
+    openai:
+      enabled: true
+      api_key: ${OPENAI_API_KEY}
+      base_url: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+    anthropic:
+      enabled: true
+      api_key: ${ANTHROPIC_API_KEY}
+    deepseek:
+      enabled: true
+      api_key: ${DEEPSEEK_API_KEY}
+    groq:
+      enabled: true
+      api_key: ${GROQ_API_KEY}
+    ollama:
+      enabled: true
+      base_url: ${OLLAMA_BASE_URL:-http://localhost:11434}
+    # 本地 vLLM / LocalAI（无需 key）
+    vllm:
+      enabled: true
+      base_url: ${VLLM_BASE_URL:-http://localhost:8000/v1}
+
+agent:
+  max_iterations: 50  # 开发时允许更多迭代，便于调试复杂任务
+  temperature: 0.7
+  timeout_seconds: 120
+  # 开发模式允许更长的单步超时
+  step_timeout_seconds: 60
+  # 允许在出错时保留更详细的历史
+  keep_full_trace: true
+
+memory:
+  backend: local  # 开发用本地内存，重启即清空
+  cache_ttl: 300
+  # 不持久化用户画像，避免污染长期记忆
+  user_profile_enabled: true
+  max_chars: 8000
+
+terminal:
+  backend: local  # 开发直接使用本地终端
+  timeout: 30
+  cwd: ${TERMINAL_CWD:-.}
+
+voice:
+  enabled: true  # 开发时启用 TTS 测试
+  backend: console
+  # 调试时可切换为 openai 进行真实语音合成
+  fallback_backend: openai
+
+gateway:
+  enabled: true
+  api:
+    host: localhost
+    port: 9113
+    # 开发模式关闭认证，方便联调
+    auth_tokens: []
+  session_idle_timeout: 600
+  eviction_interval: 120
+  # 不在开发环境启用外部平台 webhook
+  platforms: {}
+
+mcp:
+  # 开发时启用文件系统和 git 两个最常用 MCP
+  servers:
+    - name: filesystem
+      transport: stdio
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+      enabled: true
+    - name: git
+      transport: stdio
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-git", "--repository", "."]
+      enabled: true
+
+browser:
+  headless: false  # 开发时显示浏览器，便于观察交互
+  timeout: 60000
+  # 允许截图保存到本地
+  save_screenshots: true
+  screenshot_dir: ${ZELOO_HOME:-~/.Zeloo}/screenshots
+
+telemetry:
+  enabled: true
+  endpoint: http://localhost:4318
+  exporter: otlp
+  # 开发环境采样率全开
+  sample_ratio: 1.0
+  service_name: zeloo-dev
+
+self_evolution:
+  background_review: true
+  prompt_optimizer: true
+  # 开发时降低复盘阈值，更频繁触发
+  review_interval_minutes: 10
+
+smart_model_routing:
+  enabled: true
+  complexity_threshold: 0.7
+  # 简单任务自动路由到便宜模型
+  cheap_model: gpt-4o-mini
+  expensive_model: gpt-4o
+
+context:
+  compression:
+    enabled: true
+    trigger_tokens: 50000
+    # 上下文压缩策略：先总结再裁剪
+    strategy: summarize_then_truncate
+
+curator:
+  enabled: true
+  auto_curate: true
+  curate_interval_minutes: 15
+  # 开发时保留最近 30 天记忆便于回溯
+  retention_days: 30
+
+security:
+  # 开发环境保留便利性
+  sanitize_input: false
+  validate_output: false
+  threat_scan: false
+  rate_limit: false
+
+# 开发模式不需要 Vault，使用 .env 中的明文 key
+vault:
+  enabled: false

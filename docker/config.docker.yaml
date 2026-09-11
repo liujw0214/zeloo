@@ -1,0 +1,36 @@
+# docker/config.docker.yaml — default configuration for Docker deployments
+#
+# This file is copied to /var/lib/Zeloo/.Zeloo/config.yaml
+# by docker/cont-init.d/01-setup.sh if no config exists yet.
+#
+# Override in docker-compose.yml:
+#   environment:
+#     zeloo_MODE: gateway
+#     zeloo_MODEL: gpt-4o
+
+model: gpt-4o
+provider: openai
+
+max_iterations: 90
+temperature: 0.0
+
+# Gateway server (gateway mode)
+gateway:
+  host: 0.0.0.0
+  port: 9113
+  cors_origins:
+    - "*"
+
+# Memory provider (Docker: file-based)
+memory:
+  provider: file
+  path: /var/lib/Zeloo/memory
+
+# Logging
+logging:
+  level: INFO
+  file: /var/lib/Zeloo/logs/Zeloo.log
+
+# Skills directory (read-only in container)
+skills:
+  path: /app/skills

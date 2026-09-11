@@ -1,0 +1,80 @@
+version: "3.9"
+
+services:
+  # ── Gateway server (API mode) ─────────────────────────────────────────
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: Zeloo-gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - zeloo_MODE=gateway
+      - zeloo_DATA_DIR=/var/lib/Zeloo
+      # Required: set your API key via .env or environment
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    volumes:
+      - Zeloo-data:/var/lib/Zeloo
+      - ./skills:/app/skills:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - Zeloo-net
+    profiles:
+      - gateway
+
+  # ── Interactive CLI ────────────────────────────────────────────────
+  cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: Zeloo-cli
+    restart: on-failure
+    environment:
+      - zeloo_MODE=cli
+      - zeloo_DATA_DIR=/var/lib/Zeloo
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    stdin_open: true
+    tty: true
+    volumes:
+      - Zeloo-data:/var/lib/Zeloo
+      - .:/workspace:ro
+    networks:
+      - Zeloo-net
+    profiles:
+      - cli
+
+  # ── Multi-service with s6 overlay ────────────────────────────────
+  Zeloo-s6:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: s6
+    container_name: Zeloo-s6
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - zeloo_DATA_DIR=/var/lib/Zeloo
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    volumes:
+      - Zeloo-data:/var/lib/Zeloo
+      - ./skills:/app/skills:ro
+    networks:
+      - Zeloo-net
+    profiles:
+      - s6
+
+volumes:
+  Zeloo-data:
+    driver: local
+
+networks:
+  Zeloo-net:
+    driver: bridge

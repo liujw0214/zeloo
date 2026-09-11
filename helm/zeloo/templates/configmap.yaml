@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "zeloo.configMapName" . }}
+  labels:
+    {{- include "zeloo.labels" . | nindent 4 }}
+data:
+  provider: {{ .Values.config.provider | quote }}
+  model: {{ .Values.config.model | quote }}
+  log_level: {{ .Values.config.log_level | quote }}
+  fallback_chain: {{ .Values.config.fallback_chain | quote }}
+  enable_telemetry: {{ .Values.config.enable_telemetry | quote }}

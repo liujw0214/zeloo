@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zeloo — 自托管自进化 AI Agent 运行时</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --bg-soft: #161825;
+      --card: #1c1f2e;
+      --border: #2a2e42;
+      --text: #e4e6f0;
+      --muted: #9096b0;
+      --accent: #6c8cff;
+      --accent-2: #a78bfa;
+      --green: #34d399;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+    }
+    .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+    header {
+      padding: 64px 0 48px;
+      text-align: center;
+      background: radial-gradient(ellipse at top, rgba(108,140,255,0.15), transparent 60%);
+    }
+    .logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 1.4rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    .logo-dot {
+      width: 12px; height: 12px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      box-shadow: 0 0 16px var(--accent);
+    }
+    h1 {
+      font-size: clamp(2rem, 5vw, 3.2rem);
+      margin: 20px 0 12px;
+      background: linear-gradient(135deg, #fff, #b8c0e0);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .subtitle { color: var(--muted); font-size: 1.1rem; max-width: 600px; margin: 0 auto; }
+    .badges { display: flex; gap: 10px; justify-content: center; margin-top: 24px; flex-wrap: wrap; }
+    .badge {
+      background: var(--card);
+      border: 1px solid var(--border);
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    section { padding: 48px 0; }
+    h2 { font-size: 1.5rem; margin-bottom: 24px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      transition: border-color 0.2s;
+    }
+    .card:hover { border-color: var(--accent); }
+    .card h3 { font-size: 1rem; margin-bottom: 8px; }
+    .card p { color: var(--muted); font-size: 0.92rem; }
+    .code-block {
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+      font-size: 0.88rem;
+      overflow-x: auto;
+      color: #c9d1f5;
+    }
+    .code-block .comment { color: #6b7290; }
+    .code-block .cmd { color: var(--green); }
+    footer {
+      padding: 40px 0;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.85rem;
+      border-top: 1px solid var(--border);
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <div class="logo"><span class="logo-dot"></span> Zeloo</div>
+      <h1>自托管 · 自进化 AI Agent 运行时</h1>
+      <p class="subtitle">
+        三层架构（UI / Core / Tools）、多 Provider 路由、智能模型降级、
+        上下文压缩、技能系统、记忆持久化 — 开箱即用的常驻型 Agent 框架。
+      </p>
+      <div class="badges">
+        <span class="badge">Python 3.11+</span>
+        <span class="badge">OpenAI / Anthropic / 本地模型</span>
+        <span class="badge">CLI · Telegram · Discord · Gateway</span>
+      </div>
+    </div>
+  </header>
+
+  <section>
+    <div class="container">
+      <h2>快速开始</h2>
+      <div class="code-block">
+<span class="comment"># 一键安装</span>
+<span class="cmd">bash setup-zeloo.sh</span>
+
+<span class="comment"># 配置 API Key</span>
+cp config.yaml.example config.yaml
+<span class="comment"># 编辑 config.yaml 填入 provider / model</span>
+
+<span class="comment"># 启动对话</span>
+<span class="cmd">python cli.py chat</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <h2>核心能力</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>🧠 智能模型路由</h3>
+          <p>简单请求自动降级到便宜模型，长上下文保留主力模型，显著降低调用成本。</p>
+        </div>
+        <div class="card">
+          <h3>🔀 多 Provider 故障转移</h3>
+          <p>配置主 Provider 与 fallback 列表，主链路失败自动切换，保障可用性。</p>
+        </div>
+        <div class="card">
+          <h3>📦 上下文压缩</h3>
+          <p>超长对话自动压缩中间轮次，可选 LLM 摘要或结构化截断，控制 token 预算。</p>
+        </div>
+        <div class="card">
+          <h3>🛠️ 工具系统</h3>
+          <p>代码执行、网页抓取、文件操作、图片生成、定时任务等 20+ 内置工具，按需启用。</p>
+        </div>
+        <div class="card">
+          <h3>🧩 技能与记忆</h3>
+          <p>内置代码审查、调试、Git 工作流技能；对话记忆持久化，跨会话续接上下文。</p>
+        </div>
+        <div class="card">
+          <h3>💰 成本追踪</h3>
+          <p>按模型单价实时统计 token 消耗与 $ 成本，支持 Prompt Cache 命中率监控。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <h2>CLI 命令</h2>
+      <div class="code-block">
+<span class="cmd">python cli.py chat</span>          <span class="comment"># 交互式对话</span>
+<span class="cmd">python cli.py doctor</span>        <span class="comment"># 环境诊断</span>
+<span class="cmd">python cli.py config get</span>    <span class="comment"># 查看配置</span>
+<span class="cmd">python cli.py skills list</span>   <span class="comment"># 列出技能</span>
+<span class="cmd">python cli.py sessions</span>      <span class="comment"># 会话管理</span>
+<span class="cmd">python cli.py backup</span>        <span class="comment"># 数据备份</span>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      <p>Zeloo Agent · 自托管 AI Agent 运行时框架</p>
+      <p style="margin-top:8px">
+        <a href="docs/README.md">文档</a> ·
+        <a href="config.yaml.example">配置示例</a> ·
+        <a href="setup-zeloo.sh">安装脚本</a>
+      </p>
+    </div>
+  </footer>
+</body>
+</html>

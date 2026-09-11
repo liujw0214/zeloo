@@ -1,0 +1,54 @@
+# .dockerignore — exclude build/dev artifacts from Docker build context
+.git
+.gitignore
+.gitattributes
+.github
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.python-version
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+*.whl
+
+# Node / Docusaurus
+node_modules/
+website/node_modules/
+website/.docusaurus/
+website/build/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Tests / local artifacts
+tests/.benchmarks/
+*.log
+logs/
+
+# Docs site (kept lightweight — source-of-truth is docs/)
+website/src/
+
+# Data
+.zeloo/
+*.db
+*.sqlite
+*.sqlite3

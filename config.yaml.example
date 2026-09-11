@@ -1,0 +1,327 @@
+# Zeloo Agent 配置示例
+# 复制为 config.yaml 并按需修改
+
+# 默认模型配置（默认为 OpenAI 兼容格式）
+model: gpt-4o
+provider: openai
+temperature: 0.0
+max_tokens: 4096
+
+# 对话循环
+max_iterations: 90
+
+# 终端后端
+# 支持: local, docker, ssh, modal, daytona, vercel_sandbox, singularity
+terminal:
+  backend: local
+  timeout: 30
+
+# 语音后端（可选）
+voice:
+  backend: console  # console 或 openai
+
+# 多平台网关（统一配置块，请勿拆分为两个 gateway 键）
+gateway:
+  # 会话空闲超时（秒），超时后自动释放 agent 实例
+  session_idle_timeout: 3600
+  # 空闲回收检查间隔（秒）
+  eviction_interval: 300
+
+  # OpenAI 兼容 API Server
+  api:
+    enabled: false
+    host: 0.0.0.0
+    port: 8080
+
+  # 多 Profile 支持（可选）
+  # 不同用户可路由到不同的模型/工具集配置
+  profiles:
+    default:
+      model: gpt-4o
+      provider: openai
+      toolsets: [web, terminal, file, browser, code_execution, delegation, skills, memory, todo, mcp, cron, voice]
+    code_reviewer:
+      model: gpt-4o
+      provider: openai
+      toolsets: [file, code_execution, terminal, web]
+  # 用户 -> profile 映射（可选，未映射的用户使用 default）
+  user_profiles:
+    "user_123": code_reviewer
+
+  platforms:
+    telegram:
+      enabled: false
+      token: ${TELEGRAM_BOT_TOKEN}
+      allowed_users: []  # 留空表示允许所有用户
+    discord:
+      enabled: false
+      token: ${DISCORD_BOT_TOKEN}
+      guild_id: null
+      allowed_users: []
+    slack:
+      enabled: false
+      bot_token: ${SLACK_BOT_TOKEN}
+      signing_secret: ${SLACK_SIGNING_SECRET}
+      webhook_port: 8080
+    whatsapp:
+      enabled: false
+      access_token: ${WHATSAPP_ACCESS_TOKEN}
+      phone_number_id: ${WHATSAPP_PHONE_NUMBER_ID}
+      verify_token: ${WHATSAPP_VERIFY_TOKEN}
+      webhook_port: 8080
+    signal:
+      enabled: false
+      account: ${SIGNAL_ACCOUNT}
+      signal_cli_path: signal-cli
+      webhook_port: 8080
+    email:
+      enabled: false
+      smtp_host: smtp.gmail.com
+      smtp_port: 465
+      imap_host: imap.gmail.com
+      imap_port: 993
+      username: bot@example.com
+      password: ${EMAIL_PASSWORD}
+      use_tls: true
+      poll_interval: 30
+    # ── 国内平台 ──
+    feishu:
+      enabled: false
+      app_id: ${FEISHU_APP_ID}
+      app_secret: ${FEISHU_APP_SECRET}
+      encrypt_key: ${FEISHU_ENCRYPT_KEY}
+      verification_token: ${FEISHU_VERIFICATION_TOKEN}
+      webhook_port: 8080
+    dingtalk:
+      enabled: false
+      app_key: ${DINGTALK_APP_KEY}
+      app_secret: ${DINGTALK_APP_SECRET}
+      verify_token: ${DINGTALK_VERIFY_TOKEN}
+      webhook_port: 8080
+    wecom:
+      enabled: false
+      corp_id: ${WECOM_CORP_ID}
+      corp_secret: ${WECOM_CORP_SECRET}
+      agent_id: ${WECOM_AGENT_ID}
+      token: ${WECOM_TOKEN}
+      encoding_aes_key: ${WECOM_ENCODING_AES_KEY}
+      webhook_port: 8080
+    # ── 国际平台 ──
+    teams:
+      enabled: false
+      bot_id: ${TEAMS_BOT_ID}
+      bot_password: ${TEAMS_BOT_PASSWORD}
+      webhook_port: 8080
+    matrix:
+      enabled: false
+      homeserver: ${MATRIX_HOMESERVER}
+      access_token: ${MATRIX_ACCESS_TOKEN}
+      user_id: ${MATRIX_USER_ID}
+    google_chat:
+      enabled: false
+      service_account_json: null
+      webhook_port: 8080
+    sms:
+      enabled: false
+      account_sid: ${TWILIO_ACCOUNT_SID}
+      auth_token: ${TWILIO_AUTH_TOKEN}
+      from_number: ${TWILIO_FROM_NUMBER}
+      webhook_port: 8080
+    qqbot:
+      enabled: false
+      app_id: ${QQBOT_APP_ID}
+      app_secret: ${QQBOT_APP_SECRET}
+      webhook_port: 8080
+    irc:
+      enabled: false
+      server: irc.libera.chat
+      port: 6667
+      nickname: zeloo_bot
+      channel: "#zeloo"
+      password: null
+    line:
+      enabled: false
+      channel_access_token: ${LINE_CHANNEL_ACCESS_TOKEN}
+      channel_secret: ${LINE_CHANNEL_SECRET}
+      webhook_port: 8080
+    mattermost:
+      enabled: false
+      base_url: https://mattermost.example.com
+      bot_token: ${MATTERMOST_TOKEN}
+      webhook_port: 8080
+    home_assistant:
+      enabled: false
+      ha_url: http://homeassistant.local:8123
+      ha_token: ${HA_TOKEN}
+      webhook_port: 8080
+
+# MCP 服务器（可选）
+# 每个 server 会被启动，其工具以 mcp_<tool_name> 注册到 agent
+mcp:
+  servers:
+    - name: filesystem
+      transport: stdio
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
+    - name: remote-api
+      transport: http
+      url: https://mcp.example.com/sse
+      headers:
+        Authorization: Bearer YOUR_TOKEN
+      dangerous: false
+
+# 记忆
+# 支持的后端: local(默认), honcho, mem0, supermemory, openviking,
+#              byterover, hindsight, holographic, retaindb
+memory:
+  enabled: true
+  user_profile_enabled: true
+  max_chars: 8000
+  provider: local
+
+  # Honcho (开源记忆后端)
+  # honcho:
+  #   app_name: zeloo
+  #   user_id: default
+
+  # Mem0 (向量检索记忆)
+  # mem0:
+  #   api_key: ${MEM0_API_KEY}
+  #   user_id: default
+
+  # Supermemory (全平台记忆同步)
+  # supermemory:
+  #   api_key: ${SUPERMEMORY_API_KEY}
+  #   user_id: default
+
+  # OpenViking (开源记忆后端)
+  # openviking:
+  #   base_url: http://localhost:8080
+  #   api_key: ${OPENVIKING_API_KEY}
+  #   user_id: default
+
+  # Byterover (字节记忆服务)
+  # byterover:
+  #   api_key: ${BYTEROVER_API_KEY}
+  #   user_id: default
+
+  # Hindsight (回溯式记忆)
+  # hindsight:
+  #   api_key: ${HINDSIGHT_API_KEY}
+  #   user_id: default
+
+  # Holographic (全息关联记忆)
+  # holographic:
+  #   api_key: ${HOLOGRAPHIC_API_KEY}
+  #   user_id: default
+
+  # RetainDB (SQLite 持久化)
+  # retaindb:
+  #   db_path: ~/.zeloo/retain.db
+  #   user_id: default
+
+# 自进化
+self_evolution:
+  background_review:
+    enabled: true
+    model: null  # null = 使用主模型
+    interval_minutes: 10
+
+# 平台提示覆盖（可选）
+platform_hints: {}
+
+# 智能模型路由（可选）
+# 简单请求（短输入、无复杂关键词）自动降级到便宜模型
+smart_model_routing:
+  enabled: false
+  max_simple_chars: 160       # 字符数上限
+  max_simple_words: 28        # 单词数上限
+  cheap_provider: openai
+  cheap_model: gpt-4o-mini
+
+# 上下文压缩（可选）
+# 当消息数或 token 数超过阈值时，自动压缩中间对话历史。
+# use_llm_summary: true 时使用辅助模型生成摘要，否则使用结构化截断。
+context:
+  max_context_tokens: 12000
+  use_llm_summary: false
+
+# Provider 原生 Prompt Caching（可选）
+# 利用 OpenAI/Anthropic 等 Provider 的前缀缓存降低 token 成本。
+# 开启后会在每轮结束时记录缓存命中率。
+prompt_caching:
+  enabled: false
+
+# 凭证池（可选）
+# 集中管理多 Provider 的 API Key，支持多 Key 轮询、自动熔断与冷却恢复
+credential_pool:
+  enabled: false
+  storage_path: ~/.zeloo/credentials.json  # 凭证存储路径（权限 0600）
+  cooldown_seconds: 300                     # 非致命错误后的冷却时间
+  max_failures: 3                           # 达到该失败次数后永久禁用 Key
+
+# 技能生命周期管理（Curator）
+# 自动管理技能的 active → stale → archived 状态流转
+curator:
+  enabled: true
+  stale_after_days: 30      # N 天未使用 → stale
+  archive_after_days: 90    # M 天仍未使用 → archived
+
+# 多智能体协作看板（Kanban）
+# 支持任务分工、心跳检测、僵尸回收、重试预算
+kanban:
+  enabled: false
+  zombie_timeout_seconds: 300
+  default_max_retries: 3
+
+# 国际化（i18n）
+i18n:
+  default_language: en      # en / zh-CN / ...
+
+# 运行时洞察（Insights）
+insights:
+  enabled: true
+  storage_path: ~/.zeloo/insights.json
+
+# 辅助 LLM 客户端（可选）
+# 用于网页正文提取、图片描述、文本摘要等子任务，不占用主模型迭代预算
+auxiliary:
+  enabled: false
+  provider: openai
+  model: gpt-4o-mini
+  base_url: null
+  max_tokens: 1024
+  temperature: 0.0
+
+# 图片生成（可选）
+# 基于文本 prompt 生成图片，使用 OpenAI 兼容的 Images API（DALL-E 等）
+image_generation:
+  enabled: false
+  provider: openai
+  model: dall-e-3
+  size: 1024x1024       # 1024x1024 / 1024x1792 / 1792x1024
+  quality: standard      # standard / hd
+  base_url: null
+  # 故障转移：主 provider 失败时依次尝试以下 provider
+  fallback_providers:
+    - name: together
+      model: flux-1-schnell
+      api_key: ${TOGETHER_API_KEY}
+      base_url: https://api.together.xyz/v1
+
+# ── OAuth (for providers that require interactive auth, e.g. codex, nous) ──
+# Run `zeloo oauth login <provider>` to authenticate via device-code flow.
+# Tokens are stored in ~/.zeloo/oauth_tokens.json (mode 0600).
+oauth:
+  providers:
+    codex:
+      authorization_url: https://auth.openai.com/authorize
+      token_url: https://auth.openai.com/oauth/token
+      client_id: auth0-openai-client
+      scope: "openid profile email offline_access"
+      audience: https://api.openai.com/v1
+    nous:
+      authorization_url: https://nousresearch.auth0.com/oauth/device/code
+      token_url: https://nousresearch.auth0.com/oauth/token
+      client_id: nous-cli
+      scope: "offline_access"

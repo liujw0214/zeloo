@@ -1,0 +1,31 @@
+Package: zeloo
+Version: 0.1.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: python3 (>= 3.11), python3-venv, python3-pip, ca-certificates
+Recommends: systemd
+Suggests: python3-playwright, mcp
+Maintainer: Zeloo Team <team@zeloo.io>
+Homepage: https://github.com/your-org/Zeloo
+Vcs-Browser: https://github.com/your-org/Zeloo
+Vcs-Git: https://github.com/your-org/Zeloo.git
+XB-Category: utils
+Description: Self-hosted, self-evolving resident AI Agent runtime
+ Zeloo is a self-hosted, self-evolving AI agent runtime framework.
+ .
+ It ships with a three-layer System Prompt (stable / context / volatile),
+ multi-provider LLM routing across 40+ backends, more than 90 built-in
+ tools (file, web, shell, code execution, browser, image gen), 18+
+ messaging platform adapters (Telegram, Discord, Slack, WeChat, Lark,
+ ...) and 39 web search providers (Tavily, Brave, Perplexity, Google,
+ Bing, SerpAPI, ...).
+ .
+ Workspace state is persisted in SQLite with FTS5 indexing; skills can
+ be hot reloaded, evolved, and audited via the curator lifecycle. The
+ project is designed for self-hosted, single-tenant operation on a
+ developer machine or a small VPS.
+ .
+ After installation, run `zeloo doctor` to verify the install and
+ `zeloo install` for first-run workspace initialisation. The systemd
+ unit `zeloo.service` is registered automatically.

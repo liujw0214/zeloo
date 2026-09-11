@@ -1,0 +1,7 @@
+#!/bin/sh
+# docker/s6-rc.d/user/zeloo/run — s6 service run script for the main zeloo process
+#
+# s6 style: run in foreground, log to stdout/stderr.
+# s6 will handle supervisor restarts (on-failure).
+
+exec setuidgid zeloo zeloo "$@"

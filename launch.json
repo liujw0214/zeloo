@@ -1,0 +1,154 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Gateway: API Server",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "gateway.api_server",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "ZELOO_ENV": "development",
+        "ZELOO_HOME": "${workspaceFolder}/.zeloo-test",
+        "ZELOO_LOG_LEVEL": "DEBUG",
+        "ZELOO_DISABLE_UPDATE_CHECK": "1"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Gateway: Full Service",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "gateway.run",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "ZELOO_ENV": "development",
+        "ZELOO_HOME": "${workspaceFolder}/.zeloo-test",
+        "ZELOO_LOG_LEVEL": "DEBUG",
+        "ZELOO_DISABLE_UPDATE_CHECK": "1"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Gateway: Health Check",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "gateway.api_server",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "ZELOO_ENV": "development",
+        "ZELOO_HOME": "${workspaceFolder}/.zeloo-test"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Gateway: SSE Streaming",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "gateway.api_server",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "ZELOO_ENV": "development",
+        "ZELOO_HOME": "${workspaceFolder}/.zeloo-test",
+        "ZELOO_LOG_LEVEL": "DEBUG",
+        "OPENAI_API_KEY": "${env:OPENAI_API_KEY}"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Gateway: WebSocket",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "gateway.api_server",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "ZELOO_ENV": "development",
+        "ZELOO_HOME": "${workspaceFolder}/.zeloo-test",
+        "ZELOO_LOG_LEVEL": "DEBUG",
+        "OPENAI_API_KEY": "${env:OPENAI_API_KEY}"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Gateway: Session Manager",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "gateway.session",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "ZELOO_ENV": "development",
+        "ZELOO_HOME": "${workspaceFolder}/.zeloo-test",
+        "ZELOO_LOG_LEVEL": "DEBUG"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Gateway: Middleware",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "gateway.middleware",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "ZELOO_ENV": "development",
+        "ZELOO_HOME": "${workspaceFolder}/.zeloo-test",
+        "ZELOO_LOG_LEVEL": "DEBUG"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Gateway: Custom Port (8080)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "gateway.api_server",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "ZELOO_ENV": "development",
+        "ZELOO_HOME": "${workspaceFolder}/.zeloo-test",
+        "ZELOO_LOG_LEVEL": "DEBUG",
+        "OPENAI_API_KEY": "${env:OPENAI_API_KEY}"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Gateway: Attach to Process",
+      "type": "debugpy",
+      "request": "attach",
+      "port": 5678,
+      "host": "localhost"
+    },
+    {
+      "name": "Pytest: Gateway Tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["tests/unit/test_gateway*.py", "-v", "--tb=short"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "ZELOO_ENV": "development",
+        "ZELOO_HOME": "${workspaceFolder}/.zeloo-test"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Gateway: API + WebSocket",
+      "configurations": ["Gateway: API Server", "Gateway: WebSocket"],
+      "stopAll": true
+    },
+    {
+      "name": "Gateway: All Debug",
+      "configurations": ["Gateway: Full Service", "Gateway: Session Manager"],
+      "stopAll": true
+    }
+  ]
+}

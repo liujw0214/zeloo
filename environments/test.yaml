@@ -1,0 +1,36 @@
+﻿# Zeloo — Test/CI environment
+# Usage: zeloo_ENV=test python -m pytest
+# Deterministic settings for automated testing.
+
+model: gpt-4o-mini
+provider: openai
+temperature: 0.0
+max_tokens: 1024
+
+max_iterations: 10
+
+terminal:
+  backend: local
+  timeout: 10
+
+voice:
+  backend: console
+
+memory:
+  enabled: true
+  user_profile_enabled: false  # disable profile writes in tests
+  max_chars: 2000
+
+self_evolution:
+  background_review:
+    enabled: false
+
+mcp:
+  servers: []
+
+gateway:
+  session_idle_timeout: 300
+  eviction_interval: 60
+  api:
+    enabled: false
+  platforms: {}

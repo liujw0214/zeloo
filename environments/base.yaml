@@ -1,0 +1,22 @@
+﻿# Zeloo — Base environment defaults
+# All environments (dev / test / prod) inherit from this file first.
+# Environment-specific YAML files override these values via deep merge
+# (overlay wins for any key, nested or not).
+
+provider: openai
+
+voice:
+  backend: console
+
+memory:
+  enabled: true
+
+self_evolution:
+  background_review:
+    enabled: false
+
+mcp:
+  servers: []
+
+gateway:
+  platforms: {}

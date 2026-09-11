@@ -1,0 +1,47 @@
+﻿# Cost-optimized configuration — minimize token spend while preserving capability.
+# Uses smart routing, prompt caching, and cheaper auxiliary models.
+
+model: gpt-4o
+provider: openai
+temperature: 0.0
+max_tokens: 4096
+max_iterations: 50  # lower iteration budget reduces cost
+
+terminal:
+  backend: local
+  timeout: 30
+
+# Route simple queries to cheaper model automatically
+smart_model_routing:
+  enabled: true
+  max_simple_chars: 200
+  max_simple_words: 35
+  cheap_provider: openai
+  cheap_model: gpt-4o-mini
+
+# Provider prompt caching: system prompt prefix is cached, reducing cost per turn
+prompt_caching:
+  enabled: true
+
+# Auxiliary tasks (web extraction, summarization) use the cheap model
+auxiliary:
+  enabled: true
+  provider: openai
+  model: gpt-4o-mini
+  max_tokens: 1024
+
+# Background review uses the cheap model
+self_evolution:
+  background_review:
+    enabled: true
+    model: gpt-4o-mini
+    interval_minutes: 15
+
+memory:
+  enabled: true
+  user_profile_enabled: true
+  max_chars: 6000  # smaller memory = less context tokens
+
+# Image generation disabled by default to avoid unexpected costs
+image_generation:
+  enabled: false

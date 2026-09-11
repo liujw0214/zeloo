@@ -1,0 +1,10 @@
+﻿# actionlint configuration
+version: "0.1"
+
+rules:
+  - name: "shellcheck"
+    enabled: true
+  - name: "dockerfile"
+    enabled: true
+  - name: "annotations"
+    enabled: true

@@ -1,0 +1,17 @@
+﻿# Minimal CLI configuration — fastest path to a working agent.
+# Copy to ~/.Zeloo/config.yaml and set your API key in .env
+
+model: gpt-4o
+provider: openai
+temperature: 0.0
+max_tokens: 4096
+max_iterations: 90
+
+terminal:
+  backend: local
+  timeout: 30
+
+memory:
+  enabled: true
+  user_profile_enabled: true
+  max_chars: 8000

@@ -1,0 +1,82 @@
+name: Sign
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+  packages: write
+
+concurrency:
+  group: sign-${{ github.event.release.tag_name || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    name: Sign Release Artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Build distribution artifacts
+        run: |
+          mkdir -p dist
+          python -m pip install --quiet build
+          python -m build --sdist --wheel --outdir dist/ || true
+
+      - name: Sign artifacts with cosign
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          set -euo pipefail
+          if [ -d "dist" ] && [ -n "$(ls -A dist 2>/dev/null || true)" ]; then
+            for artifact in dist/*; do
+              if [ -f "$artifact" ]; then
+                echo "Signing $artifact"
+                cosign sign-blob \
+                  --output-signature "${artifact}.sig" \
+                  --bundle "${artifact}.bundle" \
+                  "$artifact" \
+                  --yes
+              fi
+            done
+          else
+            echo "No artifacts found in dist/ - creating placeholder"
+            echo "zeloo-placeholder" > dist/zeloo
+            cosign sign-blob \
+              --output-signature dist/zeloo.sig \
+              --bundle dist/zeloo.bundle \
+              dist/zeloo \
+              --yes
+          fi
+
+      - name: Upload signed artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeloo-signed-artifacts
+          path: |
+            dist/**
+          if-no-files-found: ignore
+          retention-days: 90

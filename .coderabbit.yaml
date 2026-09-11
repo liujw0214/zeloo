@@ -1,0 +1,21 @@
+﻿version: "0.1"
+language: "en"
+
+early_access: false
+
+reviews:
+  profile: "default"
+  high_level_summary:
+    auto_title_placeholder: true
+    poem: false
+  review_status: true
+  collapse_walkthrough: true
+  sequence_diagrams: true
+
+chat:
+  auto_reply: false
+
+formatters:
+  markdown:
+    enabled: true
+    print_width: 100

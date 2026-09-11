@@ -1,0 +1,66 @@
+﻿# Development configuration — all features enabled for local development.
+# Useful for testing the full feature set before production deployment.
+
+model: gpt-4o
+provider: openai
+temperature: 0.0
+max_tokens: 4096
+max_iterations: 90
+
+terminal:
+  backend: local
+  timeout: 60
+
+voice:
+  backend: console
+
+# Smart routing: simple queries go to gpt-4o-mini to save cost
+smart_model_routing:
+  enabled: true
+  max_simple_chars: 160
+  max_simple_words: 28
+  cheap_provider: openai
+  cheap_model: gpt-4o-mini
+
+# Provider prompt caching for lower token cost on repeated system prompts
+prompt_caching:
+  enabled: true
+
+# Auxiliary LLM for web extraction, summarization, image description
+auxiliary:
+  enabled: true
+  provider: openai
+  model: gpt-4o-mini
+  max_tokens: 1024
+
+# Image generation (DALL-E 3 with Together fallback)
+image_generation:
+  enabled: true
+  provider: openai
+  model: dall-e-3
+  size: 1024x1024
+  quality: standard
+  fallback_providers:
+    - name: together
+      model: flux-1-schnell
+      api_key: ${TOGETHER_API_KEY}
+      base_url: https://api.together.xyz/v1
+
+memory:
+  enabled: true
+  user_profile_enabled: true
+  max_chars: 8000
+
+self_evolution:
+  background_review:
+    enabled: true
+    model: gpt-4o-mini
+    interval_minutes: 10
+
+# MCP filesystem server for extended file operations
+mcp:
+  servers:
+    - name: filesystem
+      transport: stdio
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"]

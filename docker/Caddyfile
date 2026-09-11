@@ -1,0 +1,42 @@
+# Caddyfile for Zeloo production gateway.
+# Auto-provisions Let's Encrypt certs when CADDY_DOMAIN is a real hostname.
+# For local development, leave CADDY_DOMAIN=zeloo.local and use self-signed.
+
+{$CADDY_DOMAIN:zeloo.local} {
+    # Encode responses with gzip for non-streaming endpoints.
+    encode zstd gzip
+
+    # Reverse proxy to the gateway service.
+    reverse_proxy gateway:8080 {
+        # Trust X-Forwarded-* from Caddy itself.
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
+
+        # Long timeouts for streaming LLM responses.
+        transport http {
+            dial_timeout 5s
+            response_header_timeout 0s
+            read_timeout 0s
+            write_timeout 0s
+        }
+    }
+
+    # Optional: restrict to known clients / IP allow-list.
+    # @denied not remote_ip 10.0.0.0/8 192.168.0.0/16
+    # respond @denied "forbidden" 403
+
+    log {
+        output stdout
+        level INFO
+    }
+}
+
+# ── Health endpoint exposed directly (no auth) ──────────────────────
+:8081 {
+    reverse_proxy gateway:8080 {
+        # Strip /health path to keep the URL contract intact.
+        rewrite * /health
+    }
+}
