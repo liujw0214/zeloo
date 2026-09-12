@@ -1,0 +1,753 @@
+---
+sidebar_position: 4
+---
+
+# Running Many Gateways at Once
+
+Operate multiple [profiles](./profiles.md) — each with its own bot tokens,
+sessions, and memory — as managed services on a single machine. This page
+covers the operational concerns: starting them all together, viewing logs
+across profiles, preventing the host from sleeping, and recovering from common
+launchd/systemd quirks.
+
+If you only run one Hermes agent, you don't need this page — see
+[Profiles](./profiles.md) for the basics. And if your instances live on
+*different* machines that one desktop app should reach simultaneously, see
+[Connecting Desktop to Many Hermes Instances](./multi-connection-desktop.md).
+
+## When to use this
+
+You want this setup when you have two or more Hermes agents that should all
+be online at the same time. Common reasons:
+
+- A personal assistant on one Telegram bot and a coding agent on another
+- One agent per family member or one per Slack workspace
+- Sandbox + production instances of the same configuration
+- A research agent + a writing agent + a cron-driven bot — each with isolated
+  memory and skills
+
+Every profile already gets its own per-platform LaunchAgent
+(`ai.hermes.gateway-<name>.plist`) or systemd user service
+(`hermes-gateway-<name>.service`). This guide adds the patterns for managing
+them collectively.
+
+## Quick start
+
+```bash
+# Create profiles (once)
+hermes profile create coder
+hermes profile create personal-bot
+hermes profile create research
+
+# Configure each
+coder setup
+personal-bot setup
+research setup
+
+# Install each gateway as a managed service
+coder gateway install
+personal-bot gateway install
+research gateway install
+
+# Start them all
+coder gateway start
+personal-bot gateway start
+research gateway start
+```
+
+That's it — three independent agents, each on its own process, restarting
+automatically on crash and on user login.
+
+## Alternative: one gateway for all profiles (multiplexing)
+
+The model above runs **one process per profile**. That is the default and is
+the right choice for most setups. But on a host with many profiles — or a
+container deployment where one process per profile is operationally heavy — you
+can instead run a **single multiplexing gateway**: the default profile's gateway
+becomes the sole inbound process and serves messages for *every* profile on the
+box.
+
+This is **opt-in** and **off by default**. When it's off, nothing on this page
+changes — every behavior below is inert.
+
+### When to prefer multiplexing
+
+- A container/VPS deployment where N supervisor units, N ports, and N PID files
+  are a burden.
+- Many low-traffic profiles that don't each justify a full process.
+- You want a single thing to start, monitor, and restart.
+
+Stick with one-process-per-profile when you want hard process-level isolation
+between profiles (separate memory footprints, independent crash domains, the
+ability to restart one profile without touching the others).
+
+### How to opt in
+
+Set the flag on the **default profile** (it owns the multiplexer) and restart
+its gateway:
+
+```bash
+hermes config set gateway.multiplex_profiles true
+hermes gateway restart
+```
+
+Equivalently, in the default profile's `~/.hermes/config.yaml`:
+
+```yaml
+gateway:
+  multiplex_profiles: true
+```
+
+(The flag is also accepted as a top-level `multiplex_profiles: true` for
+convenience.) On the next start the default gateway enumerates every profile,
+brings up each profile's enabled platforms under that profile's own
+credentials, and routes each inbound message to the profile it belongs to. Each
+turn resolves the routed profile's config, skills, memory, SOUL, **and provider
+keys** — credentials are never shared across profiles.
+
+You do **not** run `hermes gateway start` for the secondary profiles — the
+default gateway serves them. See the contract changes below.
+
+### What changes when multiplexing is on
+
+Enabling the flag changes how a few things behave. All of these revert the
+moment the flag is off.
+
+#### 1. Secondary profiles must not start their own gateway
+
+With a multiplexer running, a named-profile `hermes gateway run`, `start`,
+`install` or `restart` is a **hard error** (exit code 78), pointing you back at
+the multiplexer:
+
+```
+The default gateway is running as a profile multiplexer and already serves
+profile 'coder'. ...
+```
+
+The refusal happens in the CLI before any service manager is touched, so a served
+profile never ends up with a permanently failed systemd unit or a launchd respawn
+loop. The Desktop app's per-profile "Start gateway" action is refused the same way.
+"Served" is read from the running gateway's own record (`served_profiles` in the
+default home's `gateway_state.json`), so it stays correct when the multiplexer was
+enabled only through `GATEWAY_MULTIPLEX_PROFILES` in the default profile's
+environment, or when the allowlist was edited after the gateway started.
+
+The multiplexer is the single inbound process; a second profile gateway would
+double-bind that profile's platforms. Pass `--force` (accepted by `run`, `start`,
+`install` and `restart`) only if you deliberately want a separate process for that
+profile (not recommended while the multiplexer is running). The cross-profile
+lifecycle wrapper script earlier on this page is therefore **not** used in
+multiplex mode — you only manage the default gateway.
+
+#### 2. HTTP-inbound platforms are reached via a `/p/<profile>/` URL prefix
+
+Webhook (and other HTTP-inbound) traffic for a secondary profile arrives on the
+default listener under a profile prefix, **not** a second port:
+
+```
+# default profile
+POST http://host:8644/webhooks/<route>
+# the "coder" profile, same listener
+POST http://host:8644/p/coder/webhooks/<route>
+```
+
+An unknown or unconfigured profile in the prefix returns `404`. Because the one
+shared listener already serves every profile this way, a **secondary profile
+must not enable a port-binding platform itself** — doing so is a config error
+that skips the entire secondary profile while the default and other healthy
+profiles continue. The warning names the skipped profile and every conflicting
+platform:
+
+```
+Skipping secondary profile 'coder' due to port-binding config error: Profile
+'coder' enables port-binding platform(s) webhook, but gateway.multiplex_profiles
+is on. ... Remove these platform entries from profile 'coder's config.yaml or
+configure them only on the default profile.
+```
+
+Port-binding platforms covered by this rule: `webhook`, `api_server`,
+`msgraph_webhook`, `feishu`, `wecom_callback`, `bluebubbles`, `sms`,
+`whatsapp_cloud`, `line`, `teams`. Configure any of these **only on the default profile**;
+every profile is reachable through its `/p/<profile>/` prefix.
+
+Authentication follows the profile named in the URL. Unprefixed endpoints keep
+using the default listener's existing credentials.
+
+- `/p/coder/...` API-server requests must use `API_SERVER_KEY` from
+  `~/.hermes/profiles/coder/.env`; the default listener key is rejected. Under
+  the multiplexer that key only authenticates the prefix — it does not turn on a
+  second `api_server` listener in the secondary profile (which would otherwise be
+  the port-binding conflict described below), so you do not need to pin
+  `platforms.api_server.enabled: false` in the secondary's `config.yaml`.
+- A webhook route that targets `coder` must declare `profile: coder` beside
+  its existing route-specific `secret` in the default profile's
+  `config.yaml`. That secret is then accepted only at
+  `/p/coder/webhooks/<route>` and is rejected on every other profile prefix.
+- Webhook routes without `profile` remain default-profile routes and are not
+  reachable through a named profile prefix.
+- Delivery follows the same binding. A `profile: coder` route's reply (or
+  `deliver_only` message) goes out through **coder's** adapter for the
+  `deliver` platform, falls back to **coder's** home channel when
+  `deliver_extra.chat_id` is unset, and a `github_comment` delivery runs `gh`
+  with `GH_TOKEN` / `GITHUB_TOKEN` from `profiles/coder/.env`. If coder has no
+  adapter for that platform the delivery fails (502) rather than posting as
+  another profile's bot; a default route likewise never borrows a platform that
+  is enabled only on a secondary profile.
+- `/p/coder/api/platforms/<platform>/events` callbacks are verified and
+  dispatched by coder's adapter; when coder has none the callback is a 503.
+
+Keep port-binding platforms disabled in secondary profile configs. The shared
+listener and its route definitions stay on the default profile; profile
+binding controls which profile each authenticated webhook route may execute.
+Named API requests fail closed when the target profile has no
+`API_SERVER_KEY`.
+
+Only this shared-listener conflict degrades to a skipped profile. Security
+configuration errors remain fatal: for example, an `open` own-policy platform
+without `GATEWAY_ALLOW_ALL_USERS` or its platform-specific allow-all opt-in
+still aborts gateway startup rather than silently dropping the unsafe profile.
+
+#### 3. Per-credential platforms still need their own token per profile
+
+Polling/connection platforms (Telegram, Discord, Slack, Matrix, Signal, …) work
+fine multiplexed, but each profile that enables one must supply its **own** bot
+token — the same token cannot be polled by two profiles at once. If two profiles
+configure the same `(platform, token)`, the gateway logs an error naming both
+profiles and parks the **duplicate** adapter (it shows as `fatal /
+duplicate_credential` in runtime status) while the first claimant and every
+other profile keep running — the gateway itself does not exit. The default
+profile's adapters connect first and claim their credentials, so the parked
+adapter is always the secondary's (see
+[Token-conflict safety](#token-conflict-safety) — the rule is unchanged, it's
+just enforced inside the one process now).
+
+#### 4. Session keys are namespaced by profile
+
+Each profile's sessions live under an `agent:<profile>:…` namespace so two
+profiles on the same platform/chat never collide in the shared session store.
+The **default** profile keeps the historical `agent:main:…` namespace
+byte-for-byte, so existing default-profile sessions are unaffected — no
+migration, no orphaned history. Every gateway path that reads a key back —
+delegation completions after a restart, shutdown notices, a per-user-thread
+`/stop` of a sibling's run, `/undo`, QQ approval buttons — accepts the
+`agent:<profile>:…` shape too, so secondary profiles get the same behaviour
+as the default one.
+
+Each profile's rows land in **its own** `state.db`: a named profile's under
+`profiles/<name>/state.db`, the default profile's under the launch home — even
+when the write happens inside another profile's routed turn or background tick.
+The Desktop/TUI backend's own store is likewise pinned to the home it launched
+under, and a Bot Chat's side agents (`prompt.background`) persist next to their
+parent conversation.
+
+#### 5. One PID/lock and one status surface
+
+There is a single process-level PID and lock (the multiplexer, under the default
+home). `hermes status` on the default profile reports the multiplexer and lists
+the profiles it serves (`Serves: coder, research`); `hermes -p coder status`,
+`hermes -p coder gateway status` and `hermes -p coder cron status` all report
+"running via the default-profile multiplexer" instead of "stopped". The single
+`gateway_state.json` lives under the default home: secondary adapters appear
+there as `<profile>:<platform>` entries beside `served_profiles`; nothing is
+written under a secondary profile's home.
+
+#### What does **not** change
+
+Per-profile `.env` credential isolation is preserved and, if anything,
+stricter: a profile's keys are resolved from its own scope and are never unioned
+into a shared environment. Subprocesses like MCP servers and Kanban workers only
+ever see their own profile's secrets — including credentials injected by an
+external secret source (1Password, Bitwarden, …): a stdio MCP server started for
+profile B receives B's value for such a name, or nothing if B has none, never the
+default profile's. MCP servers are connected **per profile**: two profiles that
+both name a server `github` with their own token get two connections and each
+sees only its own tools; profiles whose `mcp_servers` entry is identical (same
+route *and* credentials) share one connection, and an owner's `/reload-mcp`
+re-registers the sharing profiles' tools without them reloading. Terminal settings
+(`terminal.backend`, `terminal.cwd`, `terminal.docker_volumes`,
+`terminal.docker_shared_container_key`, SSH targets, …) are likewise resolved
+per profile on every routed turn: a profile that omits a terminal key gets the
+documented default, never the launch profile's value, and a profile whose
+`config.yaml`/`.env` cannot be parsed has terminal execution refused rather than
+run under another profile's sandbox policy. The media-delivery credential
+guard (the denylist behind `MEDIA:` attachments — `.env`, `auth.json`,
+`config.yaml`, `state.db`, session transcripts, OAuth token stores) covers every
+profile under `profiles/`, so no profile's turn can attach another profile's
+secrets or chat history to a reply. Authorization is per profile too:
+`GATEWAY_ALLOW_ALL_USERS`, `GATEWAY_ALLOWED_USERS` and every platform allowlist
+or allow-all opt-in are read from the owning profile's `.env` — the default
+profile opting into open access never opens a secondary profile's bot, and a
+secondary that opts in only in its own `.env` is honored. The same holds for
+per-bot behaviour written in a profile's `config.yaml` (`require_mention`,
+`mention_patterns`, `allow_bots`, `reactions`, `auto_thread`, `dm_policy`,
+`ignored_channels`, Matrix `session_scope`, …): a secondary profile's YAML never
+lands in the shared process environment, so it cannot become the default
+profile's policy, and the default profile's YAML never governs a secondary
+bot. The `terminal.env_passthrough` allowlist, the Yuanbao auto-designated
+home channel, and the write guards protecting each profile's own `config.yaml`
+are resolved per profile as well. Kanban, profile-scoped skills/memory/SOUL, and
+model routing all behave per-profile exactly as they do with separate gateways.
+
+Outbound identity is per profile too. A turn running for profile `P` that calls
+the `send_message` tool (send, react, media) posts through `P`'s own bot;
+so do the "Gateway shutting down/restarted" and `/update` notices for `P`'s
+sessions, `/loop` wakeups set from `P`'s chats, and the Discord
+unauthorized-slash operator alert of `P`'s Discord bot (to `P`'s home
+channel). If `P` has no connected bot for that platform the send fails with a
+clear error — it never falls back to the default profile's bot.
+
+Tool and memory-provider credentials follow the same rule. Hosted OCR
+(`FIRECRAWL_API_KEY`), Modal / Browser Use cloud gates, the mem0 OSS OpenAI
+key, xAI video, and every memory-provider identity (`MEM0_USER_ID`,
+`SUPERMEMORY_CONTAINER_TAG`, `RETAINDB_PROJECT`, `OPENVIKING_ACCOUNT/USER`,
+`HINDSIGHT_BANK_ID`, `HERMES_HONCHO_HOST`) are read from the routed profile's
+`.env`, so a secondary profile's memories land in **its** account/bank/project
+(or the provider's per-profile default), never the default profile's. Custom
+endpoints travel with their keys — `OPENAI_BASE_URL`, `XAI_BASE_URL`,
+`NOUS_INFERENCE_BASE_URL`, `GATEWAY_PROXY_URL`, Firecrawl / Browserbase /
+RetainDB / Supermemory / Honcho / Hindsight URLs — so a profile's key is never
+sent to another profile's proxy or self-hosted server. `WEIXIN_HOME_CHANNEL`,
+`HERMES_LANGUAGE` and `display.language`, and `hooks.outbound[].secret_env` are
+likewise per profile, and end-of-session memory extraction for an evicted
+secondary session runs under that profile's scope.
+
+Per-turn runtime settings follow the routed profile as well: `agent.max_turns`,
+`fallback_providers`, `file_read_max_chars`, `tool_output.*`, `browser.*`
+timeouts, `timezone` (including the `TZ` handed to `execute_code` sandboxes),
+the media-delivery policy (`gateway.strict`, `media_delivery_allow_dirs`,
+`trust_recent_files*`) and the Nous `auth.json` used for auxiliary calls are all
+read from the profile serving the turn, never from the profile the gateway was
+launched under. The same holds for per-profile state files (`processes.json`,
+`checkpoints/`, sandbox snapshot stores, Feishu comment rules/pairing) and for
+gateway hooks: each profile's `hooks/` directory is loaded on its own and fires
+only for that profile's events. Shell hooks run with the routed profile's
+`HERMES_HOME`, without the default profile's secrets in their environment, and
+their stdin payload carries a `profile` field naming the profile that fired them.
+
+#### What is isolated per profile
+
+A quick reference for what a multiplexed turn resolves from **its own**
+profile and never shares with the default or any sibling:
+
+| Concern | Resolved from | Behaviour when the profile lacks it |
+|---|---|---|
+| Provider keys, bot tokens, `${VAR}` refs in `config.yaml` | The profile's own `.env` (its secret scope) | Unresolved / no adapter — never the default profile's value |
+| Authorization (`GATEWAY_ALLOW_ALL_USERS`, `GATEWAY_ALLOWED_USERS`, per-platform allowlists and allow-all opt-ins) | The owning profile's `.env` and `config.yaml` | Closed — a default-profile opt-in never opens a secondary's bot |
+| HTTP endpoints (`/p/<profile>/api/...`, `/p/<profile>/webhooks/...`, platform event callbacks) | The named profile's `API_SERVER_KEY`, `profile:`-bound webhook routes, and its own adapter | `401`/`404`; delivery without an adapter is `502`/`503`, never another profile's bot |
+| `MEDIA:` attachment denylist | Every home under `profiles/` plus the default home, enumerated at check time | A turn can never attach another profile's `.env`, `auth.json`, `state.db`, sessions or token stores |
+| stdio MCP child environment | Safe baseline + the profile's scoped values for secret-source names + the server's own `env:` | A name the profile lacks is absent from the child — no default-profile fallthrough |
+| Outbound egress (`send_message`, shutdown/restart/`/update` notices, `/loop` wakeups, `profile:`-bound webhook delivery, `github_comment` tokens) | The profile's own connected adapter and `.env` | Clear failure; never posts through the default profile's bot |
+| Session namespace | `agent:<profile>:…` (default keeps `agent:main:…`) | Two profiles on the same chat never share history |
+| Logs | `agent.log` / `errors.log` / `gateway.log` under the profile's own home | — |
+| Terminal sandbox settings (`terminal.*`, SSH targets) | The profile's `config.yaml` | Documented default; unparsable config → execution refused |
+
+What is **shared** by design: the process, its PID/lock and `gateway_state.json`
+(default home), the one HTTP listener, and the `profile_routes` table (declared
+on the default profile).
+
+### Serving selected profiles
+
+By default, `gateway.multiplex_profiles: true` serves every valid named profile
+on the host. To keep unrelated profiles installed without starting their
+adapters or cron jobs, set `gateway.multiplex_profile_allowlist`:
+
+```yaml
+gateway:
+  multiplex_profiles: true
+  multiplex_profile_allowlist:
+    - worker
+    - guest
+```
+
+The default profile is always served and does not need to be listed. An unset
+allowlist preserves the historical serve-all behavior; an empty list serves
+only the default profile. Names are normalized and deduplicated. Invalid list
+entries or names that are not installed are skipped with a warning. A malformed
+non-list value fails safely to default-only.
+
+The resulting served set also controls `/p/<profile>/` API and webhook prefixes,
+runtime status, profile-route eligibility, and which profiles the in-process
+cron scheduler ticks (the Desktop backend's ticker follows the same allowlist and
+stands down for any profile a running multiplexer already serves). A multiplexer
+started as `hermes -p <name> gateway run` always ticks its own profile's cron store
+as well. A named profile outside the allowlist may still run its own standalone
+gateway.
+
+One caveat: the served set is a **start-time snapshot**. A profile created or
+added to the allowlist while the multiplexer is running is not picked up until
+`hermes gateway restart` (profiles deleted at runtime are dropped from cron
+ticking automatically).
+
+### Routing shared-bot chats to profiles (`profile_routes`)
+
+Multiplexing selects a profile per **credential** (each profile's own bot
+token) or per **URL prefix** (`/p/<profile>/` for HTTP platforms). When several
+communities share **one** bot token — for example one Discord bot serving many
+guilds — you can additionally route specific guilds/channels/threads to
+different profiles with `gateway.profile_routes`:
+
+```yaml
+gateway:
+  multiplex_profiles: true
+  profile_routes:
+    # An entire Discord server → one profile
+    - name: acme-server
+      platform: discord
+      guild_id: "1234567890"
+      profile: acme
+
+    # One channel in that server → a different profile
+    - name: acme-support
+      platform: discord
+      guild_id: "1234567890"
+      chat_id: "9876543210"
+      profile: acme-support
+
+    # A Telegram group (no guild concept — chat_id only)
+    - name: tg-group
+      platform: telegram
+      chat_id: "-1001234567890"
+      profile: tg-profile
+
+    # A WhatsApp DM — write the phone number; JID and LID forms also match
+    - name: owner-whatsapp
+      platform: whatsapp
+      chat_id: "15551234567"
+      profile: owner
+```
+
+Routes are matched most-specific-first (`thread_id` > `chat_id` > `guild_id`),
+all declared fields must hold (AND), and a route keyed on a channel also
+matches threads/forum posts whose parent is that channel. Messages that match
+no route stay on the default/active profile. The routed profile gets the full
+per-profile isolation described above (config, skills, memory, credentials,
+session namespace). Routing works on every platform adapter, not just Discord.
+
+A route applies only to messages received by the **default profile's bot**
+unless it names another bot with `bot_profile: <profile>`. Telegram DMs use the
+same `chat_id` for every bot (the user's id), so without this a
+`chat_id` route meant for the shared bot would also capture that user's DMs
+with a secondary profile's dedicated bot. Messages arriving at a secondary
+profile's own bot stay in that profile:
+
+```yaml
+    # Pin one user's DM with team_b's OWN bot to a third profile
+    - name: teamb-owner-dm
+      platform: telegram
+      bot_profile: team_b
+      chat_id: "72719239"
+      profile: ops-for-team-b
+```
+
+Authorization for a routed message is always decided by the **receiving bot's
+profile** (its token and allowlist), including follow-ups sent while the agent
+is busy and mid-turn checks such as `/topic` or `/stop`; the routed profile
+itself needs no copy of the allowlist. A routed profile without a bot of its
+own also receives background notifications (process completions, heartbeats,
+async delegation results) through the shared bot after a gateway restart.
+
+On WhatsApp and WhatsApp Cloud, a `chat_id` route matches across user-identity
+forms: a bare phone number (`15551234567`), a JID
+(`15551234567@s.whatsapp.net`), and a LID (`…@lid`) all refer to the same
+person once the bridge has paired them (the same canonicalization session keys
+and adapter allowlists already use). You can put the phone number in
+`profile_routes` and inbound DMs still match whether WhatsApp delivers a JID or
+a LID. Without a LID mapping yet, the number form still matches a JID (the
+suffix is stripped) but cannot resolve an unknown LID — that inbound falls
+through to the default profile until the mapping appears. Group chats
+(`…@g.us`) are not sender identities and still match exactly. Telegram numeric
+ids are unchanged.
+
+`profile_routes` requires `gateway.multiplex_profiles: true`; with
+multiplexing off the routes are ignored. If an explicit route matches but its
+target profile is not installed or is outside `multiplex_profile_allowlist`,
+the gateway rejects that ingress and logs the route and target. It does not run
+the default profile. Traffic that matches no route keeps the historical
+default-profile behavior.
+
+Cron jobs owned by a routed profile deliver through the shared bot too, but
+only to targets an enabled route with a `chat_id`/`thread_id` maps to that
+profile (a `guild_id + chat_id` route qualifies its channel) — a routed
+profile's job targeting an unrouted chat (or a chat routed to another profile)
+is never sent through the shared bot. Guild-only routes do not qualify a cron
+target; add a `chat_id` route for the delivery channel. The routed profile does
+not need its own `platforms.<platform>` block for this: the shared bot's
+authorization comes from the route, not from the satellite's config.
+
+## Start, stop, or restart all gateways at once
+
+The CLI ships with single-profile lifecycle commands. To act across every
+profile, wrap them in a shell loop. Put the snippet below in
+`~/.local/bin/hermes-gateways` and `chmod +x` it:
+
+```sh
+#!/bin/sh
+set -eu
+
+# Add or remove profile names here as you create / delete profiles.
+profiles="default coder personal-bot research"
+
+usage() {
+  echo "Usage: hermes-gateways {start|stop|restart|status|list}"
+}
+
+run_for_profile() {
+  profile="$1"
+  action="$2"
+  if [ "$profile" = "default" ]; then
+    hermes gateway "$action"
+  else
+    hermes -p "$profile" gateway "$action"
+  fi
+}
+
+action="${1:-}"
+case "$action" in
+  start|stop|restart|status)
+    for profile in $profiles; do
+      echo "==> $action $profile"
+      run_for_profile "$profile" "$action"
+    done
+    ;;
+  list)
+    hermes gateway list
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
+```
+
+Then:
+
+```bash
+hermes-gateways start      # start every configured profile
+hermes-gateways stop       # stop every configured profile
+hermes-gateways restart    # restart all
+hermes-gateways status     # status across all
+hermes-gateways list       # delegates to `hermes gateway list`
+```
+
+:::tip
+The `default` profile is targeted with `hermes gateway <action>` (no `-p`),
+not `hermes -p default gateway <action>`. The wrapper above handles both forms.
+:::
+
+## Manage one profile
+
+The shortcut commands every profile installs:
+
+```bash
+coder gateway run        # foreground (Ctrl-C to stop)
+coder gateway start      # start the managed service
+coder gateway stop       # stop the managed service
+coder gateway restart    # restart
+coder gateway status     # status
+coder gateway install    # create the LaunchAgent / systemd unit
+coder gateway uninstall  # remove the service file
+```
+
+These are equivalent to `hermes -p coder gateway <action>` — useful if a
+profile alias is not on `PATH` or if you target profiles dynamically from a
+script.
+
+## Service files
+
+Each profile installs its own service with a unique name, so installations
+never clash:
+
+| Platform | Path                                                              |
+| -------- | ----------------------------------------------------------------- |
+| macOS    | `~/Library/LaunchAgents/ai.hermes.gateway-<profile>.plist`        |
+| Linux    | `~/.config/systemd/user/hermes-gateway-<profile>.service`         |
+
+The default profile keeps the historical names: `ai.hermes.gateway.plist` /
+`hermes-gateway.service`.
+
+## Viewing logs
+
+Each profile writes to its own log files:
+
+```bash
+# Default profile
+tail -f ~/.hermes/logs/gateway.log
+tail -f ~/.hermes/logs/gateway.error.log
+
+# Named profile
+tail -f ~/.hermes/profiles/<name>/logs/gateway.log
+tail -f ~/.hermes/profiles/<name>/logs/gateway.error.log
+```
+
+Stream every profile's log simultaneously:
+
+```bash
+tail -f ~/.hermes/logs/gateway.log ~/.hermes/profiles/*/logs/gateway.log
+```
+
+The CLI also has a structured log viewer:
+
+```bash
+hermes logs -f                  # follow default profile
+hermes -p coder logs -f         # follow one profile
+hermes logs --help              # filters, levels, JSON output
+```
+
+## Identify what's actually running
+
+```bash
+hermes profile list             # profiles + model + gateway state
+hermes-gateways status          # full status across every profile
+launchctl list | grep hermes    # macOS — PIDs and labels
+systemctl --user list-units 'hermes-gateway-*'   # Linux — units
+```
+
+## Editing configuration
+
+Every profile keeps its config inside its own directory:
+
+```
+~/.hermes/profiles/<name>/
+├── .env              # API keys, bot tokens (chmod 600)
+├── config.yaml       # model, provider, toolsets, gateway settings
+└── SOUL.md           # personality / system prompt
+```
+
+The default profile uses `~/.hermes/` directly with the same three files.
+
+Edit them with any editor or via the CLI:
+
+```bash
+hermes config set model.model anthropic/claude-sonnet-4    # default profile
+coder config set model.model openai/gpt-5                  # named profile
+```
+
+After editing `.env` or `config.yaml`, restart the affected gateway:
+
+```bash
+coder gateway restart
+# or, for everything:
+hermes-gateways restart
+```
+
+## Keeping the host awake
+
+The gateway process can run all day, but the operating system will still try
+to sleep when idle. Two patterns:
+
+### macOS — `caffeinate`
+
+`caffeinate` is built into macOS and prevents sleep while it runs. No install.
+
+```bash
+caffeinate -dis                    # block display, idle, and system sleep
+caffeinate -dis -t 28800           # same, auto-exit after 8 hours
+caffeinate -i -w $(cat ~/.hermes/gateway.pid) &   # awake while default gateway runs
+
+# Persistent: run in background and forget
+nohup caffeinate -dis >/dev/null 2>&1 &
+disown
+
+# Inspect / stop
+pmset -g assertions | grep -iE 'caffeinate|prevent|user is active'
+pkill caffeinate
+```
+
+| Flag   | Effect                                            |
+| ------ | ------------------------------------------------- |
+| `-d`   | block display sleep                               |
+| `-i`   | block idle system sleep (default)                 |
+| `-m`   | block disk sleep                                  |
+| `-s`   | block system sleep (AC-powered Macs only)         |
+| `-u`   | simulate user activity (prevents screen lock)     |
+| `-t N` | auto-exit after `N` seconds                       |
+| `-w P` | exit when PID `P` exits                           |
+
+:::warning Lid-close still sleeps the Mac
+`caffeinate` cannot override the hardware-driven lid-close sleep on MacBooks.
+For lid-closed operation, change your Energy Saver / Battery preferences or
+use a third-party tool.
+:::
+
+### Linux — `systemd-inhibit` or `loginctl`
+
+```bash
+# Inhibit suspend while a command runs
+systemd-inhibit --what=idle:sleep --who=hermes --why="gateways running" \
+  sleep infinity &
+
+# Allow user services to keep running after logout (recommended)
+sudo loginctl enable-linger "$USER"
+```
+
+After enabling lingering, your systemd user units (including
+`hermes-gateway-<profile>.service`) continue running across SSH disconnects
+and reboots.
+
+## Token-conflict safety
+
+Each profile must use unique bot tokens for each platform. If two profiles
+share a Telegram, Discord, Slack, WhatsApp, or Signal token, the second
+gateway refuses to start with an error naming the conflicting profile. Under
+[multiplexing](#alternative-one-gateway-for-all-profiles-multiplexing) the same
+rule parks only the duplicate profile's adapter and the shared gateway keeps
+running.
+
+To audit:
+
+```bash
+grep -H 'TELEGRAM_BOT_TOKEN\|DISCORD_BOT_TOKEN' \
+     ~/.hermes/.env ~/.hermes/profiles/*/.env
+```
+
+## Updating the code
+
+`hermes update` pulls the latest code once and syncs new bundled skills into
+every profile:
+
+```bash
+hermes update
+hermes-gateways restart
+```
+
+User-modified skills are never overwritten.
+
+## Troubleshooting
+
+### "Could not find service in domain for user gui: 501"
+
+You ran `hermes gateway start` after a previous `hermes gateway stop`. The
+CLI's `stop` does a full `launchctl unload`, which removes the service from
+launchd's registry. The CLI catches this specific error on `start` and
+automatically re-loads the plist (`↻ launchd job was unloaded; reloading
+service definition`). The service starts normally. Nothing to fix.
+
+### Stale PID after a crash
+
+If a profile's gateway shows `not running` but a process is still alive:
+
+```bash
+ps -ef | grep "hermes_cli.*-p <profile>"
+cat ~/.hermes/profiles/<profile>/gateway.pid
+kill -TERM <pid>          # graceful
+kill -KILL <pid>          # if that fails after a few seconds
+<profile> gateway start
+```
+
+### Forcing a hard reset of one service
+
+```bash
+# macOS
+launchctl unload ~/Library/LaunchAgents/ai.hermes.gateway-<profile>.plist
+launchctl load   ~/Library/LaunchAgents/ai.hermes.gateway-<profile>.plist
+
+# Linux
+systemctl --user restart hermes-gateway-<profile>.service
+```
+
+### Health check
+
+```bash
+hermes doctor                  # default profile
+hermes -p <profile> doctor     # one profile
+```
