@@ -1,15 +1,25 @@
-"""Zeloo CLI observability — usage tracking and health checks."""
+"""First-party Zeloo observability integrations."""
 
 from __future__ import annotations
 
-from .health import HealthChecker, HealthStatus, check_all
-from .usage import UsageSummary, UsageTracker, record_token_usage
+import logging
+from typing import Any
 
-__all__ = [
-    "UsageTracker",
-    "UsageSummary",
-    "record_token_usage",
-    "HealthChecker",
-    "HealthStatus",
-    "check_all",
-]
+logger = logging.getLogger(__name__)
+
+
+def observe_lifecycle(hook_name: str, **kwargs: Any) -> None:
+    """Dispatch a Zeloo lifecycle event to built-in observability features."""
+    from . import relay_shared_metrics
+
+    try:
+        relay_shared_metrics.observe_lifecycle(hook_name, **kwargs)
+    except Exception:
+        logger.warning("Built-in observability hook failed: %s", hook_name, exc_info=True)
+
+
+def handles_hook(hook_name: str) -> bool:
+    """Return whether any built-in observability feature handles a hook."""
+    from . import relay_shared_metrics
+
+    return relay_shared_metrics.handles_hook(hook_name)

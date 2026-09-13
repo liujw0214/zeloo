@@ -1,353 +1,198 @@
-"""MCP OAuth Device Code Flow (RFC 8628).
+"""Explicit RFC 8628 MCP login, sharing SDK discovery, client auth and token storage.
 
-For MCP servers that don't have a web browser (CLI/headless scenarios),
-the device authorization grant lets a user complete consent on a
-secondary device (phone, laptop). The agent prints a short code and a
-URL; the user visits the URL, enters the code, and approves the
-requested scopes.
-
-This module reuses :class:`tools.mcp_oauth.MCPOAuthClient` for the
-HTTP plumbing but keeps the polling logic here so callers can opt out
-of automatic prompting (e.g. for embedded use inside a TUI).
+The SDK still owns runtime requests and refresh. Device authorization is only
+started by `Zeloo mcp login/reauth`, never a background reconnect.
 """
-
 from __future__ import annotations
 
 import asyncio
-import logging
+import math
 import sys
 import time
-from dataclasses import dataclass
-from typing import Any
 
-import httpx
+from mcp.shared.auth import OAuthMetadata
+from pydantic import AnyHttpUrl
 
-from tools.mcp_oauth import OAuthError
-
-logger = logging.getLogger(__name__)
+DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 
 
-@dataclass
-class DeviceCodeResponse:
-    """The user-facing challenge returned by the AS.
+class DeviceOAuthMetadata(OAuthMetadata):
+    # RFC 8414 makes authorization_endpoint optional for grants not using it.
+    authorization_endpoint: AnyHttpUrl | None = None
+    device_authorization_endpoint: AnyHttpUrl
 
-    Mirrors RFC 8628 §3.2 field names.
-    """
 
-    device_code: str
-    user_code: str
-    verification_uri: str
-    verification_uri_complete: str | None  # convenience link with code embedded
-    expires_in: int
-    interval: int
+async def _discover(client, provider):
+    from mcp.client.auth.utils import (
+        build_oauth_authorization_server_metadata_discovery_urls,
+        build_protected_resource_metadata_discovery_urls,
+        extract_resource_metadata_from_www_auth,
+        handle_protected_resource_response,
+        validate_metadata_issuer,
+    )
+    context = provider.context
+    response = await client.get(context.server_url)
+    challenge = extract_resource_metadata_from_www_auth(response)
+    for url in build_protected_resource_metadata_discovery_urls(challenge, context.server_url):
+        response = await client.get(url)
+        prm = await handle_protected_resource_response(response)
+        if prm:
+            await provider._validate_resource_match(prm)
+            context.protected_resource_metadata = prm
+            context.auth_server_url = str(prm.authorization_servers[0])
+            break
+    for url in build_oauth_authorization_server_metadata_discovery_urls(context.auth_server_url, context.server_url):
+        response = await client.get(url)
+        if response.status_code == 404:
+            continue
+        data = _payload(response, "OAuth metadata")
+        if not data.get("device_authorization_endpoint"):
+            raise RuntimeError("Server does not advertise device authorization; use --flow browser if supported")
+        metadata = DeviceOAuthMetadata.model_validate(data)
+        if context.auth_server_url:
+            validate_metadata_issuer(metadata, context.auth_server_url)
+        grants = metadata.grant_types_supported
+        if grants is not None and DEVICE_GRANT not in grants:
+            raise RuntimeError("Server does not advertise the device_code grant")
+        context.oauth_metadata = metadata
+        return
+    raise RuntimeError("No OAuth authorization server metadata found")
 
-    @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> DeviceCodeResponse:
-        """Parse a raw AS response, raising on missing required fields."""
+
+def _payload(response, label):
+    try:
+        data = response.json()
+    except ValueError:
+        raise RuntimeError(f"{label}: invalid JSON response") from None
+    if not isinstance(data, dict):
+        raise RuntimeError(f"{label}: expected a JSON object")
+    if not 200 <= response.status_code < 300:
+        # Descriptions and arbitrary error values may contain credentials.
+        raise RuntimeError(f"{label} failed (HTTP {response.status_code})")
+    return data
+
+
+async def _register(client, provider, cfg):
+    from mcp.shared.auth import OAuthClientInformationFull
+    from mcp.client.auth.oauth2 import OAuthRegistrationError, check_registration_usable
+
+    context = provider.context
+    metadata = context.client_metadata.model_dump(mode="json", exclude_none=True)
+    metadata.update(grant_types=[DEVICE_GRANT, "refresh_token"], response_types=[])
+    if cfg.get("client_id"):
+        data = {**metadata, "client_id": cfg["client_id"]}
+        if cfg.get("client_secret"):
+            data["client_secret"] = cfg["client_secret"]
+    else:
+        endpoint = context.oauth_metadata.registration_endpoint
+        if not endpoint:
+            raise RuntimeError("Server has no registration endpoint; configure oauth.client_id (and client_secret if required)")
+        response = await client.post(str(endpoint), json=metadata)
+        data = _payload(response, "Client registration")
+    data["issuer"] = str(context.oauth_metadata.issuer)
+    context.client_info = OAuthClientInformationFull.model_validate(data)
+    provider._coerce_client_secret_post()
+    try:
+        check_registration_usable(context.client_info)
+    except OAuthRegistrationError:
+        raise RuntimeError("Device OAuth client has unsupported or incomplete token endpoint authentication") from None
+
+
+def _positive_seconds(value, label):
+    value = float(value)
+    if not math.isfinite(value) or value <= 0:
+        raise RuntimeError(f"Device authorization has invalid {label}")
+    return value
+
+
+async def _authorize(client, provider, cfg):
+    from tools.mcp_tool import sdk_httpx
+
+    context = provider.context
+    resource = context.get_resource_url()
+    data = {"client_id": context.client_info.client_id, "resource": resource}
+    if context.client_metadata.scope:
+        data["scope"] = context.client_metadata.scope
+    data, headers = context.prepare_token_auth(data, {})
+    response = await client.post(str(context.oauth_metadata.device_authorization_endpoint), data=data, headers=headers)
+    authorization = _payload(response, "Device authorization")
+    for key in ("device_code", "user_code", "verification_uri"):
+        if not isinstance(authorization.get(key), str) or not authorization[key]:
+            raise RuntimeError(f"Device authorization is missing {key}")
+    verification = AnyHttpUrl(authorization["verification_uri"])
+    interval = _positive_seconds(authorization.get("interval", 5), "interval")
+    deadline = time.monotonic() + min(_positive_seconds(authorization["expires_in"], "expires_in"),
+                                     _positive_seconds(cfg.get("timeout", 300), "timeout"))
+    print(f"\n  MCP OAuth: open {verification} on any device.\n  Code: {authorization['user_code']}\n"
+          "  Waiting for approval...\n", file=sys.stderr, flush=True)
+    token_data = {"client_id": context.client_info.client_id, "device_code": authorization["device_code"],
+                  "grant_type": DEVICE_GRANT, "resource": resource}
+    token_data, headers = context.prepare_token_auth(token_data, {})
+    httpx = sdk_httpx()
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= interval:
+            raise RuntimeError("Device authorization expired before approval; run login again")
+        await asyncio.sleep(interval)
+        request = provider._prepare_token_request(httpx.Request("POST", str(context.oauth_metadata.token_endpoint),
+                                                               data=token_data, headers=headers))
         try:
-            return cls(
-                device_code=payload["device_code"],
-                user_code=payload["user_code"],
-                verification_uri=payload["verification_uri"],
-                verification_uri_complete=payload.get(
-                    "verification_uri_complete"
-                ),
-                expires_in=int(payload.get("expires_in", 600)),
-                interval=int(payload.get("interval", 5)),
-            )
-        except KeyError as exc:
-            raise OAuthError(
-                f"Device authorization response missing field: {exc}",
-                response_body=str(payload)[:512],
-            ) from exc
-
-
-class DeviceCodeClient:
-    """OAuth 2.0 Device Authorization Grant (RFC 8628).
-
-    Lifecycle::
-
-        client = DeviceCodeClient(device_auth_endpoint, token_endpoint, client_id)
-        challenge = await client.request_device_code(scope="read")
-        print(f"Visit {challenge.verification_uri} and enter {challenge.user_code}")
-        token = await client.poll_for_token(challenge.device_code, challenge.interval)
-        # or, in one shot:
-        token = await client.run(scope="read")
-
-    The class never blocks the event loop: ``poll_for_token`` uses
-    ``asyncio.sleep`` between attempts.
-    """
-
-    _GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
-
-    def __init__(
-        self,
-        device_authorization_endpoint: str,
-        token_endpoint: str,
-        client_id: str,
-        client_secret: str | None = None,
-        audience: str | None = None,
-        http_client: httpx.AsyncClient | None = None,
-        timeout: float = 30.0,
-    ) -> None:
-        self.device_authorization_endpoint = device_authorization_endpoint
-        self.token_endpoint = token_endpoint
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.audience = audience
-        self._timeout = timeout
-        # Same ownership semantics as MCPOAuthClient — we never mutate
-        # a caller-provided httpx client.
-        self._external_client = http_client
-        self._owns_client = http_client is None
-
-    # ── Context manager support ──────────────────────────────────────
-
-    async def __aenter__(self) -> DeviceCodeClient:
-        if self._external_client is None:
-            self._external_client = httpx.AsyncClient(timeout=self._timeout)
-            self._owns_client = True
-        return self
-
-    async def __aexit__(self, *exc: Any) -> None:
-        await self.aclose()
-
-    async def aclose(self) -> None:
-        if self._owns_client and self._external_client is not None:
-            await self._external_client.aclose()
-            self._external_client = None
-
-    # ── Step 1: request device code ──────────────────────────────────
-
-    async def request_device_code(self, scope: str = "") -> DeviceCodeResponse:
-        """Request a device code from the authorization server.
-
-        Returns a :class:`DeviceCodeResponse` describing what the user
-        must do (visit URL, enter code) and the polling parameters.
-        """
-        if not self.device_authorization_endpoint:
-            raise OAuthError("device_authorization_endpoint not configured")
-        payload: dict[str, str] = {"client_id": self.client_id}
-        if scope:
-            payload["scope"] = scope
-        if self.audience:
-            payload["audience"] = self.audience
-        # Some confidential clients include the secret here too; it's
-        # harmless for public clients (the AS will ignore it).
-        if self.client_secret:
-            payload["client_secret"] = self.client_secret
-
-        owns = self._external_client is None
-        client = self._external_client or httpx.AsyncClient(timeout=self._timeout)
+            response = await asyncio.wait_for(client.send(request), timeout=deadline - time.monotonic())
+        except (TimeoutError, httpx.TimeoutException):
+            # RFC 8628 requires reducing polling frequency after connection timeouts.
+            interval *= 2
+            continue
+        if 200 <= response.status_code < 300:
+            from mcp.shared.auth import OAuthToken
+            tokens = OAuthToken.model_validate(_payload(response, "Device token"))
+            if not tokens.access_token:
+                raise RuntimeError("Device token response has no access token")
+            if tokens.scope is None:
+                tokens.scope = context.client_metadata.scope
+            return tokens
         try:
-            try:
-                resp = await client.post(
-                    self.device_authorization_endpoint,
-                    data=payload,
-                    headers={"Accept": "application/json"},
-                )
-            except httpx.HTTPError as exc:
-                raise OAuthError(
-                    f"Device authorization request failed: {exc}"
-                ) from exc
-            try:
-                body = resp.json()
-            except ValueError as exc:
-                raise OAuthError(
-                    f"Device authorization returned non-JSON body: {exc}",
-                    status_code=resp.status_code,
-                    response_body=resp.text[:512],
-                ) from exc
-            if resp.status_code >= 400 or "error" in body:
-                raise OAuthError(
-                    body.get("error_description") or body.get("error")
-                    or f"Device authorization failed: HTTP {resp.status_code}",
-                    error_code=body.get("error"),
-                    status_code=resp.status_code,
-                    response_body=resp.text[:512],
-                )
-            return DeviceCodeResponse.from_payload(body)
-        finally:
-            if owns and isinstance(client, httpx.AsyncClient):
-                await client.aclose()
-
-    # ── Step 2: poll for token ───────────────────────────────────────
-
-    async def poll_for_token(
-        self,
-        device_code: str,
-        interval: int = 5,
-        expires_in: int = 600,
-        prompt: bool = True,
-        output=sys.stdout,
-    ) -> dict[str, Any]:
-        """Poll the token endpoint until the user authenticates.
-
-        Args:
-            device_code: The opaque token from :meth:`request_device_code`.
-            interval: Minimum seconds between polls. The AS may extend
-                this via ``slow_down`` (RFC 8628 §3.5).
-            expires_in: How long to wait before giving up. The AS sets
-                this in the device-code response.
-            prompt: When ``True`` (default), print a waiting message on
-                the first poll so the user knows something is happening.
-            output: File-like object to write user-facing prompts to.
-                Defaults to stdout; tests can pass an ``io.StringIO``.
-
-        Returns:
-            The parsed token response (contains ``access_token`` and
-            optionally ``refresh_token``).
-
-        Raises:
-            OAuthError: On any non-recoverable AS error.
-            TimeoutError: If the user does not authorize in time.
-        """
-        if not self.token_endpoint:
-            raise OAuthError("token_endpoint not configured")
-        # Floor the interval at 1s — RFC 8628 §3.5 specifies a minimum
-        # of 5s but allows the AS to relax that, and we should never
-        # hammer the endpoint.
-        current_interval = max(1, int(interval))
-        deadline = time.monotonic() + int(expires_in)
-        first_poll = True
-        owns = self._external_client is None
-        client = self._external_client or httpx.AsyncClient(timeout=self._timeout)
-        try:
-            while time.monotonic() < deadline:
-                if first_poll and prompt:
-                    self._print_waiting_message(output)
-                    first_poll = False
-                payload: dict[str, str] = {
-                    "grant_type": self._GRANT_TYPE,
-                    "device_code": device_code,
-                    "client_id": self.client_id,
-                }
-                if self.client_secret:
-                    payload["client_secret"] = self.client_secret
-                try:
-                    resp = await client.post(
-                        self.token_endpoint,
-                        data=payload,
-                        headers={"Accept": "application/json"},
-                    )
-                except httpx.HTTPError as exc:
-                    # Transient network errors — retry after interval.
-                    logger.warning("Device-flow poll network error: %s", exc)
-                    await asyncio.sleep(current_interval)
-                    continue
-                try:
-                    body = resp.json()
-                except ValueError:
-                    body = {}
-                # Recoverable errors per RFC 8628 §3.5.
-                if "error" in body:
-                    err = body["error"]
-                    if err == "authorization_pending":
-                        await asyncio.sleep(current_interval)
-                        continue
-                    if err == "slow_down":
-                        current_interval += 5
-                        await asyncio.sleep(current_interval)
-                        continue
-                    if err == "expired_token":
-                        raise TimeoutError(
-                            "Device code expired before user completed "
-                            "authorization"
-                        )
-                    # Anything else is a real failure.
-                    raise OAuthError(
-                        body.get("error_description") or err,
-                        error_code=err,
-                        status_code=resp.status_code,
-                        response_body=resp.text[:512],
-                    )
-                if resp.status_code >= 400:
-                    raise OAuthError(
-                        f"Token endpoint returned HTTP {resp.status_code}",
-                        status_code=resp.status_code,
-                        response_body=resp.text[:512],
-                    )
-                if "access_token" not in body:
-                    raise OAuthError(
-                        "Device-flow token response missing 'access_token'",
-                        status_code=resp.status_code,
-                        response_body=resp.text[:512],
-                    )
-                return body
-            raise TimeoutError(
-                f"Device-flow timed out after {expires_in}s; user did not "
-                "complete authorization in time"
-            )
-        finally:
-            if owns and isinstance(client, httpx.AsyncClient):
-                await client.aclose()
-
-    # ── Convenience: full flow ───────────────────────────────────────
-
-    async def run(self, scope: str = "", output=sys.stdout) -> dict[str, Any]:
-        """Run the complete device code flow with user prompts.
-
-        This is a convenience wrapper for CLI / interactive use:
-
-        1. Request a device code.
-        2. Print the URL + user code to ``output``.
-        3. Poll until the user completes authorization (or timeout).
-
-        For TUI integration prefer calling :meth:`request_device_code`
-        and :meth:`poll_for_token` separately so you can render the
-        prompt in your own widgets.
-        """
-        challenge = await self.request_device_code(scope=scope)
-        self._print_challenge(challenge, output)
-        return await self.poll_for_token(
-            device_code=challenge.device_code,
-            interval=challenge.interval,
-            expires_in=challenge.expires_in,
-            prompt=False,  # already printed by _print_challenge
-            output=output,
-        )
-
-    # ── Output helpers ───────────────────────────────────────────────
-
-    @staticmethod
-    def _print_challenge(
-        challenge: DeviceCodeResponse, output=sys.stdout
-    ) -> None:
-        """Display the URL + code the user must visit."""
-        url = challenge.verification_uri_complete or challenge.verification_uri
-        print(f"\nTo authorize this device, visit:\n  {url}", file=output)
-        print(f"and enter the code: {challenge.user_code}\n", file=output)
-        print(
-            f"Waiting for authorization (expires in {challenge.expires_in}s)…",
-            file=output,
-        )
-
-    @staticmethod
-    def _print_waiting_message(output=sys.stdout) -> None:
-        print(".", file=output, end="", flush=True)
+            error = response.json().get("error")
+        except (ValueError, AttributeError):
+            error = None
+        if error == "authorization_pending":
+            continue
+        if error == "slow_down":
+            interval += 5
+            continue
+        safe_error = error if error in {"access_denied", "expired_token"} else f"HTTP {response.status_code}"
+        raise RuntimeError(f"Device authorization failed: {safe_error}")
 
 
-__all__ = [
-    "DeviceCodeClient",
-    "DeviceCodeResponse",
-]
+async def login_device(name, server_url, oauth_config):
+    """Authorize then commit state in the active profile; failed grants preserve old state."""
+    from tools.mcp_oauth import _build_client_metadata
+    from tools.mcp_oauth_manager import ZELOOMCPOAuthProvider, get_manager
+    from tools.mcp_oauth_provider import prepare_oauth_config
+    from tools.mcp_tool import sdk_httpx
 
-
-async def _selftest() -> None:  # pragma: no cover - manual smoke test
-    """Verify the dataclass round-trips a typical AS response."""
-    payload = {
-        "device_code": "abc",
-        "user_code": "WDDD-BFRT",
-        "verification_uri": "https://example.com/activate",
-        "verification_uri_complete": "https://example.com/activate?code=WDDD-BFRT",
-        "expires_in": 600,
-        "interval": 5,
-    }
-    challenge = DeviceCodeResponse.from_payload(payload)
-    assert challenge.user_code == "WDDD-BFRT"
-    assert challenge.interval == 5
-    print("device-flow selftest OK:", challenge.user_code)
-
-
-if __name__ == "__main__":  # pragma: no cover
-    asyncio.run(_selftest())
+    cfg, storage = prepare_oauth_config(name, server_url, oauth_config)
+    # Device flow never binds a callback socket or uses the hosted browser CIMD.
+    cfg["_resolved_port"] = cfg.get("redirect_port", 8420)
+    provider = ZELOOMCPOAuthProvider(server_url=server_url, server_name=name, storage=storage,
+                                     client_metadata=_build_client_metadata(cfg),
+                                     token_user_agent=cfg.get("user_agent"))
+    httpx = sdk_httpx()
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+            await _discover(client, provider)
+            await _register(client, provider, cfg)
+            tokens = await _authorize(client, provider, cfg)
+    except (ValueError, TypeError, KeyError):
+        raise RuntimeError("Device OAuth response has invalid fields") from None
+    except httpx.HTTPError:
+        raise RuntimeError("Device OAuth network request failed") from None
+    # Validate the entire grant before touching disk; reuse the existing scoped store.
+    previous = storage.snapshot()
+    try:
+        await storage.set_client_info(provider.context.client_info)
+        storage.save_oauth_metadata(provider.context.oauth_metadata)
+        await storage.set_tokens(tokens)
+    except OSError:
+        storage.restore(previous)
+        raise
+    get_manager().evict(name)

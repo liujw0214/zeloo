@@ -1,282 +1,125 @@
-"""Zeloo ``dashboard`` subcommand — web UI dashboard management."""
+"""``Zeloo dashboard`` / ``Zeloo serve`` subcommand parsers.
+
+``dashboard`` is the browser web UI; ``serve`` is the same gateway, headless —
+what the desktop app and remote backends run. ``serve`` also skips the web UI
+build (``headless_backend=True``): pure JSON-RPC/WS clients never load the SPA.
+Both share one handler (``cmd_dashboard`` → ``start_server``).
+"""
 
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import signal
-import socket
-import subprocess
-import sys
-import webbrowser
-from pathlib import Path
-from typing import Any, Optional
-
-from zeloo_cli.subcommands import Subcommand, subcommand
+from typing import Callable
 
 
-@subcommand("dashboard")
-class DashboardCmd(Subcommand):
-    name = "dashboard"
-    help = "Start the web UI dashboard"
+def _add_server_runtime_args(parser) -> None:
+    """Runtime flags shared by ``dashboard`` and ``serve`` (same ``web_server.start_server``)."""
+    parser.add_argument(
+        "--port", type=int, default=9119, help="Port (default 9119, 0 for auto-assign by OS)")
+    parser.add_argument("--host", default="127.0.0.1", help="Host (default 127.0.0.1)")
+    parser.add_argument(
+        "--insecure", action="store_true",
+        help="DEPRECATED / NO-OP. Formerly bypassed auth on a non-loopback "
+            "bind. As of the June 2026 hardening it no longer disables "
+            "authentication — a public bind always requires an auth provider "
+            "(password or OAuth). Bind 127.0.0.1 + tunnel to keep it local.")
+    parser.add_argument(
+        "--skip-build", action="store_true",
+        help="Skip the web UI build step and serve the existing dist directly. "
+            "Useful for non-interactive contexts (Windows Scheduled Tasks, CI) "
+            "where npm may not be available. Pre-build with: cd web && npm run build")
+    parser.add_argument(
+        "--isolated", action="store_true",
+        help="When launched from a named profile, run a dedicated server scoped "
+            "to that profile instead of routing to the machine-level server. "
+            "Default behavior is unified: profile launches attach to (or start) "
+            "ONE machine-level server and preselect the profile.")
+    # Internal: set by the unified-launch re-exec to preselect the launching profile.
+    parser.add_argument("--open-profile", dest="open_profile", default="", help=argparse.SUPPRESS)
+    # Lifecycle flags win over the start-a-server flags (they exit first). No service
+    # manager / PID file: they scan the process table for `Zeloo dashboard|serve`
+    # cmdlines and SIGTERM them — the same path `Zeloo update` uses.
+    parser.add_argument(
+        "--stop", action="store_true", help="Stop all running Zeloo web server processes and exit")
+    parser.add_argument(
+        "--status", action="store_true", help="List running Zeloo web server processes and exit")
 
-    _dashboard_process: Optional[subprocess.Popen[bytes]] = None
-    _dashboard_pid_file: Optional[Path] = None
 
-    @classmethod
-    def configure_parser(cls, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
-            "--port", type=int, default=8765,
-            help="Port to run dashboard on (default: 8765)",
-        )
-        parser.add_argument(
-            "--host", default="127.0.0.1",
-            help="Host to bind to (default: 127.0.0.1)",
-        )
-        parser.add_argument(
-            "--stop", action="store_true",
-            help="Stop a running dashboard instance",
-        )
-        parser.add_argument(
-            "--status", action="store_true",
-            help="Show dashboard running status",
-        )
-        parser.add_argument(
-            "--no-open", action="store_true",
-            help="Don't open browser automatically",
-        )
+def _configure_serve_parser(parser, *, cmd_dashboard: Callable) -> None:
+    """Canonical ``serve`` arguments; shared by the full tree and Desktop's lean hot-path parser."""
+    _add_server_runtime_args(parser)
+    # Redundant (serve is always headless) but accepted so legacy callers don't error.
+    parser.add_argument("--no-open", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--ssh-session-token-file", dest="ssh_session_token_file", metavar="PATH", default=None,
+        help="Read a one-shot Desktop SSH session token from PATH")
+    parser.add_argument(
+        "--ssh-owner-nonce", dest="ssh_owner_nonce", metavar="NONCE", default=None,
+        help="Identify a Desktop-owned SSH backend process")
+    parser.set_defaults(func=cmd_dashboard, no_open=True, headless_backend=True, command="serve")
 
-    def run(self, args: argparse.Namespace) -> int:
-        if getattr(args, "status", False):
-            return self._status()
-        if getattr(args, "stop", False):
-            return self._stop()
-        return self._start(
-            port=getattr(args, "port", 8765),
-            host=getattr(args, "host", "127.0.0.1"),
-            no_open=getattr(args, "no_open", False),
-        )
 
-    def _get_zeloo_home(self) -> Path:
-        val = os.environ.get("ZELOO_HOME", "").strip()
-        if val:
-            return Path(val)
-        if sys.platform == "win32":
-            local = os.environ.get("LOCALAPPDATA", "").strip()
-            base = Path(local) if local else Path.home() / "AppData" / "Local"
-            return base / "Zeloo"
-        return Path.home() / ".Zeloo"
+def build_serve_parser(
+    *, cmd_dashboard: Callable, add_help: bool = True, exit_on_error: bool = True,
+) -> argparse.ArgumentParser:
+    """Build the standalone parser used by the lean ``serve`` dispatch path."""
+    parser = argparse.ArgumentParser(
+        prog="Zeloo serve",
+        description="Run the Zeloo backend server - the JSON-RPC/WebSocket gateway the "
+            "desktop app and remote clients connect to. Headless: it never opens "
+            "a browser UI.",
+        add_help=add_help, exit_on_error=exit_on_error)
+    _configure_serve_parser(parser, cmd_dashboard=cmd_dashboard)
+    return parser
 
-    def _get_dashboard_pid_file(self) -> Path:
-        if self._dashboard_pid_file is None:
-            self._dashboard_pid_file = self._get_zeloo_home() / "dashboard.pid"
-        return self._dashboard_pid_file
 
-    def _get_dashboard_log_file(self) -> Path:
-        return self._get_zeloo_home() / "dashboard.log"
+def build_dashboard_parser(
+    subparsers, *, cmd_dashboard: Callable, cmd_dashboard_register: Callable) -> None:
+    """Attach ``dashboard`` (browser UI) and ``serve`` (headless backend the desktop spawns)."""
+    dashboard_parser = subparsers.add_parser(
+        "dashboard", help="Start the web UI dashboard",
+        description="Launch the Zeloo Agent web dashboard for managing config, API keys, and sessions",
+    )
+    _add_server_runtime_args(dashboard_parser)
+    dashboard_parser.add_argument(
+        "--no-open", action="store_true", help="Don't open browser automatically")
+    # Compat shim: desktop shells <= 0.15.x spawn `Zeloo dashboard --no-open --tui ...`;
+    # `--tui` was removed (embedded chat always on). Accept + ignore so an old app with a
+    # new CLI doesn't die on "unrecognized arguments". Drop once the app floor is > 0.16.0.
+    dashboard_parser.add_argument("--tui", action="store_true", help=argparse.SUPPRESS)
+    dashboard_parser.set_defaults(func=cmd_dashboard)
 
-    def _is_port_in_use(self, host: str, port: int) -> bool:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind((host, port))
-                return False
-            except OSError:
-                return True
+    # `serve`: same gateway as `dashboard`, never opens a browser. Exists so the desktop
+    # app / remote backends launch a backend WITHOUT invoking `dashboard` — independent
+    # surfaces that merely share this server.
+    serve_parser = subparsers.add_parser(
+        "serve",
+        help="Start the Zeloo backend server (headless; powers the desktop app and remote backends)",
+        description="Run the Zeloo backend server — the JSON-RPC/WebSocket gateway the "
+            "desktop app and remote clients connect to. Headless: it never opens "
+            "a browser UI.")
+    _configure_serve_parser(serve_parser, cmd_dashboard=cmd_dashboard)
 
-    def _get_dashboard_url(self, host: str, port: int) -> str:
-        return f"http://{host}:{port}"
-
-    def _read_pid_file(self) -> tuple[int | None, str | None, int | None]:
-        pid_file = self._get_dashboard_pid_file()
-        if not pid_file.exists():
-            return None, None, None
-        try:
-            content = pid_file.read_text(encoding="utf-8").strip()
-            parts = content.split(",")
-            pid = int(parts[0]) if parts else None
-            host = parts[1] if len(parts) > 1 else None
-            port = int(parts[2]) if len(parts) > 2 else None
-            return pid, host, port
-        except Exception:
-            return None, None, None
-
-    def _write_pid_file(self, pid: int, host: str, port: int) -> None:
-        pid_file = self._get_dashboard_pid_file()
-        pid_file.parent.mkdir(parents=True, exist_ok=True)
-        pid_file.write_text(f"{pid},{host},{port}", encoding="utf-8")
-
-    def _clear_pid_file(self) -> None:
-        pid_file = self._get_dashboard_pid_file()
-        if pid_file.exists():
-            pid_file.unlink()
-
-    def _is_process_running(self, pid: int) -> bool:
-        try:
-            if sys.platform == "win32":
-                import ctypes
-                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-                kernel = ctypes.windll.kernel32
-                handle = kernel.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-                if handle:
-                    kernel.CloseHandle(handle)
-                    return True
-                return False
-            else:
-                os.kill(pid, 0)
-                return True
-        except (OSError, ProcessLookupError):
-            return False
-
-    def _status(self) -> int:
-        pid, host, port = self._read_pid_file()
-
-        if pid is None:
-            print("Dashboard status: not running (no PID file)")
-            return 0
-
-        if not self._is_process_running(pid):
-            print("Dashboard status: not running (stale PID file)")
-            self._clear_pid_file()
-            return 0
-
-        url = self._get_dashboard_url(host or "127.0.0.1", port or 8765)
-        print(f"Dashboard status: running")
-        print(f"  PID:  {pid}")
-        print(f"  URL:  {url}")
-        print(f"  Host: {host or '127.0.0.1'}")
-        print(f"  Port: {port or 8765}")
-        return 0
-
-    def _stop(self) -> int:
-        pid, host, port = self._read_pid_file()
-
-        if pid is None or not self._is_process_running(pid):
-            print("Dashboard is not running.")
-            self._clear_pid_file()
-            return 0
-
-        print(f"Stopping dashboard (PID {pid})...")
-
-        try:
-            if sys.platform == "win32":
-                import ctypes
-                kernel = ctypes.windll.kernel32
-                kernel.GenerateConsoleCtrlEvent(0, pid)
-            else:
-                os.kill(pid, signal.SIGTERM)
-        except (OSError, ProcessLookupError):
-            pass
-
-        import time
-        for _ in range(10):
-            if not self._is_process_running(pid):
-                break
-            time.sleep(0.5)
-
-        if self._is_process_running(pid):
-            print("Dashboard did not stop gracefully, forcing...")
-            try:
-                if sys.platform == "win32":
-                    import ctypes
-                    kernel = ctypes.windll.kernel32
-                    kernel.TerminateProcess(
-                        kernel.OpenProcess(0x0001, False, pid), 1
-                    )
-                else:
-                    os.kill(pid, signal.SIGKILL)
-            except Exception:
-                pass
-
-        self._clear_pid_file()
-        print("Dashboard stopped.")
-        return 0
-
-    def _find_dashboard_module(self) -> Optional[str]:
-        candidates = [
-            "zeloo_cli.dashboard_app:app",
-            "zeloo_cli.web_app:app",
-            "dash_app:app",
-            "dashboard:app",
-        ]
-
-        for candidate in candidates:
-            module_path = candidate.split(":")[0]
-            try:
-                __import__(module_path)
-                return candidate
-            except ImportError:
-                continue
-
-        return None
-
-    def _start(self, port: int, host: str, no_open: bool) -> int:
-        if self._is_port_in_use(host, port):
-            existing_pid, existing_host, existing_port = self._read_pid_file()
-            if existing_pid and self._is_process_running(existing_pid):
-                url = self._get_dashboard_url(existing_host or "127.0.0.1", existing_port or port)
-                print(f"Dashboard already running at {url}")
-                print(f"PID: {existing_pid}")
-                return 1
-            print(f"Port {port} is in use, but dashboard process is not running. Clearing stale state.")
-
-        dash_module = self._find_dashboard_module()
-        if dash_module is None:
-            print("Dashboard module not found.")
-            print("The web dashboard requires a web application module.")
-            print("Check that zeloo_cli.dashboard_app or zeloo_cli.web_app is available.")
-            return 1
-
-        print(f"Starting dashboard on {host}:{port}...")
-
-        log_file = self._get_dashboard_log_file()
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-
-        try:
-            if sys.platform == "win32":
-                creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
-                proc = subprocess.Popen(
-                    [sys.executable, "-m", dash_module.replace(":", "."), "--port", str(port), "--host", host],
-                    cwd=str(Path(__file__).parent.parent.parent),
-                    stdout=open(log_file, "w", encoding="utf-8"),
-                    stderr=subprocess.STDOUT,
-                    creationflags=creation_flags,
-                )
-            else:
-                proc = subprocess.Popen(
-                    [sys.executable, "-m", dash_module.replace(":", "."), "--port", str(port), "--host", host],
-                    cwd=str(Path(__file__).parent.parent.parent),
-                    stdout=open(log_file, "w", encoding="utf-8"),
-                    stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                )
-
-            pid = proc.pid
-            self._write_pid_file(pid, host, port)
-
-            import time
-            for i in range(30):
-                time.sleep(0.5)
-                if proc.poll() is not None:
-                    print(f"Dashboard process exited unexpectedly (code {proc.returncode})")
-                    self._clear_pid_file()
-                    return 1
-                if not self._is_port_in_use(host, port):
-                    break
-
-            url = self._get_dashboard_url(host, port)
-            print(f"Dashboard started successfully!")
-            print(f"  URL: {url}")
-            print(f"  PID: {pid}")
-            print(f"  Log: {log_file}")
-
-            if not no_open:
-                print("Opening browser...")
-                webbrowser.open(url)
-
-            return 0
-
-        except Exception as exc:
-            print(f"Failed to start dashboard: {exc}", file=sys.stderr)
-            self._clear_pid_file()
-            return 1
+    # `register` is nested so bare `Zeloo dashboard` keeps launching the server.
+    dashboard_subparsers = dashboard_parser.add_subparsers(dest="dashboard_subcommand")
+    dashboard_register_parser = dashboard_subparsers.add_parser(
+        "register",
+        help="Register a self-hosted dashboard with Nous Portal (writes the OAuth client ID to .env)",
+        description="Register this install as a self-hosted dashboard with your Nous "
+            "Portal account. Creates an OAuth client, writes "
+            "ZELOO_DASHBOARD_OAUTH_CLIENT_ID into ~/.Zeloo/.env, and prints "
+            "how to engage the login gate. Requires being logged in (Zeloo setup).")
+    dashboard_register_parser.add_argument(
+        "--name", default=None,
+        help="Human-readable label for the dashboard (default: an auto-generated name)")
+    dashboard_register_parser.add_argument(
+        "--redirect-uri", dest="redirect_uri", default=None,
+        help="Optional public HTTPS OAuth redirect URI for the dashboard, e.g. "
+            "https://Zeloo.example.com/auth/callback. Omit for localhost-only use.")
+    dashboard_register_parser.add_argument(
+        "--portal-url", dest="portal_url", default=None,
+        help="Override the Nous Portal base URL for registration (default: the "
+            "portal you logged into). The access token must be valid at this "
+            "portal. Also settable via ZELOO_DASHBOARD_PORTAL_URL. Mainly for "
+            "testing against a staging/preview portal.")
+    dashboard_register_parser.set_defaults(func=cmd_dashboard_register)

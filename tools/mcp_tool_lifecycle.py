@@ -1,314 +1,319 @@
-"""MCP 服务器生命周期管理。
+"""MCP process lifecycle: stdio child PID tracking and orphan cleanup, graceful
+server shutdown and draining of the background MCP loop."""
 
-管理 MCP 服务器的启动、停止、重启等生命周期操作。
-"""
-
-from __future__ import annotations
-
-import asyncio
-import atexit
 import logging
+import asyncio
+import os
 import time
-from typing import Any
+from typing import Dict, Optional
+from tools.mcp_tool_common import _core
+from tools import mcp_tool_loop as _loop
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("tools.mcp_tool")
 
-_global_servers: dict[str, Any] = {}
-_shutdown_registered = False
-
-
-async def start_mcp_servers(config: dict[str, Any] | None = None) -> dict[str, Any]:
-    """启动所有配置的 MCP 服务器。
-
-    从配置中发现服务器，验证配置，然后逐个启动。
-
-    Args:
-        config: 可选的配置字典
-
-    Returns:
-        服务器名称到服务器实例的映射
-    """
-    global _global_servers, _shutdown_registered
-
-    from tools.mcp_tool_discovery import discover_mcp_servers, filter_discovered_servers
-    from tools.mcp_tool_config import validate_server_config, get_server_config_summary
-
-    servers = discover_mcp_servers(config)
-    servers = filter_discovered_servers(servers)
-
-    if not servers:
-        logger.debug("未发现需要启动的 MCP 服务器")
-        return _global_servers
-
-    logger.info("发现 %d 个 MCP 服务器配置", len(servers))
-
-    _register_shutdown_hook()
-
-    for server_config in servers:
-        name = server_config.get("name", "unnamed")
-
-        is_valid, error_msg = validate_server_config(server_config)
-        if not is_valid:
-            logger.warning("跳过无效的 MCP 服务器配置: %s - %s", name, error_msg)
-            continue
-
-        logger.debug("启动 MCP 服务器: %s", get_server_config_summary(server_config))
-
-        try:
-            from tools.mcp_tool import MCPServerTask
-
-            server = MCPServerTask(name, server_config, asyncio.get_event_loop())
-            await server.start()
-            _global_servers[name] = server
-
-            logger.info("MCP 服务器已启动: %s", name)
-
-        except Exception as e:
-            logger.exception("启动 MCP 服务器失败: %s", name)
-
-    return _global_servers
+# Live stdio MCP children (pid -> server_name), added after connection and removed on normal
+# shutdown, so they can be force-killed if SDK teardown fails.
+_stdio_pids: Dict[int, str] = {}
+# PIDs that survived their session context exit (detected in _run_stdio's finally, reaped by
+# _kill_orphaned_mcp_children). Separate from _stdio_pids so sweeps never race active sessions.
+_orphan_stdio_pids: set = set()
+_orphan_stdio_pid_servers: Dict[int, str] = {}
+# pid -> pgid captured at spawn. The SDK spawns with start_new_session=True (PGID == PID);
+# grandchildren keep that PGID after the direct child exits, so killpg still reaches them.
+# Separate from _stdio_pids so the PGID survives the child's removal. Empty on Windows.
+_stdio_pgids: Dict[int, int] = {}
 
 
-async def stop_mcp_servers(servers: dict[str, Any] | None = None) -> None:
-    """停止所有 MCP 服务器。
-
-    Args:
-        servers: 服务器映射，如果为 None 则停止全局服务器
-    """
-    global _global_servers
-
-    if servers is None:
-        servers = _global_servers
-
-    if not servers:
-        return
-
-    logger.info("停止 %d 个 MCP 服务器", len(servers))
-
-    stop_tasks = []
-    for name, server in servers.items():
-        task = _stop_server_safe(name, server)
-        stop_tasks.append(task)
-
-    await asyncio.gather(*stop_tasks, return_exceptions=True)
-
-    for name in servers:
-        if name in _global_servers:
-            del _global_servers[name]
-
-
-async def _stop_server_safe(name: str, server: Any) -> None:
-    """安全地停止服务器。
-
-    Args:
-        name: 服务器名称
-        server: 服务器实例
-    """
+def _snapshot_child_pids() -> set:
+    """Current direct-child PIDs: /proc on Linux, else psutil, else empty set."""
+    my_pid = os.getpid()
+    # /proc/<pid>/task/<tid>/children is per-THREAD, and stdio_client() spawns from the MCP
+    # loop thread, so union every task's children — reading only the main thread's file
+    # returns an empty set on every Linux install.
     try:
-        await server.stop()
-        logger.info("MCP 服务器已停止: %s", name)
+        # ``/proc/<pid>/task/<tid>/children`` is per-THREAD — a child forked from thread T is listed only
+        # under T's task dir. stdio_client() spawns from the background MCP loop thread, so reading only the
+        # main thread's file (``task/<pid>/children``) returned an empty set on every Linux install and left
+        # ``_stdio_child_pids`` / ``_stdio_pids`` empty: the #81995 dead-child fast-fail, the #96452 respawn
+        # signal, and the killpg shutdown sweep never saw the subprocess.
+        task_dir = f"/proc/{my_pid}/task"
+        found: set = set()
+        for tid in os.listdir(task_dir):
+            try:
+                with open(f"{task_dir}/{tid}/children", encoding="utf-8") as f:
+                    found.update(int(p) for p in f.read().split() if p.strip())
+            except (FileNotFoundError, OSError, ValueError):
+                continue  # thread exited between listdir and open
+        return found
+    except (FileNotFoundError, OSError, ValueError):
+        pass
+    try:
+        import psutil
+        return {c.pid for c in psutil.Process(my_pid).children()}
     except Exception:
-        logger.exception("停止 MCP 服务器时出错: %s", name)
+        return set()
 
 
-async def restart_server(name: str, server: Any) -> bool:
-    """重启单个服务器。
+# argv markers of non-MCP gateway children that can race into the snapshot delta during an
+# MCP spawn (defense-in-depth; LSP/slash_worker already use start_new_session). Matched against
+# argv[1:] because Python/Java children start with the interpreter path.
+_NON_MCP_CHILD_CMDLINE_MARKERS: tuple[str, ...] = (
+    "tui_gateway.slash_worker", "tui_gateway.entry",
+    "-dorg.eclipse.equinox.launcher", "eclipse.jdt.ls", "org.eclipse.equinox.launcher_",  # jdtls
+)
 
-    Args:
-        name: 服务器名称
-        server: 服务器实例
 
-    Returns:
-        重启是否成功
-    """
-    logger.info("重启 MCP 服务器: %s", name)
-
+def _filter_mcp_children(pids: set) -> set:
+    """Drop non-MCP children from a PID snapshot delta. Tracking a stray child in _stdio_pgids
+    is catastrophic if it lacks start_new_session: its pgid can be the TUI parent's, so the
+    shutdown killpg() would kill the TUI itself."""
+    if not pids:
+        return pids
     try:
-        await server.stop()
-        await asyncio.sleep(0.5)
-        await server.start()
-        logger.info("MCP 服务器重启成功: %s", name)
-        return True
-
-    except Exception as e:
-        logger.exception("重启 MCP 服务器失败: %s - %s", name, e)
-        return False
-
-
-async def restart_all_servers() -> dict[str, bool]:
-    """重启所有 MCP 服务器。
-
-    Returns:
-        服务器名称到重启结果（bool）的映射
-    """
-    global _global_servers
-
-    results = {}
-    for name, server in list(_global_servers.items()):
-        results[name] = await restart_server(name, server)
-
-    return results
+        import psutil
+    except ImportError:
+        return pids  # keep all PIDs (prior behavior)
+    kept = set()
+    for pid in pids:
+        try:
+            argv = psutil.Process(pid).cmdline()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            continue  # raced away or zombie — cannot be our fresh server, unsafe to track
+        if not any(marker in arg for arg in argv[1:] for marker in _NON_MCP_CHILD_CMDLINE_MARKERS):
+            kept.add(pid)
+    return kept
 
 
-def shutdown_mcp_servers() -> None:
-    """同步关闭钩子（用于程序退出）。
+def _clear_connect_cooldowns(keys=None) -> None:
+    """Drop connect-retry cooldowns: a restart must re-attempt every server immediately, not
+    honour a stale per-server backoff. Caller holds ``_core._lock``."""
+    if keys is None:
+        _core._server_connect_retry_after.clear()
+        _core._server_connect_failures.clear()
+    else:
+        for key in keys:
+            _core._server_connect_retry_after.pop(key, None)
+            _core._server_connect_failures.pop(key, None)
 
-    通过 atexit 注册，确保程序退出时所有服务器被正确停止。
-    """
-    global _global_servers
 
-    if not _global_servers:
+def _reregister_orphaned_adopters() -> None:
+    """Re-run MCP registration for profiles whose ADOPTED shared connection an owner's
+    ``/reload-mcp`` just tore down. Their tools vanished with the owner's teardown and nothing
+    re-runs their discovery until THEY reload, so they sat tool-less behind a healthy-looking
+    status (#106005). Runs after the owner's rediscovery, under each adopter's own home + secret
+    scope (its ``${VAR}`` refs must resolve to ITS credentials): the adopter re-adopts the owner's
+    new identical connection or connects its own."""
+    with _core._lock:
+        pending = dict(_core._orphaned_adopters)
+        _core._orphaned_adopters.clear()
+    if not pending:
+        return
+    from pathlib import Path
+    from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
+    from zeloo_constants import reset_zeloo_home_override, set_zeloo_home_override
+    from tools import mcp_tool_discovery as _discovery
+    from tools.mcp_tool_config import _load_mcp_config
+    for adopter, names in pending.items():
+        home_token = set_zeloo_home_override(adopter)
+        secret_token = set_secret_scope(build_profile_secret_scope(Path(adopter)))
+        try:
+            servers = {n: c for n, c in (_load_mcp_config() or {}).items() if n in names}
+            if servers:
+                _discovery.register_mcp_servers(servers)
+        except Exception:
+            logger.debug("MCP: re-registration for profile scope %s failed", adopter, exc_info=True)
+        finally:
+            reset_secret_scope(secret_token)
+            reset_zeloo_home_override(home_token)
+
+
+def shutdown_mcp_servers(*, scope: Optional[str] = None):
+    """Close MCP server connections (in parallel) and stop the background loop. Each server
+    Task is signalled to exit its own ``async with`` so the anyio cancel-scope cleanup runs in
+    the Task that opened it. ``scope`` restricts teardown to one multiplexed profile's servers
+    (its ``/reload-mcp`` must not kill other profiles') and leaves the shared loop running if
+    anything else is still connected."""
+    with _core._lock:
+        selected = [key for key in _core._servers if scope is None or _core._server_scope_keys.get(key) == scope]
+        servers_snapshot = [_core._servers[key] for key in selected]
+        selected_status = (
+            set(_core._servers) | set(_core._server_scope_keys)
+            | set(_core._server_tool_scopes)
+            | set(_core._server_connecting) | set(_core._server_connect_errors)
+            if scope is None else {
+                key for key, owner in _core._server_scope_keys.items() if owner == scope
+            }
+        )
+        # Adopters of the connections being torn down lose their overlays with the tasks' own
+        # ``_deregister_tools``; remember them so the next discovery pass re-registers them
+        # (``_reregister_orphaned_adopters``).
+        if scope is not None:
+            from tools.mcp_tool_scope import _key_name
+            for key in selected:
+                for adopter in _core._server_tool_scopes.get(key, ()):
+                    if adopter != scope:
+                        _core._orphaned_adopters.setdefault(adopter, set()).add(_key_name(key))
+
+    def clear_selected_status():
+        _core._server_connecting.difference_update(selected_status)
+        for key in selected_status:
+            _core._server_connect_errors.pop(key, None)
+            _core._server_scope_keys.pop(key, None)
+            _core._server_tool_scopes.pop(key, None)
+
+    # Fast path: nothing to shut down. The connect-cooldown maps can still be populated here — a server that
+    # failed to connect is never recorded in ``_servers`` (that is the very premise of the #50394 cooldown),
+    # so "no live servers" is the MOST likely state in which stale backoff entries exist. Clear them so a
+    # post-shutdown restart re-attempts every configured server immediately.
+    if servers_snapshot:
+        async def _shutdown():
+            results = await asyncio.gather(*(server.shutdown() for server in servers_snapshot), return_exceptions=True)
+            for server, result in zip(servers_snapshot, results):
+                if isinstance(result, Exception):
+                    logger.debug("Error closing MCP server '%s': %s", server.name, result)
+            with _core._lock:
+                for key in selected:
+                    _core._servers.pop(key, None)
+                    _core._server_scope_keys.pop(key, None)
+                clear_selected_status()
+                _clear_connect_cooldowns(None if scope is None else selected_status)
+
+        with _core._lock:
+            loop = _core._mcp_loop
+        if loop is not None and loop.is_running():
+            from agent.async_utils import safe_schedule_threadsafe
+            future = safe_schedule_threadsafe(_shutdown(), loop, logger=logger, log_message="MCP shutdown: failed to schedule")
+            if future is not None:
+                try:
+                    future.result(timeout=15)
+                except BaseException as exc:
+                    logger.debug("Error during MCP shutdown: %s", exc)
+
+    # Unconditional final sweep: whether ``_shutdown`` ran, timed out, or was never scheduled
+    # (a server that failed to connect is never in ``_servers`` — the most likely state for
+    # stale backoff entries), no connect-cooldown state may survive shutdown.
+    with _core._lock:
+        if not servers_snapshot:
+            clear_selected_status()
+        _clear_connect_cooldowns(None if scope is None else selected_status)
+    _loop._stop_mcp_loop(only_if_idle=scope is not None)
+
+
+def _take_reapable_pids(include_active: bool, server_name: Optional[str]) -> tuple[Dict[int, str], Dict[int, int]]:
+    """Pop the PIDs to reap (and their spawn-time pgids) out of the ledgers under the lock, so
+    a future spawn can't collide with stale state. Returns ``(pid -> owner, pid -> pgid)``."""
+    def _owned(entries: Dict[int, str]) -> Dict[int, str]:
+        return {pid: owner for pid, owner in entries.items() if server_name is None or owner == server_name}
+
+    with _core._lock:
+        pids = _owned({opid: _orphan_stdio_pid_servers.get(opid, "orphan") for opid in _orphan_stdio_pids})
+        _orphan_stdio_pids.difference_update(pids)
+        for opid in pids:
+            _orphan_stdio_pid_servers.pop(opid, None)
+        if include_active:
+            active = _owned(_stdio_pids)
+            pids.update(active)
+            for pid in active:
+                _stdio_pids.pop(pid, None)
+        pgids = {pid: _stdio_pgids.pop(pid) for pid in pids if pid in _stdio_pgids}
+    return pids, pgids
+
+
+def _signal_mcp_process(pid: int, sig: int, server_name: str, pgid: Optional[int], my_pgid: Optional[int]) -> None:
+    """SIGTERM/SIGKILL via the spawn-time pgroup on POSIX (reaches reparented grandchildren),
+    falling back to a per-pid signal."""
+    killpg = getattr(os, "killpg", None)
+    if pgid is not None and killpg is not None:
+        if my_pgid is not None and pgid == my_pgid:
+            # Child shares the gateway's pgroup: killpg would kill the gateway too, so use
+            # per-pid kill. Warn because per-pid kill can't reach grandchildren in this group.
+            logger.warning("MCP server '%s' pgid %d matches gateway pgid; skipping "
+                           # Fall through to the per-pid kill() path instead. Warn because per-pid kill
+                           # cannot reach grandchildren in this shared group — if the direct child has
+                           # already exited, they may leak (inherent: group-killing them would also kill the
+                           # gateway). See #47134.
+                           "killpg to avoid self-kill and using per-pid kill — any "
+                           "grandchildren in this group may not be reaped", server_name, pgid)
+        else:
+            try:
+                killpg(pgid, sig)
+                return
+            except (ProcessLookupError, PermissionError, OSError) as exc:
+                # Pgroup gone or refused — still try the direct child.
+                logger.debug("killpg(%d, %d) failed for MCP server '%s': %s; falling back to kill(pid)",
+                             pgid, sig, server_name, exc)
+    try:
+        os.kill(pid, sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def _kill_orphaned_mcp_children(include_active: bool = False, server_name: Optional[str] = None) -> None:
+    """Best-effort reap of stdio MCP subprocesses: SIGTERM, wait 2s, SIGKILL survivors. By
+    default only ``_orphan_stdio_pids`` are reaped so concurrent cron jobs / live sessions are
+    untouched; ``include_active=True`` also kills every ``_stdio_pids`` entry and is only for
+    final shutdown after the MCP loop has stopped. ``server_name`` limits the sweep to one
+    server (stdio reconnects cleaning up their old transport)."""
+    import signal as _signal
+    pids, pgids = _take_reapable_pids(include_active, server_name)
+    if not pids:  # skip the 2s sleep every MCP-free shutdown would otherwise pay
         return
 
-    logger.info("执行同步关闭: 停止 %d 个 MCP 服务器", len(_global_servers))
+    try:  # our own pgid, so we never killpg() the gateway itself
+        my_pgid = os.getpgrp()
+    except (AttributeError, OSError):
+        my_pgid = None  # Windows or restricted environment
 
-    for name, server in list(_global_servers.items()):
-        try:
-            if hasattr(server, "stop"):
-                server.stop()
-            logger.debug("MCP 服务器已停止: %s", name)
-        except Exception:
-            logger.exception("停止 MCP 服务器时出错: %s", name)
-
-    _global_servers.clear()
-
-
-def _register_shutdown_hook() -> None:
-    """注册程序退出时的清理钩子。"""
-    global _shutdown_registered
-
-    if not _shutdown_registered:
-        atexit.register(shutdown_mcp_servers)
-        _shutdown_registered = True
-        logger.debug("已注册 MCP 服务器关闭钩子")
+    for pid, owner in pids.items():
+        _signal_mcp_process(pid, _signal.SIGTERM, owner, pgids.get(pid), my_pgid)
+        logger.debug("Sent SIGTERM to orphaned MCP process %d (%s)", pid, owner)
+    time.sleep(2)
+    sigkill = getattr(_signal, "SIGKILL", _signal.SIGTERM)
+    from gateway.status import _pid_exists  # ``os.kill(pid, 0)`` is NOT a no-op on Windows
+    for pid, owner in pids.items():
+        if _pid_exists(pid):  # survived SIGTERM
+            _signal_mcp_process(pid, sigkill, owner, pgids.get(pid), my_pgid)
+            logger.warning("Force-killed MCP process %d (%s) after SIGTERM timeout", pid, owner)
+    # These groups are reaped. Release them last, so a crash partway through the SIGTERM/SIGKILL
+    # dance still leaves the supervisor holding them.
+    _core._update_death_supervisor("unregister", pgids.values())
 
 
-def get_running_servers() -> dict[str, Any]:
-    """获取当前运行的服务器映射。
-
-    Returns:
-        服务器名称到实例的映射
-    """
-    global _global_servers
-    return dict(_global_servers)
+def _stop_mcp_loop_if_idle() -> bool:
+    """Stop the MCP loop only when no registered server still owns it. Probe paths create
+    temporary MCPServerTasks not placed in ``_servers``; they may clean up an idle loop but
+    must not tear down the process-global loop under live agent tools."""
+    return _loop._stop_mcp_loop(only_if_idle=True)
 
 
-def get_server_health(name: str) -> dict[str, Any]:
-    """获取服务器健康状态。
-
-    Args:
-        name: 服务器名称
-
-    Returns:
-        健康状态字典
-    """
-    global _global_servers
-
-    if name not in _global_servers:
-        return {
-            "running": False,
-            "error": "服务器未运行",
-        }
-
-    server = _global_servers[name]
-    return server.get_health_status()
-
-
-def check_all_servers_health() -> dict[str, dict[str, Any]]:
-    """检查所有服务器的运行状态。
-
-    Returns:
-        服务器名称到健康状态的映射
-    """
-    global _global_servers
-
-    health = {}
-    for name in _global_servers:
-        health[name] = get_server_health(name)
-
-    return health
+async def _drain_mcp_loop_tasks(*, timeout: Optional[float] = None) -> None:
+    """Cancel every task still pending on the MCP loop and reap it. ``Task.cancel()`` only
+    schedules the throw, so tasks need a cancellation cycle before the loop goes away; wait
+    for them here, on their owning loop, bounded so a task that suppresses cancellation
+    cannot hang process exit."""
+    if timeout is None:
+        timeout = _core._MCP_LOOP_DRAIN_TIMEOUT
+    current = asyncio.current_task()
+    pending = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
+    if not pending:
+        return
+    logger.debug("Draining %d pending task(s) from the MCP loop", len(pending))
+    for task in pending:
+        task.cancel()
+    done, still_pending = await asyncio.wait(pending, timeout=timeout)
+    for task in done:
+        if not task.cancelled():
+            task.exception()  # mark retrieved so asyncio doesn't warn "exception was never retrieved"
+    if still_pending:
+        logger.warning("%d MCP loop task(s) still pending after %.1fs drain", len(still_pending), timeout)
 
 
-class ServerLifecycleManager:
-    """服务器生命周期管理器。
-
-    提供更细粒度的生命周期控制，支持统计和监控。
-    """
-
-    def __init__(self) -> None:
-        self._servers: dict[str, Any] = {}
-        self._start_times: dict[str, float] = {}
-        self._restart_counts: dict[str, int] = {}
-        self._error_counts: dict[str, int] = {}
-
-    async def start(self, config: dict[str, Any] | None = None) -> int:
-        """启动服务器并返回成功启动的数量。
-
-        Args:
-            config: 配置字典
-
-        Returns:
-            成功启动的服务器数量
-        """
-        from tools.mcp_tool_discovery import discover_mcp_servers, filter_discovered_servers
-        from tools.mcp_tool_config import validate_server_config
-
-        servers = discover_mcp_servers(config)
-        servers = filter_discovered_servers(servers)
-
-        started_count = 0
-        for server_config in servers:
-            name = server_config.get("name", "unnamed")
-
-            is_valid, _ = validate_server_config(server_config)
-            if not is_valid:
-                continue
-
-            try:
-                from tools.mcp_tool import MCPServerTask
-
-                server = MCPServerTask(name, server_config, asyncio.get_event_loop())
-                await server.start()
-
-                self._servers[name] = server
-                self._start_times[name] = time.time()
-                self._restart_counts[name] = 0
-
-                started_count += 1
-
-            except Exception as e:
-                logger.exception("启动服务器失败: %s", name)
-                self._error_counts[name] = self._error_counts.get(name, 0) + 1
-
-        _register_shutdown_hook()
-        return started_count
-
-    async def stop(self) -> None:
-        """停止所有服务器。"""
-        for server in list(self._servers.values()):
-            try:
-                await server.stop()
-            except Exception:
-                logger.exception("停止服务器时出错")
-
-        self._servers.clear()
-
-    def get_server(self, name: str) -> Any | None:
-        """获取服务器实例。"""
-        return self._servers.get(name)
-
-    def get_uptime(self, name: str) -> float | None:
-        """获取服务器运行时间（秒）。"""
-        start_time = self._start_times.get(name)
-        if start_time is None:
-            return None
-        return time.time() - start_time
-
-    def get_stats(self) -> dict[str, Any]:
-        """获取统计信息。"""
-        return {
-            "total_servers": len(self._servers),
-            "uptimes": {name: self.get_uptime(name) for name in self._servers},
-            "restart_counts": dict(self._restart_counts),
-            "error_counts": dict(self._error_counts),
-        }
+async def _drain_and_stop_mcp_loop() -> None:
+    """Drain pending tasks, then stop the loop from its owning thread. Both must run as one
+    loop-owned sequence: a ``loop.stop`` queued separately by a timed-out caller can overtake
+    the scheduled drain, leaving the drain coroutine itself pending when the loop is closed."""
+    loop = asyncio.get_running_loop()
+    try:
+        await _drain_mcp_loop_tasks(timeout=_core._MCP_LOOP_DRAIN_TIMEOUT)
+    finally:
+        loop.call_soon(loop.stop)

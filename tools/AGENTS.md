@@ -1,68 +1,105 @@
-# tools/AGENTS.md
+# tools/ + toolsets.py + model_tools.py — model tools
 
-## 本包职责
+Applies on top of the root `AGENTS.md`: settle the **Footprint Ladder** before adding anything here.
+Most capabilities should NOT be core tools. Long-form: `website/docs/developer-guide/adding-tools.md`,
+`tools-runtime.md`.
 
-Agent 工具注册系统：负责将所有可调用工具注册到 Agent 运行时。
+## Registry and discovery
 
-## 核心模块
+`tools/registry.py` has no deps and is imported by every tool file; each `tools/*.py` calls
+`registry.register()` at import time; `model_tools.py` imports the registry and triggers discovery
+(`discover_builtin_tools()`), then `run_agent.py`, `cli.py`, `batch_runner.py`, `environments/`
+consume it. Any `tools/*.py` with a top-level `registry.register()` is imported automatically — no
+manual import list. The registry handles schema collection, dispatch (`handle_function_call()`),
+availability (`check_fn`, TTL-cached process-wide), and error wrapping. **All handlers return a JSON
+string.**
 
-### 基础架构
-- `base.py`：Tool 装饰器和基类
-- `__init__.py`：工具注册表（统一导出所有工具）
-- `registry.py`：工具注册表核心
-- `advanced_toolkit.py`：高级工具集
-- `path_safety.py`：路径安全检查
-- `output_scan.py`：敏感信息扫描
+## Adding a core tool (2 files) — only when the user is explicitly contributing a core tool
 
-### 浏览器工具（browser_tool_*）
-- `browser_tool.py`：浏览器自动化核心（27 个工具：navigate/screenshot/click/type 等）
-- `browser_tool_install.py`：Playwright/Chrome 检测和安装
-- `browser_tool_session.py`：多会话管理
-- `browser_tool_lifecycle.py`：生命周期钩子
-- `browser_supervisor.py`：进程监管和崩溃恢复
-- `browser_cdp_tool.py`：Chrome DevTools Protocol 封装
-- `browser_tools.py`：基础浏览器工具
+For custom/local-only tools do NOT edit core: create `~/.Zeloo/plugins/<name>/plugin.yaml` +
+`__init__.py` and call `ctx.register_tool(...)`; plugin toolsets are discovered automatically and
+toggled without touching `tools/` or `toolsets.py` (`plugins/AGENTS.md`).
 
-### MCP 工具（mcp_tool_*）
-- `mcp_tool.py`：MCP 核心客户端（MCPServerTask / MCPClient）
-- `mcp_tool_discovery.py`：MCP 服务器发现
-- `mcp_tool_handlers.py`：MCP 工具调用处理
-- `mcp_tool_lifecycle.py`：MCP 服务器生命周期
-- `mcp_tool_config.py`：MCP 配置解析
-- `mcp_tool_common.py`：MCP 公共常量和工具函数
+1. `tools/your_tool.py`:
+   ```python
+   from tools.registry import registry
+   def check_requirements() -> bool: return bool(os.getenv("EXAMPLE_API_KEY"))
+   def example_tool(param: str, task_id: str = None) -> str: return json.dumps({"success": True, ...})
+   registry.register(name="example_tool", toolset="example",
+       schema={"name": "example_tool", "description": "...", "parameters": {...}},
+       handler=lambda args, **kw: example_tool(param=args.get("param", ""), task_id=kw.get("task_id")),
+       check_fn=check_requirements, requires_env=["EXAMPLE_API_KEY"])
+   ```
+2. `toolsets.py`: add the name to `_ZELOO_CORE_TOOLS` (all platforms) or a new toolset. **Required**
+   — discovery registers the schema, but a tool is only exposed if a toolset names it.
+   `_ZELOO_CORE_TOOLS` is the default bundle every platform's base toolset inherits, not dead code.
 
-### 审批系统（approval_*）
-- `approval.py`：审批核心（危险命令检测/审批/YOLO 模式）
-- `approval_context.py`：审批上下文和环境检测
-- `approval_detection.py`：危险命令模式检测（正则规则库）
-- `approval_floors.py`：审批底线规则（白名单/黑名单）
-- `approval_prompt.py`：交互式审批提示 UI
-- `approval_gateway_wait.py`：Gateway 审批等待循环
+Rules for tool code:
+- **Schema descriptions must not name tools from other toolsets** (`browser_navigate` saying "prefer
+  web_search"). Those tools may be unavailable (missing key, disabled toolset) and the model
+  hallucinates calls to them. Cross-references are added dynamically in `get_tool_definitions()` in
+  `model_tools.py` — see the `browser_navigate` / `execute_code` post-processing blocks.
+- **Paths in schema descriptions use `display_zeloo_home()`** (schema is built at import, after
+  `_apply_profile_override()` set `ZELOO_HOME`). **State files use `get_zeloo_home()`**, never
+  `Path.home()/.Zeloo`, so each profile gets its own state.
+- **No `offset`/`limit` on instructional tools** (skills, prompts, playbooks) — models read page 1
+  and skip the rest (root rubric).
+- **`check_fn` answers reachability/opt-in, never surface.** It is TTL-cached process-wide, and one
+  process serves many sessions; GUI-only tools go in a named toolset (`desktop_ui`, `project`)
+  folded in by `_load_enabled_toolsets(platform)` (root: capability is a property of the SESSION).
+- **Agent-level tools** (`todo`, `memory`) are intercepted before `handle_function_call()` via the
+  `INLINE_TOOL_EXECUTORS` table (`agent/inline_tool_executors.py`; `agent/AGENTS.md`).
+- **`_last_resolved_tool_names`** is a process-global in `model_tools.py`; `_run_single_child()` in
+  `delegate_tool.py` saves/restores it around child runs — readers may see it stale mid-delegation.
+- New tools integrate with existing setup UX (`Zeloo tools`, `Zeloo setup`, auto-install) rather
+  than a raw env var; secrets go in `OPTIONAL_ENV_VARS` (`zeloo_cli/AGENTS.md`).
 
-### 业务工具
-- `shell_tool.py`：Shell 执行
-- `file_tools.py`：文件操作
-- `code_exec.py`：代码执行
-- `web_tools.py`：网页抓取
-- `image_tools.py`：图像处理
-- `voice_tool.py`：语音工具（TTS/STT）
-- `kanban_tools.py`：看板
-- `cron_tool.py`：定时任务
-- `memory_tool.py`：记忆工具
-- `skills_tool.py`：技能工具
-- `todo_tools.py`：待办工具
-- `workspace_tools.py`：工作区工具
-- `delegate_tool.py`：委派任务
+## Toolsets (`toolsets.py`)
 
-### 辅助工具
-- `threat_patterns.py`：威胁模式库
-- `optional_skill_tools.py`：可选技能桥接
-- `code_exec_sandbox.py`：代码执行沙箱
+Single `TOOLSETS` dict. Keys today: `browser, clarify, code_execution, cronjob, debugging,
+delegation, discord, discord_admin, feishu_doc, feishu_drive, file, homeassistant, image_gen,
+kanban, memory, messaging, moa, rl, safe, search, session_search, skills, spotify, terminal, todo,
+tts, video, vision, web, yuanbao` (don't assert the list in tests). Per-platform enable/disable via
+`Zeloo tools` (curses) or `tools.<platform>.enabled/disabled` in config.yaml. `browser_exec`
+replaces the other browser tools when `browser.backend` is `browser-use`.
 
-## 注意事项
+## Backends and providers inside tools/
 
-- 所有工具必须使用 `@tool` 装饰器注册
-- 工具函数必须是纯函数（无全局状态依赖）
-- 危险操作（shell_exec/file_write）必须经过 path_safety 检查
-- 所有输出必须经过 `output_scan.py` 清理敏感信息
-- 浏览器/MCP/审批系统支持 session 隔离
+Several tools front pluggable backends: terminal environments in `tools/environments/` (local,
+docker, ssh, modal, daytona, singularity; `terminal_tool_backends.py`, `tool_backend_helpers.py`),
+browser (`browser_tool_*.py`: cdp, cloud, install, lifecycle, session, real_profile, vision), MCP
+client (`mcp_tool_*.py`: config, discovery, transport, registration, content, errors), TTS
+(`tts_tool_providers.py`, `tts_command_provider.py`), skills hub sources (`skills_hub_official.py`
+`OptionalSkillSource`). Adding a backend = a new sibling or provider entry in the existing table,
+never an `elif` on a backend name (root shape rules). Remote-backend file visibility problems are
+fixed at the mount, not by adding a tool.
+
+## Delegation (`tools/delegate_tool.py`)
+
+Spawns a subagent with isolated context + terminal session; the parent waits for the summary unless
+`background=true`, which returns a delegation id and re-enters the result via the async-delegation
+completion queue. Shapes: single (`goal` + optional `context`, `toolsets`) or batch (`tasks: [...]`,
+concurrency capped by `delegation.max_concurrent_children`, default 3). A background batch returns as ONE
+completion by default; with `delegation.independent_completions` it is split into completion **units**
+(`delegate_tool_dispatch._units_of`): tasks sharing a `group` join and report together; each ungrouped
+task reports alone as it finishes. Units of one call share ONE pool slot (`slot_key` in
+`async_delegation._dispatch`) — never count units against capacity; the executor is sized by live UNITS
+and the stall clock arms when the runner starts, so a queued unit is never judged stalled. Roles: `leaf` (default;
+no `delegate_task`, `clarify`, `memory`, `send_message`, `cronjob`; keeps `execute_code`) and
+`orchestrator` (keeps `delegate_task`; gated by `delegation.orchestrator_enabled`, bounded by
+`delegation.max_spawn_depth`, default 2). Config knobs under `delegation:`:
+`max_concurrent_children, independent_completions, max_spawn_depth, child_timeout_seconds, orchestrator_enabled,
+subagent_auto_approve, inherit_mcp_toolsets, max_iterations`. **Child processes:** a child's background
+processes are killed at its teardown and their notices are suppressed in the parent; `process_manage(action="handoff")`
+(children only) flips `ProcessSession.owner_task_id` to the parent under the registry lock
+(`process_registry.transfer_ownership`) so the completion routes and reaps by the new owner; un-handed leftovers land on
+the result as `orphaned_processes`, exited-but-never-read notify processes as `unread_completions` (`_ChildRun.account_background_processes`, before `cleanup` kills them). **Durability:** background
+delegation is process-local; work that must survive restart uses `cronjob` or
+`terminal(background=True, notify_on_complete=True)`. API: `website/docs/developer-guide/subagent-lifecycle-api.md`.
+
+## Tests
+
+`tests/tools/`. Test the handler through the registry (real dispatch), not the bare function only;
+assert contracts ("every registered tool has a toolset", "no schema description names a tool from
+another toolset") rather than tool counts. Approval/security-boundary tools are E2E'd with real
+imports against a temp `ZELOO_HOME` (see `tests/tools/test_approval_config_readonly.py`).

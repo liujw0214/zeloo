@@ -1,222 +1,242 @@
-"""Context engine — orchestrates the full context lifecycle."""
+"""Abstract base class for pluggable context engines.
 
-from __future__ import annotations
+A context engine decides when/how conversation context is compacted near the token
+limit, tracks usage, and may expose tools. ContextCompressor is the default;
+``context.engine`` selects a plugin (``plugins/context_engine/<name>/``); one is active.
+Lifecycle: on_session_start() -> per API response update_from_response() -> per turn
+should_compress() / compress() -> on_session_end() at real session boundaries only
+(CLI exit, /reset, gateway expiry), never per-turn.
+"""
 
-import logging
-from dataclasses import dataclass
-from typing import Any
+import json
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional
 
-from agent.agent_runtime_helpers import MODEL_CONTEXT_WINDOWS
-from agent.compression_facade import CompressionFacade, CompressionMode, CompressionResult
-from agent.context_breakdown import breakdown_by_turns
-from agent.context_compressor import Message
-from agent.conversation_compression import ConversationCompressor
-
-logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ContextConfig:
-    """Configuration for the context engine."""
-
-    model: str = "gpt-4o"
-    max_context_tokens: int = 128000
-    compression_mode: str = "auto"
-    preserve_recent_turns: int = 3
-    compression_threshold: float = 0.75
-    enable_semantic_split: bool = False
-    chunk_turns: int = 10
+from agent.redact import redact_sensitive_text
 
 
-class ContextEngine:
-    """High-level context management engine.
+MEMORY_CONTEXT_MAX_CHARS = 6_000
+_MEMORY_CONTEXT_HEAD_CHARS = 4_000
+_MEMORY_CONTEXT_TAIL_CHARS = 1_500
+_MEMORY_CONTEXT_TRUNCATION_MARKER = "\n...[memory provider context truncated]...\n"
 
-    Orchestrates the complete context lifecycle:
-    1. Token budget tracking
-    2. Automatic compression triggering
-    3. Message grouping and breakdown
-    4. Provider-specific formatting
+
+def sanitize_memory_context(memory_context: str) -> str:
+    """Prepare provider context for a context-engine/LLM egress boundary."""
+    sanitized = redact_sensitive_text(memory_context.strip(), force=True, redact_url_credentials=True)
+    if len(sanitized) <= MEMORY_CONTEXT_MAX_CHARS:
+        return sanitized
+    return sanitized[:_MEMORY_CONTEXT_HEAD_CHARS] + _MEMORY_CONTEXT_TRUNCATION_MARKER + sanitized[-_MEMORY_CONTEXT_TAIL_CHARS:]
+
+
+def automatic_compaction_status_message(engine: Any, *, phase: str, default_message: str, **context: Any) -> str | None:
+    """Host-visible status for an automatic compaction event; ``None`` = emit nothing.
+
+    Engines suppress via ``emit_automatic_compaction_status = False`` or
+    customize via ``get_automatic_compaction_status_message(...)``.
     """
+    if not getattr(engine, "emit_automatic_compaction_status", True):
+        return None
+    formatter = getattr(engine, "get_automatic_compaction_status_message", None)
+    message = formatter(phase=phase, default_message=default_message, **context) if callable(formatter) else default_message
+    if message is None:
+        return None
+    return str(message).strip() or None
 
-    def __init__(
-        self,
-        config: ContextConfig | None = None,
-        compressor: CompressionFacade | None = None,
-    ):
-        self.config = config or self._default_config()
-        self.compressor = compressor or CompressionFacade()
-        self._conversation = ConversationCompressor(
-            min_recent_turns=self.config.preserve_recent_turns,
-        )
-        self._message_cache: list[dict[str, Any]] = []
-        self._last_compression_stats: dict[str, Any] = {}
 
-    def _default_config(self) -> ContextConfig:
-        return ContextConfig(
-            max_context_tokens=MODEL_CONTEXT_WINDOWS.get("gpt-4o", 128000)
-        )
+class ContextEngine(ABC):
+    """Base class all context engines must implement."""
 
-    def add_message(self, message: dict[str, Any]) -> None:
-        """Add a message to the context and trigger compression if needed.
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Short identifier (e.g. 'compressor', 'lcm')."""
 
-        Args:
-            message: Chat API message dict.
+    # Token state: engines MUST maintain these; run_agent.py reads them directly.
+    last_prompt_tokens: int = 0
+    last_completion_tokens: int = 0
+    last_total_tokens: int = 0
+    threshold_tokens: int = 0
+    context_length: int = 0
+    compression_count: int = 0
+    # Compaction parameters (read by run_agent.py for preflight). protect_first_n counts
+    # non-system head messages kept verbatim IN ADDITION to the always-protected system
+    # prompt (3 keeps the historical head shape).
+    # These control the preflight compression check. Subclasses may override via __init__ or property;
+    # defaults are sensible for most engines. See #13754.
+    threshold_percent: float = 0.75
+    protect_first_n: int = 3
+    protect_last_n: int = 6
+    # False keeps successful automatic compaction passes silent (routine background
+    # maintenance); warnings, errors and manual /compress still surface.
+    emit_automatic_compaction_status: bool = True
+
+    @abstractmethod
+    def update_from_response(self, usage: Dict[str, Any]) -> None:
+        """Update tracked token usage after every LLM call.
+
+        ``prompt_tokens``/``completion_tokens``/``total_tokens`` are always present; the
+        canonical buckets (``input_tokens``, ``output_tokens``, ``cache_read_tokens``,
+        ``cache_write_tokens``, ``reasoning_tokens``) are optional on older hosts.
         """
-        self._message_cache.append(message)
-        self._check_and_compress()
 
-    def add_messages(self, messages: list[dict[str, Any]]) -> None:
-        """Add multiple messages.
+    @abstractmethod
+    def should_compress(self, prompt_tokens: int = None) -> bool:
+        """Return True if compaction should fire this turn."""
 
-        Args:
-            messages: List of chat API message dicts.
+    def should_compress_info(self, prompt_tokens: int = None) -> "tuple[bool, str | None]":
+        """Return ``(should_compress, reason)``.
+
+        Engines with block reasons (summary-LLM cooldown, anti-thrashing guard) override
+        this so callers can warn instead of silently skipping; the default keeps plugin
+        engines from raising AttributeError.
         """
-        self._message_cache.extend(messages)
-        self._check_and_compress()
+        return self.should_compress(prompt_tokens), None
 
-    def get_messages(
-        self,
-        compressed: bool = True,
-    ) -> list[dict[str, Any]]:
-        """Get current message list.
+    @abstractmethod
+    def compress(
+        self, messages: List[Dict[str, Any]], current_tokens: Optional[int] = None,
+        focus_topic: Optional[str] = None, force: bool = False, memory_context: str = "",
+    ) -> List[Dict[str, Any]]:
+        """Compact ``messages`` into a valid OpenAI-format list that fits the budget.
 
-        Args:
-            compressed: If True, return compressed messages.
-                       If False, return raw messages (after any pending compression).
-
-        Returns:
-            Message list ready for the model.
+        ``focus_topic`` comes from manual ``/compress <focus>`` (prioritise that topic);
+        ``force`` asks to bypass an engine-owned cooldown; ``memory_context`` is provider
+        text for the handoff prompt. Older engines may omit optional parameters — the
+        host filters them by signature.
         """
-        if not compressed:
-            return list(self._message_cache)
 
-        return self.compressor.compress(
-            list(self._message_cache),
-            mode=self.config.compression_mode,
-            model=self.config.model,
-        )
+    def prune_tool_results_only(
+        self, messages: List[Dict[str, Any]], current_tokens: int | None = None,
+    ) -> tuple[List[Dict[str, Any]], int]:
+        """Deterministically trim old tool-result payloads without an LLM call.
 
-    def get_message_groups(
-        self,
-    ) -> list[list[dict[str, Any]]]:
-        """Get messages split into groups for parallel processing.
-
-        Returns:
-            List of message groups.
+        Runs on a low, cost-oriented trigger independent of ``should_compress`` so
+        large-window engines reclaim re-sent tool output long before full compaction.
+        Returns ``(messages, n_pruned)``; the default no-op keeps older engines safe.
         """
-        msgs = self.get_messages(compressed=False)
-        parsed = [Message.from_dict(m) for m in msgs]
-        groups = breakdown_by_turns(parsed, chunk_turns=self.config.chunk_turns)
-        return [[m.to_dict() if isinstance(m, Message) else m for m in g] for g in groups]
+        return messages, 0
 
-    def force_compress(self) -> CompressionResult:
-        """Force immediate compression of the current context.
+    def select_context(
+        self, request_messages: List[Dict[str, Any]], *, conversation_messages: List[Dict[str, Any]] = None,
+        incoming_message: Dict[str, Any] = None, budget_tokens: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """Optionally *select* (replace) the context for THIS request, pre-generation.
 
-        Returns:
-            CompressionResult with statistics.
+        Runs on every provider request (also retries), independent of
+        ``should_compress()``: ``compress()`` shrinks over-long context, this swaps in a
+        different one (retrieval, topic routing, branch switching). Return ``None`` to
+        leave the request unchanged. The returned list is request-only — it MUST NOT be
+        treated as persisted transcript state (session DB history is untouched); unlike
+        ``pre_llm_call`` it may replace the list. The host runs it before prompt
+        cache-control and every request sanitizer, so a malformed replacement never
+        reaches the provider and the default no-op keeps the request byte-identical;
+        an engine that replaces the list changes its own cache prefix (breakpoints are
+        re-derived on the selected list). ``request_messages`` is the assembled request
+        (system prompt + history + ephemeral prefill); ``conversation_messages`` is the
+        persisted history for reference only (do not mutate); ``budget_tokens`` is the
+        model's context length or 0 if unknown.
         """
-        original = list(self._message_cache)
-        original_count = len(original)
-        original_tokens = self._count_tokens(original)
+        return None
 
-        compressed = self.compressor.compress(
-            original,
-            mode=self.config.compression_mode,
-            model=self.config.model,
-            force=True,
-        )
-        compressed_count = len(compressed)
-        compressed_tokens = self._count_tokens(compressed)
+    def on_turn_complete(self, messages: List[Dict[str, Any]], usage: Dict[str, Any] = None, **kwargs: Any) -> None:
+        """Observe a finished turn (complement of ``select_context()``) to index/update
+        routing state for the next request.
 
-        self._message_cache = compressed
-
-        result = CompressionResult(
-            original_count=original_count,
-            compressed_count=compressed_count,
-            original_tokens=original_tokens,
-            compressed_tokens=compressed_tokens,
-            mode_used=self.config.compression_mode,
-            reduction_ratio=(
-                1.0 - compressed_tokens / original_tokens
-                if original_tokens else 0.0
-            ),
-            messages=compressed,
-        )
-        self._last_compression_stats = {
-            "ratio": result.reduction_ratio,
-            "saved": original_tokens - compressed_tokens,
-        }
-
-        return result
-
-    def get_token_budget(self) -> dict[str, int]:
-        """Return current token budget status.
-
-        Returns:
-            Dict with budget info: total, used, remaining, utilization %.
+        Best-effort, not guaranteed: fires from the normal finalization seam only; some
+        abnormal early returns (content-policy block, provider terminal failure) skip it.
+        ``messages`` is a read-only shallow copy (return value ignored; never rely on
+        transcript mutation). ``usage`` has the ``update_from_response`` shape and is
+        ``None`` when no provider response was reached (interrupt). ``kwargs`` may include
+        ``turn_id``, ``task_id``, ``api_call_count``, ``interrupted``, ``failed``, ``turn_exit_reason``.
         """
-        budget = self.config.max_context_tokens
-        used = self._count_tokens(self._message_cache)
-        remaining = max(0, budget - used)
-        utilization = round(used / budget, 4) if budget else 0.0
+        return None
 
+    def should_compress_preflight(self, messages: List[Dict[str, Any]]) -> bool:
+        """Cheap rough check before the API call (no real token count yet); default skips."""
+        return False
+
+    def should_defer_preflight_to_real_usage(self, rough_tokens: int) -> bool:
+        """True when preflight should trust recent real usage over the noisy rough
+        estimate (avoids re-compacting after a compressed request already fit)."""
+        return False
+
+    def get_automatic_compaction_status_message(
+        self, *, phase: str, default_message: str, **context: Any,
+    ) -> str | None:
+        """User-visible status for automatic compaction, or ``None`` to suppress it.
+
+        ``phase`` is the host call site (``"preflight"`` / ``"compress"``); ``context``
+        carries best-effort ``approx_tokens`` / ``threshold_tokens``. Warnings, errors
+        and manual ``/compress`` are not governed by this hook.
+        """
+        return default_message if self.emit_automatic_compaction_status else None
+
+    def has_content_to_compress(self, messages: List[Dict[str, Any]]) -> bool:
+        """Preflight guard for gateway ``/compress``: False reports "nothing to
+        compress yet" without an LLM call (e.g. transcript entirely protected)."""
+        return True
+
+    def on_session_start(self, session_id: str, **kwargs) -> None:
+        """Session begins: load persisted state. kwargs may include zeloo_home, platform, model."""
+
+    def on_session_end(self, session_id: str, messages: List[Dict[str, Any]]) -> None:
+        """Real session boundary (CLI exit, /reset, gateway expiry) — never per-turn."""
+
+    def on_session_reset(self) -> None:
+        """/new or /reset: reset per-session state (default: counters and token tracking)."""
+        # Reset cross-call calibration state captured under the PREVIOUS model. These fields encode "the
+        # provider proved this prompt fit" / "preflight can be deferred" decisions that are only valid for
+        # the model that produced them. Carrying them across a switch to a smaller-context model would let
+        # should_defer_preflight_to_real_usage() suppress a preflight compression the new model actually
+        # needs — the exact oversized-send-after-switch failure in #23767. The new model's first response
+        # repopulates them via update_from_response(). Setting last_prompt_tokens to 0 (NOT -1) is
+        # deliberate: 0 is the documented "no real usage yet -> use the rough estimate" state, so the post-
+        # response should_compress path falls back to estimate_request_tokens_rough rather than skipping
+        # compression. -1 is a different sentinel (#36718, "compression just ran, await real usage") and
+        # must not be set here.
+        self.last_prompt_tokens = 0
+        self.last_completion_tokens = 0
+        self.last_total_tokens = 0
+        self.compression_count = 0
+
+    def get_tool_schemas(self) -> List[Dict[str, Any]]:
+        """Tool schemas this engine exposes to the agent (default: none)."""
+        return []
+
+    def handle_tool_call(self, name: str, args: Dict[str, Any], **kwargs) -> str:
+        """Handle a call to one of this engine's tools; must return a JSON string.
+        kwargs may include ``messages`` (live in-memory list)."""
+        return json.dumps({"error": f"Unknown context engine tool: {name}"})
+
+    def get_status(self) -> Dict[str, Any]:
+        """Status dict with the standard fields run_agent.py expects."""
+        # Clamp the -1 "compression just ran, awaiting real usage" sentinel to 0 so no
+        # reader sees a negative usage_percent on the transitional turn.
+        last_prompt = max(self.last_prompt_tokens, 0)
         return {
-            "budget_total": budget,
-            "budget_used": used,
-            "budget_remaining": remaining,
-            "utilization": utilization,
+            "last_prompt_tokens": last_prompt,
+            "threshold_tokens": self.threshold_tokens,
+            "context_length": self.context_length,
+            "usage_percent": min(100, last_prompt / self.context_length * 100) if self.context_length else 0,
+            "compression_count": self.compression_count,
         }
 
-    def clear(self) -> None:
-        """Clear all cached messages."""
-        self._message_cache.clear()
-        self._last_compression_stats.clear()
+    def update_model(
+        self, model: str, context_length: int, base_url: str = "", api_key: str = "",
+        provider: str = "", api_mode: str = "",
+    ) -> None:
+        """Model switch / fallback: recompute threshold_tokens (override for more).
 
-    def get_stats(self) -> dict[str, Any]:
-        """Return context engine statistics."""
-        return {
-            "message_count": len(self._message_cache),
-            "compression_stats": self.compressor.get_stats(),
-            "last_compression": self._last_compression_stats,
-            "token_budget": self.get_token_budget(),
-        }
-
-    def set_model(self, model: str) -> None:
-        """Update the model (adjusts budget accordingly)."""
-        self.config.model = model
-        self.config.max_context_tokens = MODEL_CONTEXT_WINDOWS.get(model, 128000)
-        logger.info("Context engine model updated to %s", model)
-
-    def set_compression_mode(self, mode: str) -> None:
-        """Update the compression mode.
-
-        Args:
-            mode: One of "auto", "hybrid", "summarize", "prune", "truncate", "disabled"
+        Per-model threshold override (longest substring match), else the raw config
+        percent — snapshotted ONCE so repeated switches fall back to the configured
+        value, not the previous model's override.
         """
-        self.config.compression_mode = mode
-        self.compressor.default_mode = CompressionMode(mode)
-        logger.info("Compression mode updated to %s", mode)
-
-    def _check_and_compress(self) -> None:
-        """Check if compression is needed and trigger if so."""
-        budget = self.config.max_context_tokens
-        used = self._count_tokens(self._message_cache)
-        utilization = used / budget if budget else 0.0
-
-        if utilization >= self.config.compression_threshold:
-            self.force_compress()
-
-    def _count_tokens(self, messages: list[dict[str, Any]]) -> int:
-        """Estimate total tokens for messages."""
-        from agent.agent_runtime_helpers import compute_token_estimate
-
-        total = 0
-        for m in messages:
-            content = m.get("content", "")
-            if isinstance(content, list):
-                content = " ".join(
-                    c.get("text", "") if isinstance(c, dict) else str(c)
-                    for c in content
-                )
-            total += compute_token_estimate(content)
-        return total
+        self.context_length = context_length
+        from agent.context_compressor import resolve_model_threshold
+        if not hasattr(self, "_config_threshold_percent"):
+            self._config_threshold_percent = self.threshold_percent
+        self._base_threshold_percent = resolve_model_threshold(
+            model, getattr(self, "model_thresholds", {}), self._config_threshold_percent, provider)
+        self.threshold_percent = self._base_threshold_percent
+        self.threshold_tokens = int(context_length * self.threshold_percent)

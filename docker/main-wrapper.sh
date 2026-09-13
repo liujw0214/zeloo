@@ -1,41 +1,91 @@
-﻿#!/bin/sh
-# docker/main-wrapper.sh — main process wrapper with environment setup
+#!/bin/sh
+# shellcheck shell=sh
+# /opt/Zeloo/docker/main-wrapper.sh — wraps the container's CMD with
+# the same argument-routing logic the pre-s6 entrypoint.sh used. Runs
+# as /init's "main program" (Docker CMD) so it inherits stdin/stdout/
+# stderr from the container. The non-PID-1 entrypoint fallback also
+# execs this script directly after running the stage2 bootstrap.
 #
-# Responsibilities:
-#  1. Source environment variables from /etc/profile.d/
-#  2. Run one-time health check
-#  3. Forward signals (TERM/INT) cleanly
-#  4. exec into the target binary
-
+# Env note: /init scrubs env before invoking CMD, so when this wrapper
+# is launched through the supervised path it must rehydrate via
+# with-contenv before touching ZELOO_HOME / PATH. On the non-PID-1
+# fallback path the Dockerfile env is still intact, so we skip the
+# re-exec and continue directly.
+#
+# Routing:
+#   no args                       → exec `Zeloo` (the default)
+#   first arg is an executable    → exec it directly (sleep, bash, sh, …)
+#   first arg is anything else    → exec `Zeloo <args>` (subcommand passthrough)
+#
+# Drop to Zeloo via s6-setuidgid, but skip it when already non-root.
 set -e
 
-echo "[main-wrapper] Starting Zeloo..."
+if [ -z "${ZELOO_MAIN_WRAPPER_ENV_READY:-}" ] && \
+   [ -z "${ZELOO_HOME:-}" ] && \
+   [ -x /command/with-contenv ]; then
+    export ZELOO_MAIN_WRAPPER_ENV_READY=1
+    exec /command/with-contenv sh "$0" "$@"
+fi
+unset ZELOO_MAIN_WRAPPER_ENV_READY
 
-# Source environment overrides
-if [ -f /etc/profile.d/Zeloo-env.sh ]; then
-    echo "[main-wrapper] Loading /etc/profile.d/Zeloo-env.sh"
-    set -a
-    . /etc/profile.d/Zeloo-env.sh
-    set +a
+drop() { [ "$(id -u)" = 0 ] && set -- s6-setuidgid Zeloo "$@"; exec "$@"; }
+
+# --- Reject the unsupported `docker run --user <uid>:<gid>` start ---
+# Mirror the guard in stage2-hook.sh (cont-init). This is the surface the
+# user actually sees in `docker run` output: when the container is pinned to
+# an arbitrary non-root, non-Zeloo UID, the bootstrap was skipped and the
+# baked image dirs (owned by the Zeloo build UID) are unwritable, so fail
+# fast here with actionable guidance rather than crashing on `cd`/EACCES
+# further down. See stage2-hook.sh for the full rationale.
+cur_uid="$(id -u)"
+if [ "$cur_uid" != 0 ] && [ "$cur_uid" != "$(id -u Zeloo)" ]; then
+    cat >&2 <<EOF
+[Zeloo] ERROR: container started with --user $cur_uid (an arbitrary, non-Zeloo UID) — not supported.
+
+To make container-written files match your HOST user, don't use --user.
+Start as root (the default) and pass your host UID/GID instead:
+
+    docker run -e ZELOO_UID=\$(id -u) -e ZELOO_GID=\$(id -g) ...
+
+NAS users (Synology / unRAID / UGOS) can use the PUID/PGID aliases:
+
+    docker run -e PUID=\$(id -u) -e PGID=\$(id -g) ...
+
+The image remaps the Zeloo user to that UID/GID at boot and chowns the data
+volume, so files land owned by your host user — the same outcome --user gave,
+without breaking the s6 supervision tree.
+EOF
+    exit 1
 fi
 
-# Validate critical environment
-if [ -z "$OPENAI_API_KEY" ] && [ -z "$ANTHROPIC_API_KEY" ]; then
-    echo "[main-wrapper] WARNING: No API key found (OPENAI_API_KEY / ANTHROPIC_API_KEY)" >&2
+# HOME comes through with-contenv as /root (the /init context). Override
+# to the Zeloo user's home before dropping privileges so libraries that
+# resolve paths via $HOME (e.g. discord lockfile under XDG_STATE_HOME)
+# don't try to write to /root.
+export HOME=/opt/data
+
+# Save the Docker -w (or default) working directory before init
+# scripts cd to /opt/data, so the container starts in the
+# directory the user requested.
+_zeloo_orig_cwd="${ZELOO_ORIG_CWD:-$PWD}"
+
+cd /opt/data
+# shellcheck disable=SC1091
+. /opt/Zeloo/.venv/bin/activate
+
+# Restore the original working directory before handing off to
+# the user's command so `Zeloo chat` starts in the Docker -w
+# directory, not /opt/data.
+cd "$_zeloo_orig_cwd"
+
+if [ $# -eq 0 ]; then
+    drop Zeloo
 fi
 
-# Pre-flight health check (gateway mode only)
-if [ "$zeloo_MODE" = "gateway" ]; then
-    echo "[main-wrapper] Pre-flight health check..."
-    if curl -sf --max-time 5 http://localhost:8080/health > /dev/null 2>&1; then
-        echo "[main-wrapper] Health endpoint already responding — continuing"
-    else
-        echo "[main-wrapper] Health endpoint not responding yet — this is normal during startup"
-    fi
+if command -v "$1" >/dev/null 2>&1; then
+    # Bare executable — pass through directly.
+    drop "$@"
 fi
 
-# Trap SIGTERM / SIGINT for graceful shutdown
-trap 'echo "[main-wrapper] Received signal, forwarding..."' TERM INT
-
-echo "[main-wrapper] Exec into Zeloo..."
-exec Zeloo "$@"
+# Zeloo subcommand pass-through.
+drop Zeloo "$@"

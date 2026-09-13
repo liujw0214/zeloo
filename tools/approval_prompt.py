@@ -1,373 +1,296 @@
-"""交互式审批提示
+"""Human prompt surfaces for :mod:`tools.approval`.
 
-提供命令行审批交互界面，包括：
-- 危险命令审批提示
-- 审批横幅和格式化输出
-- 用户输入处理
+The interactive CLI prompt (callback panel or ``input()`` fallback) and the
+operator-selected plugin approval transport. Detection, allowed scopes,
+persistence, timeout policy and the final authorization stay host-owned in
+``tools.approval``; this module only asks and reports the answer.
 """
 
-from __future__ import annotations
-
 import logging
+import os
 import sys
-from typing import Optional
+import threading
+from tools import approval_context as _ctx, approval_gateway_wait as _gw
+from tools.approval_human_wait import activity_heartbeat, human_wait_window
+from tools.interrupt import is_interrupted
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("tools.approval")
 
-RISK_COLORS = {
-    "safe": "\033[92m",
-    "low": "\033[93m",
-    "medium": "\033[93m",
-    "high": "\033[91m",
-    "critical": "\033[91m",
-    "reset": "\033[0m",
+
+def prompt_dangerous_approval(command: str, description: str, timeout_seconds: int | None = None,
+                              allow_permanent: bool = True, approval_callback=None,
+                              *, allow_session: bool = True, smart_denied: bool = False) -> str:
+    """Prompt the user to approve a dangerous command (CLI only).
+
+    allow_permanent=False hides [a]lways (tirith warnings present: broad permanent
+    allowlisting is wrong for content-level findings). allow_session=False hides
+    [s]ession too — the caller grants one operation and re-asks next time (the
+    protected agent-instruction gate in ``tools/file_tools.py``); offering a scope
+    the caller discards makes every later write re-prompt and reads as broken.
+    smart_denied: owner override of a Smart DENY, offer only once/deny.
+    approval_callback: CLI prompt_toolkit callback ``(command, description, *,
+    allow_permanent=True, allow_session=True, smart_denied=False) -> str``; legacy
+    signatures keep working while both keywords hold their defaults.
+
+    Returns 'once', 'session', 'always', 'deny', or 'timeout'. 'timeout' means no
+    user response — still blocked (fail-closed), but callers report "no response"
+    rather than an explicit denial.
+
+    See #81887.
+    """
+    if timeout_seconds is None:
+        timeout_seconds = _ctx._get_approval_timeout()
+    # Everything below is a human prompt (callback panel or input() fallback, both bounded by the approval deadline):
+    # record it as human-wait time so the concurrent batch deadline excludes it.
+    # See #79719.
+    with human_wait_window():
+        return _ask_human(command, description, timeout_seconds, allow_permanent,
+                          approval_callback, allow_session, smart_denied)
+
+
+_CLI_CHOICE_ALIASES = {
+    "o": "once", "once": "once",
+    "s": "session", "session": "session",
+    "a": "always", "always": "always",
 }
 
-RISK_EMOJI = {
-    "safe": "✅",
-    "low": "⚠️",
-    "medium": "⚠️",
-    "high": "🚨",
-    "critical": "🚨",
+_CLI_CHOICE_I18N = {
+    "once": "approval.allowed_once",
+    "session": "approval.allowed_session",
+    "always": "approval.allowed_always",
+    "deny": "approval.denied",
 }
 
 
-def _is_color_supported() -> bool:
-    """检查终端是否支持彩色输出"""
-    if not hasattr(sys.stdout, "isatty"):
-        return False
+def _read_choice(prompt: str, timeout_seconds: int) -> str | None:
+    """Read one answer on a daemon thread; None when the user never answered."""
+    result = {"choice": ""}
+
+    def get_input():
+        try:
+            result["choice"] = input(prompt).strip().lower()
+        except (EOFError, OSError):
+            result["choice"] = ""
+
+    thread = threading.Thread(target=get_input, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout_seconds)
+    return None if thread.is_alive() else result["choice"]
+
+
+def _ask_human(command: str, description: str, timeout_seconds: int, allow_permanent: bool,
+               approval_callback, allow_session: bool, smart_denied: bool) -> str:
+    # Redact before any user-visible rendering; the original `command` still executes after approval. Same redactor as
+    # memory/log sanitization so tokens mask consistently across surfaces.
+    from agent.redact import redact_sensitive_text
+    display_command = redact_sensitive_text(command)
+    display_description = redact_sensitive_text(description)
+    # Smart DENY and a session-less gate both reduce the menu to once/deny.
+    once_only = smart_denied or not allow_session
+
+    if approval_callback is not None:
+        try:
+            # Non-default scopes only: legacy callbacks lack the newer keywords.
+            callback_kwargs = {"allow_permanent": allow_permanent,
+                               **({"allow_session": False} if not allow_session else {}),
+                               **({"smart_denied": True} if smart_denied else {})}
+            return approval_callback(display_command, display_description, **callback_kwargs)
+        except Exception as e:
+            logger.error("Approval callback failed: %s", e, exc_info=True)
+            return "deny"
+
+    # Fail-closed guard: when prompt_toolkit owns the terminal and no callback is registered on this thread, the
+    # input() fallback would spawn a daemon thread whose read never sees Enter (keystrokes go to prompt_toolkit) — an
+    # invisible deadlock. Deny loudly instead; threads needing interactive approval must install a callback via
+    # tools.terminal_tool.set_approval_callback() first.
     try:
-        return sys.stdout.isatty()
+        # Deny fast and log loudly instead so the caller can surface a real error to the agent. Any thread
+        # that needs interactive approval must install a callback via
+        # tools.terminal_tool.set_approval_callback() before reaching this point (see delegate_tool.py,
+        # run_agent.py _execute_tool_calls_concurrent / _spawn_background_review for the established
+        # pattern). See #15216.
+        from prompt_toolkit.application.current import get_app_or_none
+        if get_app_or_none() is not None:
+            logger.warning("Dangerous-command approval requested on a thread with no "
+                           "approval callback while prompt_toolkit is active; denying "
+                           "to avoid stdin deadlock. command=%r description=%r", command, description)
+            return "deny"
     except Exception:
-        return False
+        pass  # prompt_toolkit absent or detection failed: legacy input() path is safe
 
-
-def _get_risk_color(risk_level: str) -> tuple[str, str]:
-    """获取风险等级对应的颜色代码"""
-    color = RISK_COLORS.get(risk_level, RISK_COLORS["reset"])
-    reset = RISK_COLORS["reset"]
-    return color, reset
-
-
-def _get_risk_emoji(risk_level: str) -> str:
-    """获取风险等级对应的 emoji"""
-    return RISK_EMOJI.get(risk_level, "❓")
-
-
-def print_approval_banner(command: str, risk_level: str, reason: str = "") -> None:
-    """打印审批横幅
-
-    Args:
-        command: 待审批的命令
-        risk_level: 风险等级
-        reason: 风险原因
-    """
-    if not _is_color_supported():
-        risk_level = "unknown"
-
-    color, reset = _get_risk_color(risk_level)
-    emoji = _get_risk_emoji(risk_level)
-
-    width = min(80, max(60, len(command) + 20))
-    separator = "=" * width
-
-    print()
-    print(f"{color}{separator}{reset}")
-    print(f"{color}  {emoji}  命令审批请求  {emoji}{reset}")
-    print(f"{color}{separator}{reset}")
-    print()
-
-    print(f"  风险等级: {color}{risk_level.upper()}{reset}")
-    if reason:
-        print(f"  风险原因: {color}{reason}{reset}")
-    print()
-
-    print(f"  命令:")
-    print(f"  {color}{command}{reset}")
-    print()
-
-    print(f"{color}{separator}{reset}")
-    print()
-
-
-def print_safe_command(command: str) -> None:
-    """打印安全命令提示
-
-    Args:
-        command: 安全命令
-    """
-    if _is_color_supported():
-        green = "\033[92m"
-        reset = "\033[0m"
-        print(f"{green}✅ 安全命令已执行: {reset}{command}")
-    else:
-        print(f"[SAFE] {command}")
-
-
-def print_dangerous_command(command: str, reason: str) -> None:
-    """打印危险命令警告
-
-    Args:
-        command: 危险命令
-        reason: 危险原因
-    """
-    if _is_color_supported():
-        red = "\033[91m"
-        reset = "\033[0m"
-        print(f"{red}🚨 危险命令: {reset}{command}")
-        print(f"{red}   原因: {reset}{reason}")
-    else:
-        print(f"[DANGEROUS] {command}")
-        print(f"  Reason: {reason}")
-
-
-def print_approval_status(
-    approved: bool,
-    command: str,
-    reason: str = "",
-) -> None:
-    """打印审批状态
-
-    Args:
-        approved: 是否已批准
-        command: 相关命令
-        reason: 原因
-    """
-    if approved:
-        if _is_color_supported():
-            green = "\033[92m"
-            reset = "\033[0m"
-            print(f"{green}✅ 已批准: {reset}{command}")
+    os.environ["ZELOO_SPINNER_PAUSE"] = "1"
+    try:
+        from agent.i18n import t
+        # (prompt key, menu key) by menu shape: once/deny, full, or no [a]lways.
+        shape = "smart_deny" if once_only else "long" if allow_permanent else "short"
+        prompt_key, menu_key = f"approval.prompt_{shape}", f"approval.choose_{shape}"
+        print(f"\n  {t('approval.dangerous_header', description=display_description)}"
+              f"\n      {display_command}\n\n{t(menu_key)}\n")
+        sys.stdout.flush()
+        choice = _read_choice(t(prompt_key), timeout_seconds)
+        if choice is None:
+            print("\n" + t("approval.timeout"))
+            return "timeout"  # distinct from deny: the user never answered
+        if once_only:
+            decision = {**dict.fromkeys(t("approval.smart_deny_once_inputs").split(","), "once"),
+                        **dict.fromkeys(t("approval.smart_deny_deny_inputs").split(","), "deny"),
+                        }.get(choice, "deny")
         else:
-            print(f"[APPROVED] {command}")
-    else:
-        if _is_color_supported():
-            red = "\033[91m"
-            reset = "\033[0m"
-            print(f"{red}❌ 已拒绝: {reset}{command}")
-        else:
-            print(f"[DENIED] {command}")
-
-    if reason:
-        if _is_color_supported():
-            yellow = "\033[93m"
-            reset = "\033[0m"
-            print(f"{yellow}   原因: {reset}{reason}")
-        else:
-            print(f"  Reason: {reason}")
+            decision = _CLI_CHOICE_ALIASES.get(choice, "deny")
+            if decision == "always" and not allow_permanent:
+                decision = "session"
+        print(t(_CLI_CHOICE_I18N[decision]))
+        return decision
+    except (EOFError, KeyboardInterrupt):
+        print("\n" + t("approval.cancelled"))
+        return "deny"
+    finally:
+        os.environ.pop("ZELOO_SPINNER_PAUSE", None)
+        print()
+        sys.stdout.flush()
 
 
-def prompt_dangerous_approval(
-    command: str,
-    reason: str,
-    risk_level: str = "high",
-) -> bool:
-    """显示危险命令审批提示并等待用户响应
+def get_plugin_manager():
+    """Lazy plugin-manager seam used by tests and early tool-only imports."""
+    from zeloo_cli.plugins import discover_plugins, get_plugin_manager as _get_manager
+    # Approval can be imported before model_tools (which triggers discovery); make an explicitly selected transport
+    # available on the first approval instead of treating the undiscovered registry as unavailable.
+    discover_plugins()
+    return _get_manager()
 
-    Args:
-        command: 待审批的危险命令
-        reason: 危险原因
-        risk_level: 风险等级
 
-    Returns:
-        True 如果用户批准，False 如果拒绝
-    """
-    print_approval_banner(command, risk_level, reason)
+def _attempt(name: str, choice, failure, fallback) -> dict:
+    """Result shape of :func:`_present_with_selected_transport` once a transport is selected."""
+    return {"selected": True, "choice": choice, "failure": failure, "fallback": fallback, "name": name}
 
-    if risk_level == "critical":
-        prompt_text = "确认执行此危险命令? [y/N]"
-    elif risk_level == "high":
-        prompt_text = "确认执行此高风险命令? [y/N]"
-    else:
-        prompt_text = "确认执行此命令? [Y/n]"
+
+def _present_with_selected_transport(*, command: str, description: str, pattern_key: str,
+                                     pattern_keys: list[str], session_key: str, surface: str,
+                                     allow_session: bool, allow_permanent: bool) -> dict:
+    """Present through an explicitly selected plugin transport, if any. A selected
+    transport replaces every built-in prompt surface; detection, allowed scopes,
+    persistence, timeout, and final authorization stay host-owned. A failed
+    transport reaches a built-in surface only under the explicit
+    ``transport_fallback: builtin`` opt-in."""
+    name, fallback = _ctx._get_approval_transport_config()
+    if name == "builtin":
+        return {"selected": False}
 
     try:
-        response = input(f"\n  {prompt_text} ").strip().lower()
-
-        if not response:
-            return risk_level != "critical"
-
-        if response in ("y", "yes", "是", "确认", "1"):
-            logger.info("Command approved by user: %s", command[:50])
-            return True
-
-        if response in ("n", "no", "否", "拒绝", "0"):
-            logger.info("Command denied by user: %s", command[:50])
-            return False
-
-        if response == "a" or response == "always":
-            from tools.approval import approve_permanent
-
-            approve_permanent(command)
-            print("  已将此命令添加到永久白名单")
-            return True
-
-        if response == "s" or response == "session":
-            from tools.approval_context import get_current_session_key
-            from tools.approval import approve_command
-
-            session_key = get_current_session_key()
-            approve_command(session_key, command)
-            print("  已批准此命令在当前会话中执行")
-            return True
-
-        if response == "v" or response == "view":
-            print("\n  命令详情:")
-            print(f"    {command}")
-            print(f"\n  风险原因:")
-            print(f"    {reason}")
-            return prompt_dangerous_approval(command, reason, risk_level)
-
-        if response in ("h", "help", "?"):
-            print("\n  可用选项:")
-            print("    y/yes/是    - 批准并执行命令")
-            print("    n/no/否     - 拒绝执行命令")
-            print("    a/always   - 批准并添加到永久白名单")
-            print("    s/session  - 仅批准在当前会话执行")
-            print("    v/view     - 查看命令详情")
-            print("    h/help     - 显示此帮助")
-            print("    q/quit     - 退出审批")
-            return prompt_dangerous_approval(command, reason, risk_level)
-
-        if response in ("q", "quit", "exit"):
-            print("  已取消审批流程")
-            return False
-
-        print("  无效输入，请重新输入")
-        return prompt_dangerous_approval(command, reason, risk_level)
-
-    except EOFError:
-        print("\n  输入已关闭，默认拒绝执行")
-        return False
-    except KeyboardInterrupt:
-        print("\n  已取消审批流程")
-        return False
-
-
-def prompt_confirmation(
-    message: str,
-    default: Optional[bool] = None,
-) -> bool:
-    """通用确认提示
-
-    Args:
-        message: 提示消息
-        default: 默认选项，True=默认是，False=默认否，None=无默认
-
-    Returns:
-        用户选择
-    """
-    if default is True:
-        prompt_text = f"{message} [Y/n]"
-    elif default is False:
-        prompt_text = f"{message} [y/N]"
-    else:
-        prompt_text = f"{message} [y/n]"
+        registered = get_plugin_manager().get_approval_transport(name)
+    except Exception:
+        # Plugin/discovery exception text may contain plugin-owned secrets.
+        logger.warning("Could not resolve selected approval transport %r", name)
+        registered = None
+    if registered is None:
+        logger.warning("Selected approval transport %r is unavailable", name)
+        return _attempt(name, "deny", "unavailable", fallback)
 
     try:
-        response = input(f"\n  {prompt_text} ").strip().lower()
+        from agent.redact import redact_sensitive_text
+        from zeloo_cli.approval_transport import ApprovalRequest, invoke_approval_transport
 
-        if not response:
-            if default is not None:
-                return default
-            return False
-
-        if response in ("y", "yes", "是", "1"):
-            return True
-        if response in ("n", "no", "否", "0"):
-            return False
-
-        print("  请输入 y 或 n")
-        return prompt_confirmation(message, default)
-
-    except EOFError:
-        return False
-    except KeyboardInterrupt:
-        return False
-
-
-def print_command_preview(
-    command: str,
-    index: int = 0,
-    total: int = 1,
-) -> None:
-    """打印命令预览
-
-    Args:
-        command: 命令
-        index: 当前索引
-        total: 总数
-    """
-    if _is_color_supported():
-        blue = "\033[94m"
-        reset = "\033[0m"
-        if total > 1:
-            print(f"{blue}[{index + 1}/{total}]{reset} {command}")
-        else:
-            print(f"{blue}>{reset} {command}")
-    else:
-        if total > 1:
-            print(f"[{index + 1}/{total}] {command}")
-        else:
-            print(f"> {command}")
+        timeout_seconds = _ctx._get_approval_timeout()
+        request = ApprovalRequest.create(
+            command=redact_sensitive_text(command, force=True),
+            description=redact_sensitive_text(description, force=True), pattern_key=pattern_key,
+            pattern_keys=tuple(pattern_keys), session_key=session_key, surface=surface, allow_session=allow_session,
+            allow_permanent=allow_permanent, timeout_seconds=timeout_seconds,
+        )
+    except Exception:
+        # Never fall back to raw text if redaction or request construction fails:
+        # fail closed without calling the plugin or leaking the unredacted payload.
+        logger.warning("Could not build redacted plugin approval request")
+        return _attempt(name, "deny", "error", None)
+    hook_kwargs = dict(
+        command=request.command, description=request.description, pattern_key=pattern_key,
+        pattern_keys=list(pattern_keys), session_key=session_key, surface=f"transport:{name}",
+        request_id=request.request_id, request_digest=request.digest,
+    )
+    _ctx._fire_approval_hook("pre_approval_request", **hook_kwargs)
+    with human_wait_window(session_key):
+        result = invoke_approval_transport(
+            registered.present, request, timeout_seconds=timeout_seconds,
+            on_poll=activity_heartbeat("waiting for plugin approval transport"),
+            is_interrupted=is_interrupted,
+        )
+    hook_choice = result.choice if result.failure is None else f"transport_{result.failure}"
+    _ctx._fire_approval_hook("post_approval_response", **hook_kwargs, choice=hook_choice)
+    return _attempt(name, result.choice, result.failure, fallback)
 
 
-def print_batch_approval_summary(
-    approved: int,
-    denied: int,
-    skipped: int,
-) -> None:
-    """打印批量审批摘要
-
-    Args:
-        approved: 批准数量
-        denied: 拒绝数量
-        skipped: 跳过数量
-    """
-    if _is_color_supported():
-        green = "\033[92m"
-        red = "\033[91m"
-        yellow = "\033[93m"
-        reset = "\033[0m"
-        print()
-        print(f"{green}✅ 已批准: {approved}{reset}")
-        print(f"{red}❌ 已拒绝: {denied}{reset}")
-        print(f"{yellow}⏭️  已跳过: {skipped}{reset}")
-        print()
-    else:
-        print()
-        print(f"Approved: {approved}")
-        print(f"Denied: {denied}")
-        print(f"Skipped: {skipped}")
-        print()
+def _transport_choice(attempt: dict, *, pattern_key: str, description: str):
+    """Interpret a ``_present_with_selected_transport`` attempt into
+    ``(choice, denied_result)``: both None when the built-in surfaces should run
+    (no transport selected, or a failure with the explicit builtin fallback); a
+    denied result for any other failure; else the user's choice."""
+    if not attempt.get("selected"):
+        return None, None
+    failure = attempt.get("failure")
+    if not failure:
+        return attempt.get("choice"), None
+    if attempt.get("fallback") == "builtin":
+        logger.warning("Approval transport %r failed (%s); using explicit builtin fallback",
+                       attempt.get("name"), failure)
+        return None, None
+    from tools import approval as _a
+    breaker_addendum = _a._denial_breaker_addendum(_ctx.get_current_session_key())
+    return None, _a._denied(
+        f"BLOCKED: Selected approval transport failed ({failure}); the user "
+        "has NOT consented to this action. Do NOT retry this command or "
+        f"attempt the same outcome through another route.{breaker_addendum}",
+        pattern_key=pattern_key, description=description, outcome=f"transport_{failure}",
+    )
 
 
-def format_command_for_display(command: str, max_width: int = 60) -> str:
-    """格式化命令以便于显示
-
-    Args:
-        command: 原始命令
-        max_width: 最大宽度
-
-    Returns:
-        格式化后的命令
-    """
-    if len(command) <= max_width:
-        return command
-
-    half = (max_width - 3) // 2
-    return f"{command[:half]}...{command[-half:]}"
+def _consent(choice, unresolved: str) -> str:
+    """Map an approval choice to an elicitation verdict; *unresolved* is the no-answer outcome."""
+    if choice in ("once", "session", "always"):
+        return "accept"
+    return unresolved if choice == "timeout" else "decline"
 
 
-def print_approval_timeout_warning(timeout: float) -> None:
-    """打印审批超时警告
+def request_elicitation_consent(message: str, description: str, *,
+                                timeout_seconds: int | None = None,
+                                surface: str = "mcp-elicitation") -> str:
+    """Route an MCP elicitation request to the surface owning the active session:
+    gateway sessions through ``_await_gateway_decision``, CLI/TUI through
+    ``prompt_dangerous_approval``. Always fails closed: a missing notify_cb in a
+    gateway session, timeouts, and exceptions map to ``"decline"`` so a server
+    treats them as "user did not approve" rather than retrying or hanging.
+    Returns ``"accept" | "decline" | "cancel"``."""
+    from tools import approval as _a
+    try:
+        session_key = _ctx.get_current_session_key()
+    except Exception as exc:  # pragma: no cover -- defensive
+        logger.warning("Elicitation consent: session lookup failed: %s", exc)
+        return "decline"
 
-    Args:
-        timeout: 超时时间（秒）
-    """
-    if _is_color_supported():
-        yellow = "\033[93m"
-        reset = "\033[0m"
-        print(f"{yellow}⚠️  审批超时时间: {timeout} 秒{reset}")
-    else:
-        print(f"Approval timeout: {timeout} seconds")
+    if _ctx._is_gateway_approval_context():
+        notify_cb = _a._gateway_notify_cb(session_key)
+        if notify_cb is None:
+            logger.warning("Elicitation requested in gateway session %s but no "
+                           "notify_cb is registered — failing closed", session_key)
+            return "decline"
+        try:
+            decision = _gw._await_gateway_decision(
+                session_key, notify_cb, {"command": message, "description": description,
+                                         "pattern_key": "mcp_elicitation",
+                                         "pattern_keys": ["mcp_elicitation"]}, surface=surface)
+        except Exception as exc:
+            logger.error("Elicitation gateway dispatch failed: %s", exc, exc_info=True)
+            return "decline"
+        if decision.get("notify_failed"):
+            return "decline"
+        if not decision.get("resolved"):
+            return "cancel"
+        return _consent(decision.get("choice"), "decline")
+
+    # allow_permanent=False: elicitation is a per-call confirmation — no pattern to remember.
+    try:
+        choice = prompt_dangerous_approval(message, description, timeout_seconds=timeout_seconds,
+                                           allow_permanent=False)
+    except Exception as exc:
+        logger.error("Elicitation CLI prompt failed: %s", exc, exc_info=True)
+        return "decline"
+    return _consent(choice, "cancel")  # timeout mirrors the gateway's unresolved outcome

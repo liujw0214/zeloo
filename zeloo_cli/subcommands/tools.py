@@ -1,200 +1,50 @@
-"""Zeloo tools subcommand — tool discovery, inspection and validation."""
+"""``Zeloo tools`` subcommand parser."""
 
 from __future__ import annotations
 
-import argparse
-import sys
-
-from zeloo_cli.subcommands import Subcommand, subcommand
+from typing import Callable
 
 
-@subcommand("tools")
-class ToolsCmd(Subcommand):
-    name = "tools"
-    help = "List, inspect and validate available tools"
+def build_tools_parser(subparsers, *, cmd_tools: Callable) -> None:
+    """Attach the ``tools`` subcommand to ``subparsers``."""
+    tools_parser = subparsers.add_parser(
+        "tools", help="Configure which tools are enabled per platform",
+        description="Enable, disable, or list tools for CLI, Telegram, Discord, etc.\n\n"
+            "Built-in toolsets use plain names (e.g. web, memory).\n"
+            "MCP tools use server:tool notation (e.g. github:create_issue).\n\n"
+            "Run 'Zeloo tools' with no subcommand for the interactive configuration UI.")
+    tools_parser.add_argument(
+        "--summary", action="store_true",
+        help="Print a summary of enabled tools per platform and exit")
+    tools_sub = tools_parser.add_subparsers(dest="tools_action")
 
-    @classmethod
-    def configure_parser(cls, parser: argparse.ArgumentParser) -> None:
-        sub = parser.add_subparsers(dest="tools_action", help="Tools action")
+    tools_list_p = tools_sub.add_parser(
+        "list", help="Show all tools and their enabled/disabled status")
+    tools_list_p.add_argument("--platform", default="cli", help="Platform to show (default: cli)")
 
-        list_p = sub.add_parser("list", help="List all available tools")
-        list_p.add_argument(
-            "--category", "-c", default=None,
-            help="Filter by category (file, web, system, memory, skill)",
-        )
-        list_p.add_argument(
-            "--json", action="store_true", dest="as_json",
-            help="Output as machine-readable JSON",
-        )
+    tools_disable_p = tools_sub.add_parser("disable", help="Disable toolsets or MCP tools")
+    tools_disable_p.add_argument(
+        "names", nargs="+", metavar="NAME",
+        help="Toolset name (e.g. web) or MCP tool in server:tool form")
+    tools_disable_p.add_argument(
+        "--platform", default="cli", help="Platform to apply to (default: cli)")
 
-        show_p = sub.add_parser("show", help="Show detailed info for a tool")
-        show_p.add_argument("tool_name", help="Name of the tool")
+    tools_enable_p = tools_sub.add_parser("enable", help="Enable toolsets or MCP tools")
+    tools_enable_p.add_argument(
+        "names", nargs="+", metavar="NAME", help="Toolset name or MCP tool in server:tool form")
+    tools_enable_p.add_argument(
+        "--platform", default="cli", help="Platform to apply to (default: cli)")
 
-        sub.add_parser("validate", help="Validate tool configuration and registration")
-
-    def run(self, args: argparse.Namespace) -> int:
-        action = getattr(args, "tools_action", None)
-        if action == "list":
-            return self._list(
-                getattr(args, "category", None),
-                getattr(args, "as_json", False),
-            )
-        if action == "show":
-            return self._show(args.tool_name)
-        if action == "validate":
-            return self._validate()
-        print("Usage: zeloo tools [list|show|validate]")
-        return 1
-
-    def _list(self, category: str | None, as_json: bool) -> int:
-        try:
-            from tools.base import discover_builtin_tools, get_registry
-        except Exception as exc:  # noqa: BLE001
-            print(f"(tools registry not available: {exc})")
-            return 0
-
-        # Trigger @tool decorator registration for every tool module.
-        discover_builtin_tools()
-        registry = get_registry().get_all()
-        tools = list(registry.values())
-        if category:
-            tools = [
-                t for t in tools
-                if getattr(t, "category", None) == category
-                or getattr(t, "toolset", None) == category
-            ]
-
-        if as_json:
-            import json
-            output = [
-                {
-                    "name": t.name,
-                    "category": getattr(t, "toolset", None) or "unknown",
-                }
-                for t in tools
-            ]
-            print(json.dumps(output, indent=2))
-            return 0
-
-        # Rich-rendered table (Hermes Agent parity).
-        from zeloo_cli.rich_render import make_console, make_table
-
-        console = make_console()
-        title = f"Available tools ({len(tools)})"
-        if category:
-            title += f"  — filtered: {category}"
-        table = make_table(
-            title=title,
-            columns=[
-                ("NAME", "bold cyan"),
-                ("CATEGORY", "yellow"),
-                ("DESCRIPTION", "white"),
-            ],
-        )
-        for t in tools:
-            table.add_row(
-                t.name,
-                getattr(t, "toolset", None) or "unknown",
-                (getattr(t, "description", "") or "")[:80],
-            )
-        console.print(table)
-        return 0
-
-    def _show(self, tool_name: str) -> int:
-        try:
-            from tools.base import discover_builtin_tools, get_registry
-        except Exception:  # noqa: BLE001
-            print("(tools registry not available)")
-            return 1
-
-        discover_builtin_tools()
-        tool = get_registry().get(tool_name)
-        if tool is None:
-            print(f"Tool not found: {tool_name}")
-            return 1
-
-        # Rich-rendered key/value pairs (Hermes Agent parity).
-        from zeloo_cli.rich_render import render_keyvalue
-
-        params = getattr(tool, "parameters", None)
-        pairs = [
-            ("Name", tool.name),
-            ("Category", getattr(tool, "category", "unknown")),
-            ("Description", getattr(tool, "description", "(no description)")),
-        ]
-        if params:
-            pairs.append(("Parameters", str(params)))
-        render_keyvalue(pairs)
-        return 0
-
-    def _validate(self) -> int:
-        try:
-            from tools.base import discover_builtin_tools, get_registry
-        except Exception as exc:
-            print(f"Error: tools registry not available: {exc}")
-            return 1
-
-        discover_builtin_tools()
-        registry = get_registry()
-        all_tools = registry.get_all()
-        tools = list(all_tools.values())
-
-        if not tools:
-            print("No tools registered.")
-            return 1
-
-        results: list[tuple[str, str, str]] = []
-        errors = 0
-
-        for tool in tools:
-            name = tool.name
-            if not name:
-                results.append(("error", "unnamed", "Tool has no name"))
-                errors += 1
-                continue
-
-            if not getattr(tool, "description", ""):
-                results.append(("warn", name, "Missing description"))
-                continue
-
-            if not getattr(tool, "execute", None):
-                results.append(("error", name, "No execute function"))
-                errors += 1
-                continue
-
-            params = getattr(tool, "parameters", None)
-            if params:
-                if not isinstance(params, dict):
-                    results.append(("warn", name, "Invalid parameters schema"))
-                elif "properties" not in params:
-                    results.append(("warn", name, "Parameters missing 'properties'"))
-                else:
-                    results.append(("ok", name, "Valid"))
-            else:
-                results.append(("ok", name, "Valid (no parameters)"))
-
-        try:
-            from zeloo_cli.rich_render import make_console, make_table
-            console = make_console()
-            table = make_table(
-                title=f"Tool validation ({len(results)} tools)",
-                columns=[
-                    ("STATUS", "bold"),
-                    ("TOOL", "cyan"),
-                    ("MESSAGE", "white"),
-                ],
-            )
-            for status, name, msg in results:
-                style = {"ok": "green", "warn": "yellow", "error": "red"}.get(status, "")
-                table.add_row(status.upper(), name, msg)
-            console.print(table)
-        except Exception:
-            print(f"{'STATUS':<8} {'TOOL':<30} {'MESSAGE'}")
-            print("-" * 70)
-            for status, name, msg in results:
-                print(f"{status.upper():<8} {name:<30} {msg}")
-
-        print(f"\nValidation complete: {errors} error(s), "
-              f"{sum(1 for s, _, _ in results if s == 'warn')} warning(s), "
-              f"{sum(1 for s, _, _ in results if s == 'ok')} ok")
-        return 0 if errors == 0 else 1
+    tools_postsetup_p = tools_sub.add_parser(
+        "post-setup", help="Run a provider's post-setup install hook (npm/pip/binary)",
+        description="Run the install/bootstrap hook a tool backend declares — the\n"
+            "same step `Zeloo tools` runs after you pick a provider that\n"
+            "needs extra dependencies (browser Chromium, Camofox, cua-driver,\n"
+            "KittenTTS/Piper, ddgs, Spotify, Langfuse, xAI). Stable,\n"
+            "non-interactive target the dashboard spawns to drive backend\n"
+            "setup. Keys: agent_browser, camofox, cua_driver, kittentts,\n"
+            "piper, ddgs, spotify, langfuse, xai_grok.")
+    tools_postsetup_p.add_argument(
+        "post_setup_key", metavar="KEY",
+        help="Post-setup hook key (e.g. agent_browser, camofox, kittentts)")
+    tools_parser.set_defaults(func=cmd_tools)

@@ -1,137 +1,146 @@
-"""estop — emergency stop mechanism for the agent runtime.
+"""Global emergency stop (ESTOP) — a resumable pause for NEW work only.
 
-This provides a global
-emergency stop that can halt all agent activity immediately.
-
-The estop is a process-wide flag that, when set, causes:
-- The conversation loop to break at the next iteration boundary
-- All pending tool calls to be cancelled
-- No new LLM calls to be made
-
-Usage::
-
-    from agent.estop import estop
-
-    # Trigger emergency stop
-    estop.trigger(reason="User requested stop")
-
-    # Check if stopped
-    if estop.is_stopped():
-        return
-
-    # Reset (for testing or after resolution)
-    estop.reset()
+``Zeloo pause`` writes a sentinel at ``$ZELOO_HOME/ESTOP``; ``Zeloo resume``
+removes it. While it exists the cron scheduler, kanban dispatcher and new gateway
+turns skip work; in-flight work is never killed. The check is one or two uncached
+``os.stat`` calls (process home + fleet root when they differ). The body is optional
+JSON ``{"reason", "engaged_at"}``; a corrupt/empty file still counts as engaged
+(fail safe, e.g. ``touch ~/.Zeloo/ESTOP``). Ported from gastownhall/gastown estop.go (MIT).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
-import time
-from dataclasses import dataclass, field
-from typing import Any
+from contextlib import suppress
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
 
-logger = logging.getLogger(__name__)
+# Same profile-aware / fleet-root resolvers the file-safety guards use (fail-open to ~/.Zeloo).
+from agent.file_safety import _zeloo_home_path as _zeloo_home, _zeloo_root_path as _canonical_root
 
+SENTINEL_NAME = "ESTOP"
 
-@dataclass
-class EstopState:
-    """Current emergency stop state."""
-
-    stopped: bool = False
-    reason: str = ""
-    triggered_at: float = 0.0
-    triggered_by: str = "system"
-    stack: list[dict[str, Any]] = field(default_factory=list)
+# Per-component "logged already for this engagement" flags: log once per engagement, not per tick.
+_log_lock = threading.Lock()
+_logged_components: set[str] = set()
 
 
-class EmergencyStop:
-    """Process-wide emergency stop controller.
-
-    Thread-safe. Supports nested triggers (stack-based) so multiple
-    subsystems can request a stop independently.
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._state = EstopState()
-
-    def trigger(self, reason: str = "", by: str = "system") -> None:
-        """Trigger the emergency stop.
-
-        Args:
-            reason: Human-readable reason for the stop.
-            by: Identifier of the component triggering the stop.
-        """
-        first_trigger = False
-        with self._lock:
-            if not self._state.stopped:
-                first_trigger = True
-                self._state.stopped = True
-                self._state.reason = reason
-                self._state.triggered_at = time.time()
-                self._state.triggered_by = by
-            # Push onto the stack for nested stops
-            self._state.stack.append(
-                {"reason": reason, "by": by, "at": time.time()}
-            )
-            logger.warning("ESTOP triggered by '%s': %s", by, reason)
-        # Audit (only the first activation is the security-relevant event;
-        # nested triggers are logged at debug level to avoid noise).
-        if first_trigger:
-            try:
-                from agent.audit_log import audit_event
-
-                audit_event(
-                    "estop_triggered",
-                    actor=by,
-                    resource="estop",
-                    outcome="ok",
-                    detail={"reason": reason},
-                )
-            except Exception:  # noqa: BLE001
-                pass
-
-    def reset(self) -> None:
-        """Reset the emergency stop (clears all stack entries)."""
-        was_stopped = False
-        with self._lock:
-            was_stopped = self._state.stopped
-            self._state.stopped = False
-            self._state.reason = ""
-            self._state.triggered_at = 0.0
-            self._state.triggered_by = "system"
-            self._state.stack.clear()
-            logger.info("ESTOP reset")
-        if was_stopped:
-            try:
-                from agent.audit_log import audit_event
-
-                audit_event(
-                    "estop_reset",
-                    actor="system",
-                    resource="estop",
-                    outcome="ok",
-                )
-            except Exception:  # noqa: BLE001
-                pass
-
-    def is_stopped(self) -> bool:
-        """Return True if the emergency stop is active."""
-        with self._lock:
-            return self._state.stopped
-
-    def get_state(self) -> EstopState:
-        """Return a snapshot of the current estop state."""
-        with self._lock:
-            return EstopState(
-                stopped=self._state.stopped,
-                reason=self._state.reason,
-                triggered_at=self._state.triggered_at,
-                triggered_by=self._state.triggered_by,
-                stack=list(self._state.stack),
-            )
+def sentinel_path() -> Path:
+    """Path of the ESTOP sentinel this process would write on `Zeloo pause`."""
+    return _zeloo_home() / SENTINEL_NAME
 
 
-# Global singleton
-estop = EmergencyStop()
+def _candidate_sentinel_paths() -> list:
+    """Profile home first, then the fleet root if it is a different directory: a profile
+    gateway (ZELOO_HOME=~/.Zeloo/profiles/<n>) must still honor an operator's ~/.Zeloo/ESTOP."""
+    primary = sentinel_path()
+    try:
+        root = _canonical_root() / SENTINEL_NAME
+    except Exception:
+        return [primary]
+    try:
+        distinct = root.resolve() != primary.resolve()
+    except Exception:
+        # Non-Path test doubles fail .resolve(); plain equality still dedupes.
+        distinct = root != primary
+    return [primary, root] if distinct else [primary]
+
+
+def is_engaged() -> bool:
+    """True if ANY candidate sentinel exists; fail SAFE (True) on stat errors."""
+    saw_stat_error = False
+    for path in _candidate_sentinel_paths():
+        try:
+            if path.exists():
+                return True
+        except OSError:
+            saw_stat_error = True
+    return saw_stat_error
+
+
+def engage(reason: Optional[str] = None) -> Path:
+    """Create the ESTOP sentinel. Idempotent; re-engaging updates the file."""
+    path = sentinel_path()
+    payload = {"engaged_at": datetime.now(timezone.utc).isoformat(), "reason": reason or None}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        with suppress(OSError):  # Best effort: an empty/partial sentinel still pauses (fail safe).
+            path.touch(exist_ok=True)
+    return path
+
+
+def disengage() -> bool:
+    """Remove every visible sentinel (process-local and fleet-root)."""
+    lifted = False
+    for path in _candidate_sentinel_paths():
+        try:
+            path.unlink()
+            lifted = True
+        except (OSError, AttributeError):
+            continue
+    return lifted
+
+
+def get_state() -> Optional[dict]:
+    """Return ``{"reason", "engaged_at"}`` or None when not engaged; an unreadable/corrupt
+    body still reports engaged with both fields None."""
+    if not is_engaged():
+        return None
+    state = {"reason": None, "engaged_at": None}
+    found = False
+    for path in _candidate_sentinel_paths():
+        try:
+            if not path.exists():
+                continue
+        except OSError:
+            return state
+        except AttributeError:
+            continue
+        found = True
+        with suppress(OSError, ValueError, AttributeError):
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                state = {"reason": raw.get("reason") or None, "engaged_at": raw.get("engaged_at") or None}
+                break
+    return state if found else None
+
+
+def paused_reply() -> Optional[str]:
+    """Short user-facing notice for new gateway turns, or None if not paused."""
+    state = get_state()
+    if state is None:
+        return None
+    tag = f" ({state['reason']})" if state.get("reason") else ""
+    return f"⏸️ Zeloo is paused{tag}. New work is on hold; run `Zeloo resume` to pick things back up."
+
+
+def check_paused(component: str, logger: logging.Logger) -> bool:
+    """Return True when engaged, logging once per engagement per component (re-armed after a resume)."""
+    if not is_engaged():
+        with _log_lock:
+            _logged_components.discard(component)
+        return False
+    with _log_lock:
+        first = component not in _logged_components
+        _logged_components.add(component)
+    if first:
+        reason = (get_state() or {}).get("reason")
+        suffix = f" (reason: {reason})" if reason else ""
+        logger.info(
+            "%s dispatch paused by global emergency stop%s — remove with `Zeloo resume` (%s)",
+            component, suffix, sentinel_path(),
+        )
+    return True
+
+
+# ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----
+# Names external plugins imported from this module before the Sep 2026 decomposition.
+# Internal code MUST NOT use these (scripts/check_compat_pointers.py fails CI if it does).
+# The whole block is removed by reverting the commit that added it.
+import os  # noqa: F401,E402
+# ---- END PLUGIN-COMPAT ----

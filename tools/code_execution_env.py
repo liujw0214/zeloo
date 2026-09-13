@@ -1,520 +1,272 @@
-"""Manage execution environments for code: venv, conda, docker, remote."""
+"""Child-process environment for execute_code: env scrubbing, interpreter and cwd resolution.
 
-from __future__ import annotations
+Both the per-call remote path and the local session kernel build their child
+env through ``_build_child_env`` so the security rules (secret scrubbing,
+PYTHONPATH hygiene, UTF-8 forcing, TZ) cannot drift between them.
+"""
 
-import asyncio
 import logging
 import os
-import shutil
+import platform
 import subprocess
 import sys
-import uuid
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Callable
-
-logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ExecutionResult:
-    """Result of code execution."""
-
-    stdout: str = ""
-    stderr: str = ""
-    returncode: int = 0
-    duration: float = 0.0
-    timed_out: bool = False
-    error: str | None = None
-
-    @property
-    def output(self) -> str:
-        """Combined output."""
-        parts = []
-        if self.stdout:
-            parts.append(self.stdout)
-        if self.stderr:
-            parts.append(self.stderr)
-        return "\n".join(parts) if parts else ""
-
-    @property
-    def success(self) -> bool:
-        """Check if execution succeeded."""
-        return self.returncode == 0 and not self.timed_out and self.error is None
-
-
-class ExecutionEnvironment:
-    """Abstract execution environment."""
-
-    async def setup(self) -> bool:
-        """Set up the execution environment."""
-        raise NotImplementedError
-
-    async def teardown(self) -> None:
-        """Clean up the execution environment."""
-        raise NotImplementedError
-
-    async def run(self, code: str, timeout: float = 30) -> ExecutionResult:
-        """Run code in the environment."""
-        raise NotImplementedError
-
-    async def install(self, package: str) -> bool:
-        """Install a package in the environment."""
-        raise NotImplementedError
-
-
-class VirtualEnvEnvironment(ExecutionEnvironment):
-    """Python virtualenv environment."""
-
-    def __init__(
-        self,
-        venv_path: Path | str,
-        python_version: str = "3.11",
-        timeout: float = 30.0,
-    ) -> None:
-        self.venv_path = Path(venv_path)
-        self.python_version = python_version
-        self.timeout = timeout
-        self._python_exe: Path | None = None
-        self._setup_done: bool = False
-
-    async def setup(self) -> bool:
-        """Create and set up a Python virtual environment."""
-        if self._setup_done:
-            return True
-
-        try:
-            if self.venv_path.exists():
-                shutil.rmtree(self.venv_path)
-
-            self.venv_path.parent.mkdir(parents=True, exist_ok=True)
-
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-m",
-                "venv",
-                str(self.venv_path),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-
-            if proc.returncode != 0:
-                logger.error("Failed to create venv: %s", stderr.decode())
-                return False
-
-            if sys.platform == "win32":
-                self._python_exe = self.venv_path / "Scripts" / "python.exe"
-            else:
-                self._python_exe = self.venv_path / "bin" / "python"
-
-            self._setup_done = True
-            logger.info("VirtualEnv created at %s", self.venv_path)
-            return True
-
-        except Exception as e:
-            logger.exception("Failed to setup VirtualEnv")
-            self.error = f"Setup failed: {e}"
-            return False
-
-    async def teardown(self) -> None:
-        """Remove the virtual environment."""
-        try:
-            if self.venv_path.exists():
-                shutil.rmtree(self.venv_path)
-                logger.info("VirtualEnv removed: %s", self.venv_path)
-        except Exception as e:
-            logger.warning("Failed to remove venv: %s", e)
-
-    async def run(self, code: str, timeout: float = 30) -> ExecutionResult:
-        """Execute Python code in the virtual environment."""
-        if not self._setup_done:
-            success = await self.setup()
-            if not success:
-                return ExecutionResult(
-                    returncode=-1,
-                    error=f"Environment setup failed: {getattr(self, 'error', 'Unknown error')}",
-                )
-
-        if self._python_exe is None:
-            return ExecutionResult(returncode=-1, error="Python executable not found")
-
-        start_time = asyncio.get_event_loop().time()
-        tmp_file = self.venv_path / f"exec_{uuid.uuid4().hex[:8]}.py"
-
-        try:
-            tmp_file.write_text(code, encoding="utf-8")
-
-            process = await asyncio.create_subprocess_exec(
-                str(self._python_exe),
-                str(tmp_file),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=str(self.venv_path),
-            )
-
-            try:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    process.communicate(), timeout=timeout
-                )
-                duration = asyncio.get_event_loop().time() - start_time
-
-                return ExecutionResult(
-                    stdout=stdout_bytes.decode("utf-8", errors="replace"),
-                    stderr=stderr_bytes.decode("utf-8", errors="replace"),
-                    returncode=process.returncode or 0,
-                    duration=duration,
-                )
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-                duration = asyncio.get_event_loop().time() - start_time
-                return ExecutionResult(
-                    returncode=-1,
-                    timed_out=True,
-                    error=f"Execution timed out after {timeout}s",
-                    duration=duration,
-                )
-
-        except Exception as e:
-            duration = asyncio.get_event_loop().time() - start_time
-            return ExecutionResult(
-                returncode=-1, error=f"Execution error: {e}", duration=duration
-            )
-        finally:
-            if tmp_file.exists():
-                try:
-                    tmp_file.unlink()
-                except Exception:
-                    pass
-
-    async def install(self, package: str) -> bool:
-        """Install a package using pip."""
-        if not self._setup_done:
-            await self.setup()
-
-        if self._python_exe is None:
-            return False
-
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                str(self._python_exe),
-                "-m",
-                "pip",
-                "install",
-                package,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-
-            if proc.returncode != 0:
-                logger.error("pip install failed: %s", stderr.decode())
-                return False
-
-            logger.info("Package installed: %s", package)
-            return True
-
-        except Exception as e:
-            logger.exception("Failed to install package")
-            return False
-
-
-class DockerEnvironment(ExecutionEnvironment):
-    """Docker container environment."""
-
-    def __init__(
-        self,
-        image: str = "python:3.11-slim",
-        name: str = "",
-        timeout: float = 30.0,
-    ) -> None:
-        self.image = image
-        self.container_name = name or f"zeloo-exec-{uuid.uuid4().hex[:8]}"
-        self.timeout = timeout
-        self._container_id: str | None = None
-        self._setup_done: bool = False
-
-    async def setup(self) -> bool:
-        """Pull image and create container."""
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "docker",
-                "pull",
-                self.image,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.communicate()
-
-            if proc.returncode != 0:
-                logger.warning("Docker pull failed, continuing anyway")
-
-            proc = await asyncio.create_subprocess_exec(
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                self.container_name,
-                "--rm",
-                self.image,
-                "sleep",
-                "3600",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-
-            if proc.returncode != 0:
-                logger.error("Failed to create container: %s", stderr.decode())
-                return False
-
-            self._container_id = stdout.decode().strip()
-            self._setup_done = True
-            logger.info("Docker container created: %s", self.container_name)
-            return True
-
-        except FileNotFoundError:
-            logger.error("Docker not found in PATH")
-            return False
-        except Exception as e:
-            logger.exception("Docker setup failed")
-            return False
-
-    async def teardown(self) -> None:
-        """Stop and remove the container."""
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "docker",
-                "stop",
-                self.container_name,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.communicate()
-            logger.info("Docker container stopped: %s", self.container_name)
-        except Exception as e:
-            logger.warning("Failed to stop container: %s", e)
-
-    async def run(self, code: str, timeout: float = 30) -> ExecutionResult:
-        """Execute Python code inside the Docker container."""
-        if not self._setup_done:
-            success = await self.setup()
-            if not success:
-                return ExecutionResult(returncode=-1, error="Docker setup failed")
-
-        start_time = asyncio.get_event_loop().time()
-        encoded_code = base64.b64encode(code.encode()).decode()
-
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "docker",
-                "exec",
-                self.container_name,
-                "python",
-                "-c",
-                f"import base64; exec(base64.b64decode('{encoded_code}').decode())",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=timeout
-                )
-                duration = asyncio.get_event_loop().time() - start_time
-
-                return ExecutionResult(
-                    stdout=stdout.decode("utf-8", errors="replace"),
-                    stderr=stderr.decode("utf-8", errors="replace"),
-                    returncode=proc.returncode or 0,
-                    duration=duration,
-                )
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
-                duration = asyncio.get_event_loop().time() - start_time
-                return ExecutionResult(
-                    returncode=-1,
-                    timed_out=True,
-                    error=f"Execution timed out after {timeout}s",
-                    duration=duration,
-                )
-
-        except Exception as e:
-            duration = asyncio.get_event_loop().time() - start_time
-            return ExecutionResult(
-                returncode=-1, error=f"Execution error: {e}", duration=duration
-            )
-
-    async def install(self, package: str) -> bool:
-        """Install a package using pip in the container."""
-        if not self._setup_done:
-            await self.setup()
-
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "docker",
-                "exec",
-                self.container_name,
-                "pip",
-                "install",
-                package,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-
-            if proc.returncode != 0:
-                logger.error("pip install failed: %s", stderr.decode())
-                return False
-
-            return True
-
-        except Exception as e:
-            logger.exception("Failed to install package in container")
-            return False
-
-
-class RemoteEnvironment(ExecutionEnvironment):
-    """Remote execution via SSH."""
-
-    def __init__(
-        self,
-        host: str,
-        user: str,
-        key_path: Path | str | None = None,
-        password: str | None = None,
-        timeout: float = 30.0,
-    ) -> None:
-        self.host = host
-        self.user = user
-        self.key_path = Path(key_path) if key_path else None
-        self.password = password
-        self.timeout = timeout
-        self._connected: bool = False
-
-    async def setup(self) -> bool:
-        """Test SSH connection to remote host."""
-        cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"]
-
-        if self.key_path:
-            cmd.extend(["-i", str(self.key_path)])
-
-        cmd.extend([f"{self.user}@{self.host}", "echo", "connected"])
-
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-
-            if proc.returncode == 0:
-                self._connected = True
-                logger.info("SSH connection established: %s@%s", self.user, self.host)
-                return True
-
-            logger.error("SSH connection failed: %s", stderr.decode())
-            return False
-
-        except FileNotFoundError:
-            logger.error("ssh command not found")
-            return False
-        except Exception as e:
-            logger.exception("SSH setup failed")
-            return False
-
-    async def teardown(self) -> None:
-        """Clean up remote session."""
-        self._connected = False
-        logger.info("Remote session ended")
-
-    async def run(self, code: str, timeout: float = 30) -> ExecutionResult:
-        """Execute Python code on remote host via SSH."""
-        if not self._connected:
-            success = await self.setup()
-            if not success:
-                return ExecutionResult(returncode=-1, error="SSH connection failed")
-
-        start_time = asyncio.get_event_loop().time()
-        encoded_code = base64.b64encode(code.encode()).decode()
-
-        ssh_cmd = ["ssh", "-o", "StrictHostKeyChecking=no"]
-        if self.key_path:
-            ssh_cmd.extend(["-i", str(self.key_path)])
-
-        remote_cmd = (
-            f"python3 -c \"import base64; exec(base64.b64decode('{encoded_code}').decode())\""
+from typing import Dict
+
+# Logger name kept as the origin module's so existing log expectations hold.
+logger = logging.getLogger("tools.code_execution_tool")
+
+_IS_WINDOWS = platform.system() == "Windows"
+
+# Scrub order: secret-substring block first; whatever is left must match a safe
+# prefix, the exact-name ZELOO_ allowlist, or (Windows) an OS-essential name.
+# The broad "zeloo_" prefix is deliberately NOT safe — it leaked config vars
+# without a secret substring (ZELOO_BASE_URL, ZELOO_KANBAN_DB, *_WEBHOOK).
+# ZELOO_RPC_SOCKET / ZELOO_RPC_DIR / TZ / HOME are injected after scrubbing.
+_SAFE_ENV_PREFIXES = ("PATH", "HOME", "USER", "LANG", "LC_", "TERM", "TMPDIR", "TMP", "TEMP", "SHELL",
+                      "LOGNAME", "XDG_", "PYTHONPATH", "VIRTUAL_ENV", "CONDA")
+# "PASS" is intentionally absent: it false-positives on BYPASS_CACHE /
+# COMPASS_DIR / PASSENGER_HOST while PASSWORD/PASSWD already cover credentials.
+_SECRET_SUBSTRINGS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "PASSWD", "AUTH", "DSN",
+                      "WEBHOOK", "CREDS", "BEARER", "APIKEY")
+
+# Non-secret runtime-location flags that repo-root modules a sandbox script
+# imports may read at import time. ZELOO_DELEGATED_CHILD_CONTEXT must ride
+# along or a child that imports Zeloo code loses the Kanban mutation guard
+# while still inheriting ZELOO_HOME.
+_ZELOO_CHILD_ALLOWED = frozenset({
+    "ZELOO_HOME", "ZELOO_PROFILE", "ZELOO_CONFIG", "ZELOO_ENV", "ZELOO_DELEGATED_CHILD_CONTEXT",
+})
+
+# Windows-only: without these the CRT itself fails — socket.socket() raises
+# WinError 10106 (Winsock can't find mswsock.dll) and subprocess can't resolve
+# cmd.exe. Well-known OS paths, not secrets; the substring block still runs.
+_WINDOWS_ESSENTIAL_ENV_VARS = frozenset({
+    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "OS",
+    "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS", "PUBLIC", "ALLUSERSPROFILE",
+    "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432",
+    "APPDATA", "LOCALAPPDATA", "USERPROFILE", "USERDOMAIN", "USERNAME",
+    "HOMEDRIVE", "HOMEPATH", "COMPUTERNAME",
+})
+
+
+def _scrub_child_env(source_env, is_passthrough=None, is_windows=None):
+    """Produce the scrubbed child-process env for execute_code.
+
+    Rules, in order: (1) passthrough vars (skill/config-declared) resolve
+    through the active profile secret scope — an absent scoped value is
+    omitted; (2) secret-substring names are blocked; (3) safe prefixes pass;
+    (4) operational ZELOO_* pass by exact name; (5) on Windows the
+    OS-essential allowlist passes by exact name.
+    """
+    try:
+        from tools.env_passthrough import is_env_passthrough, resolve_passthrough_value
+    except Exception:
+        is_env_passthrough = lambda _: False  # noqa: E731
+        resolve_passthrough_value = lambda _name, _fallback: None  # noqa: E731
+    if is_passthrough is None:
+        is_passthrough = is_env_passthrough
+    if is_windows is None:
+        is_windows = _IS_WINDOWS
+    scrubbed = {}
+    # Non-secret ZELOO_* vars no allowlist admits are dropped on purpose; a script importing a
+    # repo module that reads one would see it silently unset — log the drop, point at the opt-in.
+    _dropped_ZELOO = []
+    for k, v in source_env.items():
+        if is_passthrough(k):
+            resolved = resolve_passthrough_value(k, v)
+            if resolved is not None:
+                scrubbed[k] = resolved
+            continue
+        if any(s in k.upper() for s in _SECRET_SUBSTRINGS):
+            continue
+        if (any(k.startswith(p) for p in _SAFE_ENV_PREFIXES)
+                or k in _ZELOO_CHILD_ALLOWED
+                or (is_windows and k.upper() in _WINDOWS_ESSENTIAL_ENV_VARS)):
+            scrubbed[k] = v
+        elif k.startswith("zeloo_"):
+            _dropped_ZELOO.append(k)
+    if _dropped_ZELOO:
+        logger.debug(
+            "execute_code: dropped %d non-allowlisted ZELOO_* var(s) from the "
+            "sandbox child env (%s). This is intentional hardening (#27303); if "
+            "a sandbox script legitimately needs one, declare it via "
+            "env_passthrough in the skill/config so it passes by explicit opt-in.",
+            len(_dropped_ZELOO), ", ".join(sorted(_dropped_ZELOO)),
         )
-        ssh_cmd.extend([f"{self.user}@{self.host}", remote_cmd])
+    # delegate_task children are marked by a ContextVar, not os.environ, and the sandbox crosses
+    # a process boundary: strip dispatcher-owned Kanban vars AFTER the scrub so an explicit
+    # passthrough cannot re-grant a delegated child the parent's board mutation capability.
+    from agent.delegation_context import (
+        DELEGATED_CHILD_ENV_MARKER, delegated_child_subprocess_env,
+    )
+    scoped = delegated_child_subprocess_env(source_env)
+    # Preserve location only when carrying the descendant fence, not for arbitrary
+    # non-allowlisted ZELOO_* values in otherwise ordinary execution environments.
+    if scoped.get(DELEGATED_CHILD_ENV_MARKER):
+        for key in (DELEGATED_CHILD_ENV_MARKER, "ZELOO_KANBAN_DB", "ZELOO_KANBAN_BOARD"):
+            if key in scoped:
+                scrubbed[key] = scoped[key]
+    return delegated_child_subprocess_env(scrubbed)
 
+
+def _build_child_env(*, rpc_endpoint: str, rpc_token: str, tmpdir: str,
+                     child_python: str) -> Dict[str, str]:
+    """Build the scrubbed child environment both execution paths share."""
+    from zeloo_constants import apply_subprocess_home_env
+    child_env = _scrub_child_env(os.environ)
+    child_env["ZELOO_RPC_SOCKET"] = rpc_endpoint
+    child_env["ZELOO_RPC_TOKEN"] = rpc_token
+    child_env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # Force UTF-8 stdio and default file encoding: on Windows sys.stdout is bound to the console
+    # code page (cp1252) and print("→") raises; harmless under a C/POSIX locale (containers).
+    child_env["PYTHONIOENCODING"] = "utf-8"
+    child_env["PYTHONUTF8"] = "1"
+    # Only TZ reaches the child; ZELOO_TIMEZONE is an internal setting (and under the multiplexed
+    # gateway holds only the default profile's value — zeloo_time resolves the routed profile's).
+    from zeloo_time import get_timezone_name
+
+    _tz_name = get_timezone_name()
+    if _tz_name:
+        child_env["TZ"] = _tz_name
+    child_env.pop("ZELOO_TIMEZONE", None)
+    apply_subprocess_home_env(child_env)
+    # PYTHONPATH: the staging dir (zeloo_tools.py) must always be importable even when project
+    # mode changes CWD. Zeloo's root is added ONLY when the child runs in Zeloo's Python env —
+    # exposing Zeloo's site-packages to an external interpreter can mix incompatible compiled
+    # extensions (3.12 NumPy under a 3.9 venv). Inherited Zeloo-owned entries are stripped first.
+    # Before re-injecting PYTHONPATH, strip Zeloo-owned entries that leaked through _scrub_child_env
+    # (PYTHONPATH is in _SAFE_ENV_PREFIXES so it passes the scrub). They are redundant for same-Zeloo-
+    # environment children and may be incompatible with external interpreters (project mode can select a
+    # different venv), so they must not shadow or poison the child's sys.path (#74817).
+    from tools.environments.local_pythonpath import _strip_zeloo_owned_pythonpath
+    _strip_zeloo_owned_pythonpath(child_env)
+    _existing_pp = child_env.get("PYTHONPATH", "")
+    _pp_parts = [tmpdir]
+    if _uses_zeloo_python_environment(child_python):
+        _pp_parts.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    elif child_python not in _external_env_logged:
+        # Surface once per interpreter so "import zeloo_constants fails" is diagnosable.
+        _external_env_logged.add(child_python)
+        logger.info("execute_code: child interpreter %s is outside the Zeloo "
+                    "environment; Zeloo root omitted from PYTHONPATH", child_python)
+    if _existing_pp:
+        _pp_parts.append(_existing_pp)
+    child_env["PYTHONPATH"] = os.pathsep.join(_pp_parts)
+    return child_env
+
+
+# Interpreter-probe caches: success-only dicts (FIFO-evicted at the cap) rather than lru_cache —
+# a transient probe failure (fork pressure, 5s timeout) must not stick for the process lifetime.
+_PROBE_CACHE_MAX = 32
+_usable_python_cache: dict = {}
+_python_prefix_cache: dict = {}
+
+# Interpreter paths already reported as outside the Zeloo environment.
+_external_env_logged: set = set()
+
+
+def _cache_probe_result(cache: dict, key: str, value):
+    """Insert into a bounded probe cache, FIFO-evicting at the cap."""
+    if len(cache) >= _PROBE_CACHE_MAX:
+        cache.pop(next(iter(cache)))
+    cache[key] = value
+
+
+def _probe_python(python_path: str, code: str, *, text: bool = False):
+    """Run ``python_path -c code``; None if missing, unspawnable, or past the 5s timeout."""
+    try:
+        from agent.delegation_context import delegated_child_subprocess_env
+        return subprocess.run(
+            [python_path, "-c", code], timeout=5, capture_output=True, text=text,
+            creationflags=subprocess.CREATE_NO_WINDOW if _IS_WINDOWS else 0,
+            stdin=subprocess.DEVNULL, env=delegated_child_subprocess_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
+        return None
+
+
+def _is_usable_python(python_path: str) -> bool:
+    """Whether the interpreter is Python 3.8+ (what the RPC stubs need); success cached, failure retried."""
+    cached = _usable_python_cache.get(python_path)
+    if cached is not None:
+        return cached
+    result = _probe_python(python_path, "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)")
+    if result is None:
+        return False
+    usable = result.returncode == 0
+    _cache_probe_result(_usable_python_cache, python_path, usable)
+    return usable
+
+
+def _python_environment_prefix(python_path: str) -> str:
+    """Resolved ``sys.prefix`` reported by *python_path* ("" on failure; failures are not cached)."""
+    cached = _python_prefix_cache.get(python_path)
+    if cached is not None:
+        return cached
+    result = _probe_python(python_path, "import sys; print(sys.prefix)", text=True)
+    if result is not None and result.returncode == 0 and result.stdout.strip():
+        prefix = os.path.realpath(result.stdout.strip())
+        _cache_probe_result(_python_prefix_cache, python_path, prefix)
+        return prefix
+    return ""
+
+
+def _uses_zeloo_python_environment(python_path: str) -> bool:
+    """Whether *python_path* belongs to Zeloo's active Python environment. Short-circuits when
+    it IS the running interpreter (by path or realpath — covers ``uv run`` venvs) so no probe
+    runs on the default strict path and a flaky probe can never drop the Zeloo root."""
+    if python_path == sys.executable or os.path.realpath(python_path) == os.path.realpath(sys.executable):
+        return True
+    return _python_environment_prefix(python_path) == os.path.realpath(sys.prefix)
+
+
+def _resolve_child_python(mode: str) -> str:
+    """Child interpreter: ``sys.executable`` in strict mode; in project mode the active
+    VIRTUAL_ENV/CONDA_PREFIX python if it exists and passes the 3.8+ probe, else ``sys.executable``."""
+    if mode != "project":
+        return sys.executable
+    subdir, exe_names = ("Scripts", ("python.exe", "python3.exe")) if _IS_WINDOWS else ("bin", ("python", "python3"))
+    for var in ("VIRTUAL_ENV", "CONDA_PREFIX"):
+        root = os.environ.get(var, "").strip()
+        for exe in exe_names if root else ():
+            candidate = os.path.join(root, subdir, exe)
+            if not (os.path.isfile(candidate) and os.access(candidate, os.X_OK)):
+                continue
+            if _is_usable_python(candidate):
+                return candidate
+            logger.info("execute_code: skipping %s=%s (Python version < 3.8 or broken). "
+                        "Using sys.executable instead.", var, candidate)
+            return sys.executable
+    return sys.executable
+
+
+def _resolve_child_cwd(mode: str, staging_dir: str, task_id: str = "") -> str:
+    """Child cwd. Strict: the staging dir. Project mirrors the terminal/file-tool ladder so every
+    file-writing path agrees: session cwd record (`cd` state) → registered ``session.cwd.set``
+    override → TERMINAL_CWD → os.getcwd() → staging dir (never Popen on a missing cwd).
+
+    (#56047)
+    """
+    if mode != "project":
+        return staging_dir
+    if task_id:
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *ssh_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=timeout
-                )
-                duration = asyncio.get_event_loop().time() - start_time
-
-                return ExecutionResult(
-                    stdout=stdout.decode("utf-8", errors="replace"),
-                    stderr=stderr.decode("utf-8", errors="replace"),
-                    returncode=proc.returncode or 0,
-                    duration=duration,
-                )
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
-                duration = asyncio.get_event_loop().time() - start_time
-                return ExecutionResult(
-                    returncode=-1,
-                    timed_out=True,
-                    error=f"Execution timed out after {timeout}s",
-                    duration=duration,
-                )
-
-        except Exception as e:
-            duration = asyncio.get_event_loop().time() - start_time
-            return ExecutionResult(
-                returncode=-1, error=f"Execution error: {e}", duration=duration
-            )
-
-    async def install(self, package: str) -> bool:
-        """Install a package on remote host."""
-        if not self._connected:
-            await self.setup()
-
-        ssh_cmd = ["ssh", "-o", "StrictHostKeyChecking=no"]
-        if self.key_path:
-            ssh_cmd.extend(["-i", str(self.key_path)])
-
-        remote_cmd = f"pip3 install {package}"
-        ssh_cmd.extend([f"{self.user}@{self.host}", remote_cmd])
-
+            from tools.terminal_tool import get_session_cwd
+            recorded = get_session_cwd(task_id)
+        except Exception:
+            recorded = None
+        if recorded and os.path.isdir(recorded):
+            return recorded
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *ssh_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-
-            if proc.returncode != 0:
-                logger.error("Remote pip install failed: %s", stderr.decode())
-                return False
-
-            return True
-
-        except Exception as e:
-            logger.exception("Failed to install package remotely")
-            return False
-
-
-import base64
+            from tools.file_tools_paths import _registered_task_cwd_override
+            session_cwd = _registered_task_cwd_override(task_id)
+        except Exception:
+            session_cwd = None
+        if session_cwd and os.path.isdir(session_cwd):
+            return session_cwd
+    from agent.runtime_cwd import scope_terminal_cwd
+    raw = scope_terminal_cwd().strip()
+    for candidate in (os.path.expanduser(raw) if raw else "", os.getcwd()):
+        if candidate and os.path.isdir(candidate):
+            return candidate
+    return staging_dir

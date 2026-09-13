@@ -1,468 +1,204 @@
-"""审批底线规则和例外
+"""Pre-gate floors for :mod:`tools.approval`: decisions that never reach a prompt.
 
-定义安全命令白名单和高风险命令黑名单，用于快速判断命令是否需要审批。
-
-白名单（永久允许）：
-- 只读命令：ls, cat, grep 等
-- 信息查询命令：pwd, whoami, date 等
-
-黑名单（直接拒绝）：
-- 不可恢复的破坏性操作
-- 恶意代码模式
+Unconditional blocks (hardline, ``sudo -S`` password piping, the user's own
+``approvals.deny`` globs) and the permanent command allowlist match. All of
+them run BEFORE yolo / ``approvals.mode: off`` / cron approve-mode; the
+allowlist runs after. Session state stays in ``tools.approval`` and is read
+through it at call time.
 """
 
-from __future__ import annotations
-
+import contextlib
+import fnmatch
 import logging
-import os
 import re
-import threading
-from typing import TYPE_CHECKING
+import time
+import uuid
+from tools import approval_context as _ctx
+from tools.approval_detection import (
+    _MALFORMED_EXEC_DESCRIPTION, _PARSER_LIMIT_DESCRIPTION, _deny_command_variants)
 
-if TYPE_CHECKING:
-    pass
-
-logger = logging.getLogger(__name__)
-
-SAFE_COMMANDS: frozenset[str] = frozenset({
-    "ls",
-    "ll",
-    "dir",
-    "pwd",
-    "echo",
-    "printf",
-    "cat",
-    "head",
-    "tail",
-    "less",
-    "more",
-    "grep",
-    "egrep",
-    "fgrep",
-    "rg",
-    "find",
-    "wc",
-    "sort",
-    "uniq",
-    "cut",
-    "tr",
-    "stat",
-    "file",
-    "date",
-    "time",
-    "whoami",
-    "id",
-    "hostname",
-    "uname",
-    "env",
-    "printenv",
-    "ps",
-    "pgrep",
-    "which",
-    "where",
-    "command",
-    "man",
-    "help",
-    "--help",
-    "-h",
-    "df",
-    "du",
-    "free",
-    "top",
-    "htop",
-    "tree",
-    "xdg-open",
-    "open",
-    "code",
-    "nano",
-    "vim",
-    "vi",
-    "emacs",
-    "nano",
-    "less",
-    "more",
-    "watch",
-    "diff",
-    "cmp",
-    "md5sum",
-    "sha256sum",
-    "sha1sum",
-    "base64",
-    "xxd",
-    "hexdump",
-    "od",
-    "strings",
-    "jq",
-    "yq",
-    "python",
-    "python3",
-    "node",
-    "ruby",
-    "perl",
-    "php",
-    "lua",
-    "lua5",
-    "Rscript",
-})
-
-SAFE_PREFIXES: tuple[str, ...] = (
-    "ls ",
-    "ls -",
-    "ll ",
-    "ll -",
-    "dir ",
-    "pwd",
-    "echo ",
-    "printf ",
-    "cat ",
-    "head ",
-    "tail ",
-    "less ",
-    "more ",
-    "grep ",
-    "egrep ",
-    "fgrep ",
-    "rg ",
-    "find ",
-    "wc ",
-    "sort ",
-    "uniq ",
-    "cut ",
-    "tr ",
-    "stat ",
-    "file ",
-    "date",
-    "time ",
-    "whoami",
-    "id",
-    "hostname",
-    "uname",
-    "env",
-    "printenv",
-    "ps ",
-    "pgrep ",
-    "which ",
-    "where ",
-    "command ",
-    "man ",
-    "help",
-    "--help",
-    "-h",
-    "df ",
-    "du ",
-    "free",
-    "top",
-    "htop",
-    "tree ",
-    "python ",
-    "python3 ",
-    "node ",
-    "ruby ",
-    "perl ",
-    "php ",
-    "jq ",
-    "yq ",
-)
-
-BLOCKED_COMMANDS: tuple[str, ...] = (
-    r"rm\s+-rf\s+/\s*$",
-    r"rm\s+-rf\s+/\*\s*$",
-    r"rm\s+-rf\s+\*\s*$",
-    r":\(\)\{.*:\|.*:&\};:",
-    r":\(\)\{.*:;.*:&\};:",
-    r"fork\s*\(\s*\)\s*;.*fork",
-    r"while\s+true\s+;do\s+fork",
-)
-
-BLOCKED_COMPILED = [re.compile(pattern, re.IGNORECASE) for pattern in BLOCKED_COMMANDS]
-
-_lock = threading.Lock()
-_user_deny_rules: list[str] = []
-_user_allow_rules: list[str] = []
-_user_allow_compiled: list[re.Pattern[str]] = []
-_user_deny_compiled: list[re.Pattern[str]] = []
+logger = logging.getLogger("tools.approval")
 
 
-def is_permanent_allowlisted(command: str) -> bool:
-    """检查命令是否在永久白名单中
-
-    白名单检查基于命令的基础名称，不考虑参数。
-
-    Args:
-        command: 待检查的命令
-
-    Returns:
-        True 如果命令在白名单中
-    """
-    if not command or not command.strip():
-        return False
-
-    normalized = command.strip().split()[0] if command.strip() else ""
-
-    normalized = normalized.rsplit("/", 1)[-1] if "/" in normalized else normalized
-    normalized = normalized.lstrip("-") if normalized.startswith("-") else normalized
-
-    if normalized in SAFE_COMMANDS:
-        return True
-
-    for prefix in SAFE_PREFIXES:
-        if command.startswith(prefix):
-            return True
-
-    return False
-
-
-def is_blocked(command: str) -> bool:
-    """检查命令是否在黑名单中
-
-    黑名单使用正则表达式匹配，不可绕过的危险命令直接拒绝。
-
-    Args:
-        command: 待检查的命令
-
-    Returns:
-        True 如果命令在黑名单中
-    """
-    if not command or not command.strip():
-        return False
-
-    for pattern in BLOCKED_COMPILED:
-        if pattern.search(command):
-            logger.warning("Command blocked by blacklist: %s", command[:50])
-            return True
-
-    with _lock:
-        for pattern in _user_deny_compiled:
-            if pattern.search(command):
-                logger.warning("Command blocked by user deny rule: %s", command[:50])
-                return True
-
-    return False
-
-
-def matches_user_deny_rule(command: str, rules: list[str]) -> bool:
-    """匹配用户定义的拒绝规则
-
-    Args:
-        command: 待检查的命令
-        rules: 拒绝规则列表
-
-    Returns:
-        True 如果命令匹配任何拒绝规则
-    """
-    for rule in rules:
-        try:
-            if re.search(rule, command, re.IGNORECASE):
-                logger.debug("Command matched deny rule: %s", rule)
-                return True
-        except re.error as e:
-            logger.error("Invalid deny rule pattern: %s - %s", rule, e)
-    return False
-
-
-def matches_user_allow_rule(command: str, rules: list[str]) -> bool:
-    """匹配用户定义的允许规则
-
-    Args:
-        command: 待检查的命令
-        rules: 允许规则列表
-
-    Returns:
-        True 如果命令匹配任何允许规则
-    """
-    for rule in rules:
-        try:
-            if re.search(rule, command, re.IGNORECASE):
-                logger.debug("Command matched allow rule: %s", rule)
-                return True
-        except re.error as e:
-            logger.error("Invalid allow rule pattern: %s - %s", rule, e)
-    return False
-
-
-def add_user_deny_rule(rule: str) -> None:
-    """添加用户拒绝规则
-
-    Args:
-        rule: 正则表达式规则
-    """
-    with _lock:
-        try:
-            compiled = re.compile(rule, re.IGNORECASE)
-            _user_deny_rules.append(rule)
-            _user_deny_compiled.append(compiled)
-            logger.info("Added user deny rule: %s", rule)
-        except re.error as e:
-            logger.error("Invalid deny rule pattern: %s - %s", rule, e)
-
-
-def add_user_allow_rule(rule: str) -> None:
-    """添加用户允许规则
-
-    Args:
-        rule: 正则表达式规则
-    """
-    with _lock:
-        try:
-            compiled = re.compile(rule, re.IGNORECASE)
-            _user_allow_rules.append(rule)
-            _user_allow_compiled.append(compiled)
-            logger.info("Added user allow rule: %s", rule)
-        except re.error as e:
-            logger.error("Invalid allow rule pattern: %s - %s", rule, e)
-
-
-def clear_user_rules() -> None:
-    """清除所有用户定义的规则"""
-    with _lock:
-        _user_deny_rules.clear()
-        _user_deny_compiled.clear()
-        _user_allow_rules.clear()
-        _user_allow_compiled.clear()
-        logger.info("Cleared all user-defined rules")
-
-
-def get_user_rules() -> dict[str, list[str]]:
-    """获取用户定义的规则
-
-    Returns:
-        包含 allow 和 deny 规则的字典
-    """
-    with _lock:
-        return {
-            "allow": list(_user_allow_rules),
-            "deny": list(_user_deny_rules),
-        }
-
-
-def _load_rules_from_config() -> None:
-    """从配置文件加载规则"""
+def _match_user_deny_rule(command: str) -> str | None:
+    """Return the matching ``approvals.deny`` glob, or None. User-defined fnmatch
+    globs that block unconditionally — like the hardline floor, a match fires
+    BEFORE the yolo / mode=off bypass ("never let the agent run this, even under
+    yolo"). Case-insensitive, run over the same normalized/deobfuscated variants
+    the dangerous-pattern detector uses so quoting tricks (``r\\m``,
+    ``git st""atus``) can't sidestep a rule."""
     try:
-        zeloo_home = os.environ.get("ZELOO_HOME", os.path.expanduser("~/.Zeloo"))
-        config_path = os.path.join(zeloo_home, "config.yaml")
-
-        if not os.path.exists(config_path):
-            return
-
-        import yaml
-
-        with open(config_path, encoding="utf-8") as f:
-            config = yaml.safe_load(f) or {}
-
-        approvals = config.get("approvals", {})
-        if not isinstance(approvals, dict):
-            return
-
-        deny_rules = approvals.get("deny_rules", [])
-        if isinstance(deny_rules, list):
-            for rule in deny_rules:
-                if isinstance(rule, str):
-                    add_user_deny_rule(rule)
-
-        allow_rules = approvals.get("allow_rules", [])
-        if isinstance(allow_rules, list):
-            for rule in allow_rules:
-                if isinstance(rule, str):
-                    add_user_allow_rule(rule)
-
-        logger.debug("Loaded %d deny rules and %d allow rules from config",
-                     len(deny_rules), len(allow_rules))
-
-    except Exception as e:
-        logger.warning("Failed to load rules from config: %s", e)
+        deny_patterns = _ctx._get_approval_config().get("deny") or []
+    except Exception:
+        return None
+    globs = [p.strip() for p in deny_patterns if isinstance(p, str) and p.strip()]
+    if not globs:
+        return None
+    for command_variant in _deny_command_variants(command):
+        candidate = command_variant.lower().strip()
+        for pattern in globs:
+            if fnmatch.fnmatchcase(candidate, pattern.lower()):
+                return pattern
+    return None
 
 
-def is_command_safe(command: str, check_user_rules: bool = True) -> tuple[bool, str]:
-    """综合判断命令是否安全
-
-    综合检查白名单、黑名单和用户规则。
-
-    Args:
-        command: 待检查的命令
-        check_user_rules: 是否检查用户规则
-
-    Returns:
-        (是否安全, 原因描述)
-    """
-    if not command or not command.strip():
-        return False, "empty_command"
-
-    if is_blocked(command):
-        return False, "blocked_by_blacklist"
-
-    if is_permanent_allowlisted(command):
-        return True, "in_whitelist"
-
-    if check_user_rules:
-        with _lock:
-            for pattern in _user_deny_compiled:
-                if pattern.search(command):
-                    return False, "matched_user_deny_rule"
-
-            for pattern in _user_allow_compiled:
-                if pattern.search(command):
-                    return True, "matched_user_allow_rule"
-
-    return False, "not_in_whitelist"
+def _user_deny_block_result(pattern: str) -> dict:
+    """Build the standard block result for an ``approvals.deny`` match."""
+    return {"approved": False, "user_deny": True, "message": (
+        f"BLOCKED: this command matches the user-defined deny rule "
+        f"'{pattern}' (approvals.deny in config.yaml). It cannot be "
+        "executed via the agent — not even with --yolo, /yolo, or "
+        "approvals.mode=off. Do NOT retry or rephrase this command; the user has explicitly forbidden it.")}
 
 
-def get_safe_command_hint(command: str) -> str:
-    """获取安全命令提示
-
-    当命令不在白名单时，提供替代建议。
-
-    Args:
-        command: 原始命令
-
-    Returns:
-        建议或提示字符串
-    """
-    if is_permanent_allowlisted(command):
-        return ""
-
-    base_cmd = command.strip().split()[0] if command.strip() else ""
-
-    if base_cmd in ("rm", "del", "delete"):
-        return "考虑使用 safe_delete 或先备份文件"
-    if base_cmd in ("chmod", "chown"):
-        return "检查权限设置是否正确，避免 777 或 666"
-    if base_cmd in ("sudo", "su"):
-        return "确认命令的必要性和安全性"
-
-    return "此命令不在白名单中，可能需要审批"
-
-
-def get_blocked_reason(command: str) -> str:
-    """获取命令被阻止的原因
-
-    Args:
-        command: 被阻止的命令
-
-    Returns:
-        阻止原因描述
-    """
-    if not command:
-        return "empty_command"
-
-    for pattern in BLOCKED_COMPILED:
-        match = pattern.search(command)
-        if match:
-            return f"blocked_by_pattern: {pattern.pattern[:30]}..."
-
-    with _lock:
-        for pattern in _user_deny_compiled:
-            match = pattern.search(command)
-            if match:
-                return f"matched_user_deny: {pattern.pattern[:30]}..."
-
-    return "unknown_reason"
+def _save_blocked_payload(command: str) -> str | None:
+    """Persist a parser-limit-blocked command as a runnable script. That block
+    fires on payload SIZE/shape, not the operation — usually a legitimate script
+    the model inlined. Saving it makes recovery one turn (`bash <file>`) instead
+    of two, and is strictly safer than the hint-only path: the file goes through
+    the normal execution pipeline (including the referenced-script content guard)
+    and nothing runs here. Returns the path, or None on any failure (hint falls
+    back to write_file)."""
+    try:
+        from zeloo_constants import get_zeloo_home
+        script_dir = get_zeloo_home() / "cache" / "blocked-scripts"
+        script_dir.mkdir(parents=True, exist_ok=True)
+        # Opportunistic cleanup: blocked payloads older than 7 days.
+        cutoff = time.time() - 7 * 86400
+        for old in script_dir.glob("blocked-*.sh"):
+            with contextlib.suppress(OSError):
+                if old.stat().st_mtime < cutoff:
+                    old.unlink()
+        path = script_dir / f"blocked-{int(time.time())}-{uuid.uuid4().hex[:8]}.sh"
+        path.write_text(
+            "#!/bin/bash\n"
+            "# Auto-saved by Zeloo: this command exceeded the inline command\n"
+            "# parser limit and was blocked from direct execution. Review it,\n"
+            f"# then run it via: bash {path}\n" + command + ("" if command.endswith("\n") else "\n"),
+            # Force UTF-8 + lossy decode so non-UTF-8 child output can't crash the gateway thread on
+            # locale-mismatched Windows (#53137).
+            # Force UTF-8 + lossy decode so non-UTF-8 child output can't crash the gateway thread on
+            # locale-mismatched Windows (#53137).
+            # Force UTF-8 + lossy decode so non-UTF-8 child output can't crash the gateway thread on
+            # locale-mismatched Windows (#53137).
+            encoding="utf-8", errors="replace",
+        )
+        return str(path)
+    except Exception:
+        logger.debug("failed to save blocked payload", exc_info=True)
+        return None
 
 
-def reload_rules() -> None:
-    """重新加载规则（清除并重新从配置读取）"""
-    clear_user_rules()
-    _load_rules_from_config()
-    logger.info("Rules reloaded")
+_RECOVERY_PREFIX = (
+    " RECOVERY: this block fires on oversized/unparseable inline "
+    "command payloads (heredocs, giant one-liners), not on the operation itself. "
+)
 
 
-_load_rules_from_config()
+def _hardline_block_result(description: str, command: str = "") -> dict:
+    """Build the standard block result for a hardline match."""
+    message = (
+        f"BLOCKED (hardline): {description}. "
+        "This command is on the unconditional blocklist and cannot "
+        "be executed via the agent — not even with --yolo, /yolo, "
+        "approvals.mode=off, or cron approve mode. If you genuinely "
+        "need to run it, run it yourself in a terminal outside the agent."
+    )
+    # The parser-limit block is almost always a giant inline payload, not a forbidden operation, and is typically
+    # followed by blind rephrase retries — point at the saved script (or the write_file recipe).
+    if description in (_PARSER_LIMIT_DESCRIPTION, _MALFORMED_EXEC_DESCRIPTION):
+        saved = _save_blocked_payload(command) if command else None
+        if saved:
+            message += _RECOVERY_PREFIX + (
+                f"Your command was saved to {saved} — review it, then run: terminal(command=\"bash {saved}\"). "
+                "Do not retry inline."
+            )
+        else:
+            message += _RECOVERY_PREFIX + (
+                "Write the script to a file with write_file, "
+                "then run it: terminal(command=\"bash /path/script.sh\") or "
+                "\"python3 /path/script.py\". Do not retry inline."
+            )
+    return {"approved": False, "hardline": True, "message": message}
+
+
+def _sudo_stdin_block_result(description: str) -> dict:
+    """Build the standard block result for sudo stdin guard."""
+    return {"approved": False, "message": (
+        f"BLOCKED: {description}. "
+        "Do not pipe passwords to 'sudo -S' — this is a brute-force "
+        "attack vector. Set SUDO_PASSWORD in your .env file if the "
+        "agent needs passwordless sudo, or run the sudo command manually in your own terminal.")}
+
+
+# Shell control characters that make a command compound when they appear OUTSIDE quotes. Inside quotes they are
+# literal to the outer shell — but they become executable again if an option like `-c`/`-e`/`--eval` (or a git `-c
+# alias.x=!...`) hands the quoted argument to another interpreter, so quoted control chars only disqualify a command
+# when such an option is present.
+# Port of can1357/oh-my-pi#7553.
+_SHELL_CONTROL_CHARS = frozenset("\n\r;&|<>`$()")
+
+_REINTERPRETED_ARGUMENT_RE = re.compile(r"(?:^|[ \t])(?:-[^-\s]*[ce]|--(?:command|eval))(?:[= \t]|$)")
+
+
+def _has_allowlist_shell_operator(command: str) -> bool:
+    """Return True when a command is too compound for the allowlist shortcut.
+    Quote-aware: metacharacters inside quotes or behind a backslash are literal
+    arguments (``cargo bench -- '^a(b|c)$'``), not shell syntax. Still
+    disqualifying: ``$`` or backtick inside DOUBLE quotes (expansion stays
+    active), and any quoted/escaped control character when the command also
+    carries a ``-c``/``-e``/``--command``/``--eval``-style option that would
+    hand the quoted text to another interpreter."""
+    command = command or ""
+    quote = None  # None | "'" | '"'
+    has_reinterpretable = False
+    i = 0
+    n = len(command)
+    while i < n:
+        ch = command[i]
+        if ch == "\\" and quote != "'":
+            nxt = command[i + 1] if i + 1 < n else ""
+            if nxt in _SHELL_CONTROL_CHARS:
+                has_reinterpretable = True
+            i += 2
+            continue
+        if quote is not None:
+            if ch == quote:
+                quote = None
+            elif quote == '"' and ch in ("`", "$"):
+                return True  # expansion is active inside double quotes
+            elif ch in _SHELL_CONTROL_CHARS:
+                has_reinterpretable = True
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "$":
+            # Unquoted $ is only compound when it opens a substitution ("$HOME"
+            # stays simple, matching the historical `\$\(` behavior).
+            if i + 1 < n and command[i + 1] == "(":
+                return True
+        elif ch in _SHELL_CONTROL_CHARS and ch not in "()":
+            return True
+        i += 1
+    # An unterminated quote means we can't reason about the command shape.
+    if quote is not None:
+        return True
+    return has_reinterpretable and bool(_REINTERPRETED_ARGUMENT_RE.search(command))
+
+
+def _command_matches_permanent_allowlist(command: str) -> bool:
+    """True when command_allowlist holds this exact command text or a matching
+    glob. Permanent approvals historically store dangerous-pattern keys such as
+    ``recursive delete``; manual entries are command text, possibly with
+    shell-style wildcards like ``podman *``."""
+    from tools import approval as _a
+    command = (command or "").strip()
+    if not command or _has_allowlist_shell_operator(command):
+        return False
+    with _a._lock:
+        patterns = tuple(_a._permanent_approved)
+    for pattern in patterns:
+        pattern = pattern.strip() if isinstance(pattern, str) else ""
+        if pattern and (command == pattern or (any(ch in pattern for ch in "*?[")
+                                               and fnmatch.fnmatchcase(command, pattern))):
+            return True
+    return False

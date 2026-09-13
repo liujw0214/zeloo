@@ -1,52 +1,45 @@
-﻿# Zeloo Documentation Site
+# Website
 
-This directory contains the Docusaurus-based documentation site for Zeloo.
+This website is built using [Docusaurus](https://docusaurus.io/), a modern static website generator.
 
-## Local development
-
-```bash
-cd website
-npm install
-npm start
-```
-
-Open <http://localhost:3000> in your browser.
-
-## Build for production
+## Installation
 
 ```bash
-npm run build
-npm run serve
+yarn
 ```
 
-## Structure
+## Local Development
 
-```
-website/
-├── docs/                 # Documentation markdown files
-│   ├── intro.md
-│   ├── getting-started/
-│   ├── architecture/
-│   └── modules/
-├── src/                  # Custom React components (add when needed)
-├── static/               # Static assets (images, favicons)
-├── docusaurus.config.ts  # Site configuration
-├── sidebars.ts           # Sidebar structure
-└── package.json
+```bash
+yarn start
 ```
 
-## Adding a new page
+This command starts a local development server and opens up a browser window. Most changes are reflected live without having to restart the server.
 
-1. Create a new `.md` file in `docs/` with frontmatter:
+## Build
 
-   ```yaml
-   ---
-   id: my-page
-   title: My Page
-   sidebar_label: My Page
-   ---
-   ```
+```bash
+yarn build
+```
 
-2. Register it in `sidebars.ts` under the appropriate category.
+This command generates static content into the `build` directory and can be served using any static contents hosting service.
 
-3. Restart the dev server.
+## Deployment
+
+Using SSH:
+
+```bash
+USE_SSH=true yarn deploy
+```
+
+Not using SSH:
+
+```bash
+GIT_USER=<Your GitHub username> yarn deploy
+```
+
+If you are using GitHub pages for hosting, this command is a convenient way to build the website and push to the `gh-pages` branch.
+
+## Diagram Linting
+
+CI runs `ascii-guard` to lint docs for ASCII box diagrams. Use Mermaid (````mermaid`) or plain lists/tables instead of ASCII boxes to avoid CI failures.

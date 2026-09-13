@@ -1,357 +1,122 @@
-"""High-level task management: create, track, cancel, resume delegated tasks."""
+"""delegate_task input validation: tasks=[...] / legacy goal normalisation and per-task output schemas."""
 
 from __future__ import annotations
 
-import asyncio
 import json
-import logging
-import time
-import uuid
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
-from typing import Any
+import re
+from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+# Placeholder shapes for batch goal validation: bare 'TODO' / 'task N' labels, or unexpanded template markers. The
+# marker regex is deliberately NARROW — only snake_case / space-separated placeholder identifiers (`<feature_name>`,
+# `{file path}`, `<FEATURE-NAME>`), the shape LLM templates leave behind. Bare single-word brackets must never be
+# rejected: legitimate goals are full of generics (`Vec<T>`), HTML tags (`<div>`), dict snippets (`{"key": 1}`), glob
+# braces (`{a,b}`) and f-string style (`{i}`).
+# See #81141.
+_PLACEHOLDER_GOAL_RE = re.compile(r"^(todo|task\s*\d+)$", re.IGNORECASE)
+_TEMPLATE_MARKER_RE = re.compile(
+    r"<[A-Za-z][A-Za-z0-9]*(?:[ _-][A-Za-z0-9]+)+>|\{[A-Za-z][A-Za-z0-9]*(?:[ _-][A-Za-z0-9]+)+\}"
+)
+_MIN_BATCH_GOAL_LEN = 10
 
+def _recover_tasks_from_json_string(tasks: Any) -> tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+    """``(parsed_list, None)`` for a JSON-array string, ``(None, error)`` for a bad string, ``(None, None)`` otherwise."""
+    if not isinstance(tasks, str):
+        return None, None
+    raw = tasks.strip()
+    if not raw:
+        return None, "Provide either 'goal' (single task) or 'tasks' (batch)."
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return None, f"tasks must be a JSON array of task objects; received a string that could not be parsed as JSON ({exc.msg})."
+    if not isinstance(parsed, list):
+        return None, f"tasks must be a JSON array of task objects; parsed {type(parsed).__name__} instead."
+    return parsed, None
 
-@dataclass
-class DelegatedTask:
-    """A delegated task with full lifecycle information."""
+def _validate_batch_tasks(task_list: List[Dict[str, Any]]) -> Optional[str]:
+    """Batch-only quality gate beyond per-task goal presence; actionable error or None. No minimum count: a one-entry
+    array is the canonical single-task shape (legacy top-level `goal` is wrapped into one). Duplicate goals are
+    deliberately NOT rejected — identical-goal fan-outs (best-of-N / ensemble sampling) are legitimate and blocking
+    them broke real workflows. The too-short check applies only to multi-task fan-outs (terse goals there are
+    usually unexpanded templates); a SINGLE task legitimately uses short goals ("Fix the tests").
 
-    task_id: str
-    task_type: str
-    params: dict[str, Any]
-    config: Any
-    submitted_at: float
-    status: str
-    result: Any = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary representation."""
-        return {
-            "task_id": self.task_id,
-            "task_type": self.task_type,
-            "params": self.params,
-            "submitted_at": self.submitted_at,
-            "status": self.status,
-            "result": self.result.to_dict() if hasattr(self.result, "to_dict") else self.result,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> DelegatedTask:
-        """Create from dictionary representation."""
-        return cls(
-            task_id=data["task_id"],
-            task_type=data["task_type"],
-            params=data["params"],
-            config=data.get("config"),
-            submitted_at=data["submitted_at"],
-            status=data["status"],
-            result=data.get("result"),
-        )
-
-
-class DelegatedTaskManager:
-    """Manage the lifecycle of delegated tasks."""
-
-    def __init__(self, storage_path: Path | None = None):
-        self.storage_path = storage_path
-        self.active_tasks: dict[str, DelegatedTask] = {}
-        self._dispatcher = None
-        self._progress_tracker = None
-        self._history: list[DelegatedTask] = []
-
-    def _get_dispatcher(self):
-        """Get or create task dispatcher."""
-        if self._dispatcher is None:
-            from tools.delegate_tool_dispatch import TaskDispatcher
-            self._dispatcher = TaskDispatcher()
-        return self._dispatcher
-
-    def _get_progress_tracker(self):
-        """Get or create progress tracker."""
-        if self._progress_tracker is None:
-            from tools.delegate_tool_progress import TaskProgressTracker
-            self._progress_tracker = TaskProgressTracker()
-        return self._progress_tracker
-
-    def _get_config(self, config: Any) -> Any:
-        """Get or create delegate config."""
-        if config is not None:
-            return config
-        from tools.delegate_tool_config import DelegateConfig
-        return DelegateConfig()
-
-    async def submit(
-        self,
-        task_type: str,
-        params: dict[str, Any],
-        config: Any = None,
-    ) -> str:
-        """Submit a new delegated task.
-
-        Args:
-            task_type: The type of task to execute.
-            params: Parameters for the task.
-            config: Optional execution configuration.
-
-        Returns:
-            The task ID.
-        """
-        from tools.delegate_tool_config import DelegateConfig
-
-        task_id = str(uuid.uuid4())
-        delegate_config = self._get_config(config)
-        if delegate_config is None:
-            delegate_config = DelegateConfig()
-
-        task = DelegatedTask(
-            task_id=task_id,
-            task_type=task_type,
-            params=params,
-            config=delegate_config,
-            submitted_at=time.time(),
-            status="pending",
-        )
-
-        self.active_tasks[task_id] = task
-        self._progress_tracker = self._get_progress_tracker()
-        self._progress_tracker.start_tracking(task_id)
-
-        if self.storage_path:
-            await self._persist_task(task)
-
-        logger.info("Submitted task %s of type %s", task_id, task_type)
-        return task_id
-
-    async def execute(self, task_id: str) -> Any:
-        """Execute a submitted task.
-
-        Args:
-            task_id: The task ID to execute.
-
-        Returns:
-            TaskResult from execution.
-        """
-        from tools.delegate_tool_child_run import TaskResult
-        from tools.delegate_tool_config import DelegateConfig
-
-        task = self.active_tasks.get(task_id)
-        if not task:
-            return TaskResult(
-                task_id=task_id,
-                exit_code=-1,
-                stdout="",
-                stderr="Task not found",
-                duration=0.0,
-                timed_out=False,
-                memory_peak_mb=0.0,
+    See #81141.
+    """
+    for i, task in enumerate(task_list):
+        goal = str(task.get("goal", "")).strip()
+        if _PLACEHOLDER_GOAL_RE.match(" ".join(goal.lower().split())):
+            return (
+                f"Task {i} has a placeholder goal ({goal!r}). Replace it "
+                "with a specific, self-contained description of what the subagent should accomplish."
             )
+        marker = _TEMPLATE_MARKER_RE.search(goal)
+        if marker:
+            return (
+                f"Task {i} goal contains an unexpanded template marker "
+                f"({marker.group(0)!r}). Substitute the real value before "
+                "calling delegate_task — subagents cannot resolve placeholders."
+            )
+        if len(goal) < _MIN_BATCH_GOAL_LEN and len(task_list) >= 2:
+            return (
+                f"Task {i} goal is too short ({goal!r}). Write a specific, "
+                f"self-contained goal of at least {_MIN_BATCH_GOAL_LEN} characters so the subagent knows "
+                "exactly what to do."
+            )
+    return None
 
-        task.status = "running"
-        dispatcher = self._get_dispatcher()
-        progress = self._get_progress_tracker()
-        progress.update(task_id, 1, "Executing task")
+def _normalize_task_list(
+    goal, context, tasks, output_schema, top_role: str, max_children: int
+) -> tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+    """``(task_list, None)`` from ``tasks=[...]`` or the legacy single ``goal``, else ``(None, error)``."""
+    recovered_tasks, tasks_error = _recover_tasks_from_json_string(tasks)
+    if tasks_error:
+        return None, tasks_error
+    if recovered_tasks is not None:
+        tasks = recovered_tasks
+    # Small models emit tasks=[] alongside a single goal: treat as "no batch".
+    if isinstance(tasks, list) and not tasks:
+        tasks = None
 
-        command = task.params.get("command", "")
-        if not command:
-            command = task.params.get("prompt", "")
-
-        from tools.delegate_tool_dispatch import DelegatedTask as DispatchTask
-
-        dispatch_task = DispatchTask(
-            task_id=task_id,
-            task_type=task.task_type,
-            command=command,
-            params=task.params,
-            config=task.config if isinstance(task.config, DelegateConfig) else None,
+    if tasks and isinstance(tasks, list):
+        if len(tasks) > max_children:
+            return None, (
+                f"Too many tasks: {len(tasks)} provided, but max_concurrent_children is {max_children}. "
+                f"Either reduce the task count, split into multiple delegate_task calls, or increase "
+                f"delegation.max_concurrent_children in config.yaml."
+            )
+        task_list = tasks
+    elif goal and isinstance(goal, str) and goal.strip():
+        task_list = [{"goal": goal, "context": context, "role": top_role}]
+        if output_schema is not None:
+            task_list[0]["output_schema"] = output_schema
+    else:
+        return None, (
+            "No tasks provided. Pass tasks=[{goal: '...', context: '...'}, "
+            "...] — one entry per subagent (a single task is a one-entry array)."
         )
 
-        result = await dispatcher.dispatch(dispatch_task)
+    for i, task in enumerate(task_list):
+        if not isinstance(task, dict):
+            return None, f"Task {i} must be an object, got {type(task).__name__}."
+        if not task.get("goal", "").strip():
+            return None, f"Task {i} is missing a 'goal'."
+    # The single-goal form is exempt from the batch gate (short goals are valid there).
+    batch_error = _validate_batch_tasks(task_list) if isinstance(tasks, list) else None
+    return (None, batch_error) if batch_error else (task_list, None)
 
-        if result.timed_out:
-            task.status = "timeout"
-            progress.fail(task_id, "Task timed out")
-        elif result.exit_code != 0:
-            task.status = "failed"
-            progress.fail(task_id, f"Task failed with exit code {result.exit_code}")
-        else:
-            task.status = "completed"
-            progress.complete(task_id, result={"exit_code": result.exit_code})
-
-        task.result = result
-        self._history.append(task)
-
-        if self.storage_path:
-            await self._persist_task(task)
-
-        return result
-
-    async def get_result(
-        self,
-        task_id: str,
-        timeout: float = 0,
-    ) -> Any:
-        """Get the result of a task.
-
-        Args:
-            task_id: The task ID.
-            timeout: Wait timeout in seconds (0 = don't wait).
-
-        Returns:
-            TaskResult or None if not found.
-        """
-        task = self.active_tasks.get(task_id)
-        if not task:
-            return None
-
-        if task.status in ("completed", "failed", "timeout"):
-            return task.result
-
-        if timeout > 0 and task.status == "running":
-            start_time = time.monotonic()
-            while time.monotonic() - start_time < timeout:
-                await asyncio.sleep(0.1)
-                if task.status in ("completed", "failed", "timeout"):
-                    return task.result
-
-        return task.result
-
-    def cancel(self, task_id: str) -> bool:
-        """Cancel a running task.
-
-        Args:
-            task_id: The task ID to cancel.
-
-        Returns:
-            True if cancelled, False if not found or already completed.
-        """
-        task = self.active_tasks.get(task_id)
-        if not task:
-            return False
-
-        if task.status in ("completed", "failed", "timeout", "cancelled"):
-            return False
-
-        dispatcher = self._get_dispatcher()
-        cancelled = dispatcher.cancel(task_id)
-
-        if cancelled:
-            task.status = "cancelled"
-            progress = self._get_progress_tracker()
-            progress.cancel(task_id)
-            self._history.append(task)
-            logger.info("Cancelled task: %s", task_id)
-
-        return cancelled
-
-    def list_active(self) -> list[DelegatedTask]:
-        """List all active tasks.
-
-        Returns:
-            List of active DelegatedTask objects.
-        """
-        return [task for task in self.active_tasks.values() if task.status in ("pending", "running")]
-
-    def get_history(self, limit: int = 100) -> list[DelegatedTask]:
-        """Get task execution history.
-
-        Args:
-            limit: Maximum number of history entries to return.
-
-        Returns:
-            List of completed/failed DelegatedTask objects.
-        """
-        return self._history[-limit:]
-
-    async def replay(self, task_id: str) -> Any:
-        """Replay a completed or failed task.
-
-        Args:
-            task_id: The task ID to replay.
-
-        Returns:
-            TaskResult from replay.
-        """
-        task = self.active_tasks.get(task_id)
-        if not task:
-            task = self._find_in_history(task_id)
-
-        if not task:
-            from tools.delegate_tool_child_run import TaskResult
-            return TaskResult(
-                task_id=task_id,
-                exit_code=-1,
-                stdout="",
-                stderr="Task not found in active or history",
-                duration=0.0,
-                timed_out=False,
-                memory_peak_mb=0.0,
-            )
-
-        task.status = "pending"
-        task.result = None
-        return await self.execute(task_id)
-
-    def _find_in_history(self, task_id: str) -> DelegatedTask | None:
-        """Find a task in history by ID."""
-        for task in self._history:
-            if task.task_id == task_id:
-                return task
-        return None
-
-    async def _persist_task(self, task: DelegatedTask) -> None:
-        """Persist task to storage.
-
-        Args:
-            task: The task to persist.
-        """
-        if not self.storage_path:
-            return
-
-        try:
-            self.storage_path.mkdir(parents=True, exist_ok=True)
-            file_path = self.storage_path / f"{task.task_id}.json"
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(task.to_dict(), f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error("Failed to persist task %s: %s", task.task_id, e)
-
-    async def load_task(self, task_id: str) -> DelegatedTask | None:
-        """Load a task from storage.
-
-        Args:
-            task_id: The task ID to load.
-
-        Returns:
-            DelegatedTask or None if not found.
-        """
-        if not self.storage_path:
-            return None
-
-        file_path = self.storage_path / f"{task_id}.json"
-        if not file_path.exists():
-            return None
-
-        try:
-            with open(file_path, encoding="utf-8") as f:
-                data = json.load(f)
-            return DelegatedTask.from_dict(data)
-        except Exception as e:
-            logger.error("Failed to load task %s: %s", task_id, e)
-            return None
-
-    def clear_completed(self) -> int:
-        """Remove completed tasks from active tracking.
-
-        Returns:
-            Number of tasks cleared.
-        """
-        to_remove = [
-            task_id
-            for task_id, task in self.active_tasks.items()
-            if task.status in ("completed", "failed", "timeout", "cancelled")
-        ]
-        for task_id in to_remove:
-            del self.active_tasks[task_id]
-        return len(to_remove)
+def _coerce_task_schemas(
+    task_list: List[Dict[str, Any]], output_schema: Optional[Dict[str, Any]]
+) -> tuple[List[Optional[Dict[str, Any]]], Optional[str]]:
+    """Per-task coerced output schemas. A malformed output_schema fails the whole call before any child spawns;
+    schema-less tasks resolve to None and take no new code paths downstream."""
+    from tools.delegation_output_schema import coerce_output_schema
+    task_schemas: List[Optional[Dict[str, Any]]] = []
+    for i, task in enumerate(task_list):
+        raw_schema = task.get("output_schema")
+        if raw_schema is None and len(task_list) == 1 and output_schema is not None:
+            raw_schema = output_schema
+        coerced_schema, schema_err = coerce_output_schema(raw_schema)
+        if schema_err:
+            return [], f"Task {i} output_schema invalid: {schema_err}"
+        task_schemas.append(coerced_schema)
+    return task_schemas, None

@@ -1,18 +1,24 @@
-﻿name: Feature Request
-description: Suggest a new feature or improvement
+name: "✨ Feature Request"
+description: Suggest a new feature or improvement.
+title: "[Feature]: "
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
-        Have an idea for a new feature? We'd love to hear it!
+        Thanks for the suggestion! Before submitting, please consider:
+
+        - **Is this a new skill?** Most capabilities should be [skills, not tools](https://github.com/NousResearch/zeloo-agent/blob/main/CONTRIBUTING.md#should-it-be-a-skill-or-a-tool). If it's a specialized integration (crypto, NFT, niche SaaS), it belongs on the Skills Hub, not bundled.
+        - **Search [existing issues](https://github.com/NousResearch/zeloo-agent/issues)** — someone may have already proposed this.
 
   - type: textarea
     id: problem
     attributes:
-      label: Problem Statement
-      description: What problem does this feature solve?
-      placeholder: Describe the problem...
+      label: Problem or Use Case
+      description: What problem does this solve? What are you trying to do that you can't today?
+      placeholder: |
+        I'm trying to use Zeloo with [provider/platform/workflow] but currently
+        there's no way to...
     validations:
       required: true
 
@@ -20,8 +26,10 @@ body:
     id: solution
     attributes:
       label: Proposed Solution
-      description: How would you like this problem solved?
-      placeholder: Describe your proposed solution...
+      description: How do you think this should work? Be as specific as you can — CLI flags, config options, UI behavior.
+      placeholder: |
+        Add a `--foo` flag to `zeloo chat` that enables...
+        Or: Add a config key `bar.baz` that controls...
     validations:
       required: true
 
@@ -29,17 +37,49 @@ body:
     id: alternatives
     attributes:
       label: Alternatives Considered
-      description: Any alternative solutions you've considered?
-      placeholder: Alternatives...
+      description: What other approaches did you consider? Why is the proposed solution better?
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Feature Type
+      options:
+        - New tool
+        - New bundled skill
+        - CLI improvement
+        - Gateway / messaging improvement
+        - Configuration option
+        - Performance / reliability
+        - Developer experience (tests, docs, CI)
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      description: How big is this change?
+      options:
+        - Small (single file, < 50 lines)
+        - Medium (few files, < 300 lines)
+        - Large (new module or significant refactor)
+
+  - type: checkboxes
+    id: pr-ready
+    attributes:
+      label: Contribution
+      options:
+        - label: I'd like to implement this myself and submit a PR
 
   - type: textarea
-    id: use-cases
+    id: debug-report
     attributes:
-      label: Use Cases
+      label: Debug Report (optional)
       description: |
-        Describe specific use cases where this feature would be valuable.
-        - Use case 1
-        - Use case 2
+        If this feature request is related to a problem you're experiencing, run `zeloo debug share` and paste the links here.
+        In an interactive chat session, you can use `/debug` instead.
+        This helps us understand your environment and any related logs.
       placeholder: |
-        - ...
-        - ...
+        Report   https://paste.rs/abc123
+      render: shell

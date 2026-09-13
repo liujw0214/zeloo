@@ -1,122 +1,53 @@
-"""Transport adapter abstract base class."""
-
-from __future__ import annotations
+"""Abstract base for provider transports.
+A transport owns one api_mode's data path (convert_messages -> convert_tools -> build_kwargs
+-> normalize_response), NOT client construction, streaming, credentials, caching, interrupts
+or retries — those stay on AIAgent."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Dict, List, Optional
+
+from agent.transports.types import NormalizedResponse
 
 
-class TransportError(Exception):
-    """Base exception for transport adapter errors."""
+class ProviderTransport(ABC):
+    """Base class for provider-specific format conversion and normalization."""
 
-    pass
-
-
-class AuthenticationError(TransportError):
-    """API credentials are invalid or expired."""
-
-    pass
-
-
-class RateLimitError(TransportError):
-    """Provider rate limit exceeded."""
-
-    pass
-
-
-class ModelUnavailableError(TransportError):
-    """Requested model is not available for this provider."""
-
-    pass
-
-
-@dataclass
-class Response:
-    """Standardized chat completion response."""
-
-    content: str
-    raw: dict[str, Any] = field(default_factory=dict)
-    model: str = ""
-    finish_reason: str = ""
-    usage_in: int = 0
-    usage_out: int = 0
-    tool_calls: list[dict[str, Any]] = field(default_factory=list)
-    error: str | None = None
+    # Provider stop_reason -> OpenAI finish_reason. ``None`` means the provider
+    # already speaks OpenAI vocabulary and map_finish_reason passes through.
+    _STOP_REASON_MAP: Optional[Dict[str, str]] = None
 
     @property
-    def total_tokens(self) -> int:
-        return self.usage_in + self.usage_out
-
-
-class TransportAdapter(ABC):
-    """Abstract base class for all transport adapters.
-
-    All concrete adapters must implement:
-    - chat_completion()
-    - validate_credentials()
-
-    Subclasses can optionally override:
-    - supports_feature()
-    - get_default_model()
-    """
-
-    name: str = "base"
-    supports_streaming: bool = True
-    supports_vision: bool = False
-    supports_tools: bool = True
-    max_context_tokens: int = 128000
+    @abstractmethod
+    def api_mode(self) -> str:
+        """The api_mode string this transport handles (e.g. 'anthropic_messages')."""
 
     @abstractmethod
-    def chat_completion(
-        self,
-        messages: list[dict[str, Any]],
-        model: str,
-        tools: list[dict[str, Any]] | None = None,
-        stream: bool = False,
-        **kwargs: Any,
-    ) -> Response:
-        """Send a chat completion request and return a standardized response.
-
-        Args:
-            messages: List of message dicts with 'role' and 'content'.
-            model: Model identifier string.
-            tools: Optional list of tool definitions.
-            stream: If True, yield streaming chunks (not implemented in base).
-            **kwargs: Provider-specific options (temperature, max_tokens, etc.)
-
-        Returns:
-            Response object with standardized fields.
-        """
+    def convert_messages(self, messages: List[Dict[str, Any]], **kwargs) -> Any:
+        """Convert OpenAI-format messages to the provider-native structure (e.g. (system, messages) for Anthropic)."""
 
     @abstractmethod
-    def validate_credentials(self) -> bool:
-        """Check whether the API credentials are valid.
+    def convert_tools(self, tools: List[Dict[str, Any]]) -> Any:
+        """Convert OpenAI-format tool definitions to provider-native format."""
 
-        Returns:
-            True if credentials are valid, False otherwise.
-        """
+    @abstractmethod
+    def build_kwargs(
+        self, model: str, messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None, **params,
+    ) -> Dict[str, Any]:
+        """Primary entry point: convert messages/tools and return kwargs ready for the provider SDK."""
 
-    def supports_feature(self, feature: str) -> bool:
-        """Query whether this adapter supports a given feature.
+    @abstractmethod
+    def normalize_response(self, response: Any, **kwargs) -> NormalizedResponse:
+        """Normalize a raw provider response to NormalizedResponse (the only transport-layer return type)."""
 
-        Args:
-            feature: Feature name ("streaming", "vision", "tools", "json_mode").
+    def validate_response(self, response: Any) -> bool:
+        """Optional structural validity check; default accepts everything."""
+        return True
 
-        Returns:
-            True if the feature is supported.
-        """
-        feature_map: dict[str, bool] = {
-            "streaming": self.supports_streaming,
-            "vision": self.supports_vision,
-            "tools": self.supports_tools,
-        }
-        return feature_map.get(feature, False)
+    def extract_cache_stats(self, response: Any) -> Optional[Dict[str, int]]:
+        """Optional: ``{'cached_tokens', 'creation_tokens'}`` or None (default)."""
+        return None
 
-    def get_default_model(self) -> str:
-        """Return the recommended default model for this adapter."""
-        return ""
-
-    def format_error(self, raw_error: Any) -> str:
-        """Convert a provider-specific error to a user-friendly message."""
-        return str(raw_error)
+    def map_finish_reason(self, raw_reason: str) -> str:
+        """Map a provider stop reason via ``_STOP_REASON_MAP`` (unknown -> 'stop'); passthrough when no map."""
+        return raw_reason if self._STOP_REASON_MAP is None else self._STOP_REASON_MAP.get(raw_reason, "stop")

@@ -1,54 +1,24 @@
-﻿# Native FTS5 Chinese Tokenizer (P3)
+# fts5_cjk — cjk_unicode61 FTS5 tokenizer
 
-Rust implementation of an FTS5 tokenizer for CJK text using `jieba-rs`.
+unicode61 + CJK character bigrams (Lucene CJKAnalyzer semantics). Fixes
+1-2 char Korean/Chinese/Japanese terms falling through to LIKE full-table
+scans in session search.
 
-## Status
+Build & install to `~/.Zeloo/lib/`:
 
-✅ **Rust 实现已完成**：`src/lib.rs` + `build.rs` 已创建。需安装 Rust 工具链后编译：
+    ./build.sh
 
-```bash
-# 安装 Rust（首次）
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-# 或 Windows: winget install Rustlang.Rustup
+Uses the system `sqlite3ext.h` when available, else the vendored copy in
+`vendor/` — no libsqlite3-dev required.
 
-cd native/fts5_cjk
-cargo build --release
-```
+Once the extension is installed, the next `SessionDB` open creates the
+`messages_fts_cjk` index (external-content, tool rows excluded — same v23
+storage discipline as the other indexes). On a populated database, run
 
-编译产物（`libzeloo_fts5_cjk.dll` / `.so`）通过 `conn.execute("SELECT load_extension(...)")` 加载到 SQLite。
-Python-side fallback is available via the package's `__init__.py` —
-it uses `jieba` (Python) if installed, otherwise character-by-character
-tokenization.
+    Zeloo sessions optimize-storage
 
-## Build (future)
+to backfill it; new messages are indexed live either way. Set
+`sessions.cjk_fts: false` in `~/.Zeloo/config.yaml` to disable. Override
+the .so location with `ZELOO_FTS5_CJK_SO`.
 
-```bash
-cd native/fts5_cjk
-cargo build --release
-```
-
-The compiled `cdylib` will be loaded by SQLite via the FTS5 extension
-mechanism. Until then, the Python fallback is used.
-
-## Files
-
-```
-native/fts5_cjk/
-├── __init__.py        # Python bridge — jieba fallback + FTS5 wiring
-├── Cargo.toml         # Rust crate manifest
-├── src/lib.rs         # Rust FTS5 tokenizer (jieba-rs)
-├── build.rs           # Build script
-└── README.md
-```
-
-## Python usage
-
-```python
-from native.fts5_cjk import tokenize_cjk, create_fts5_table
-import sqlite3
-
-conn = sqlite3.connect(":memory:")
-create_fts5_table(conn, "messages_fts", ["content"])
-conn.execute("INSERT INTO messages_fts(content) VALUES (?)",
-             (tokenize_cjk("中文搜索测试 hello"),))
-```
+Contributed by Soju06 (PR #65544).

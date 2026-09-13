@@ -1,287 +1,156 @@
-"""MCP 公共常量和工具函数。
-
-提供 MCP 工具的 JSON Schema、默认值、字段访问兼容函数等公共组件。
-"""
-
-from __future__ import annotations
+"""Small pure helpers shared by the tools.mcp_tool_* modules: SDK 1.x/2.x field access,
+error-text sanitising, numeric/bool coercion, timeouts and jitter. No origin state."""
 
 import logging
-from typing import Any
+import math
+import os
+import random
+import re
+from typing import Any, Optional
 
-logger = logging.getLogger(__name__)
-
-MCP_TOOL_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "server_name": {
-            "type": "string",
-            "description": "MCP 服务器名称",
-        },
-        "tool_name": {
-            "type": "string",
-            "description": "要调用的 MCP 工具名称",
-        },
-        "arguments": {
-            "type": "object",
-            "description": "工具调用参数",
-            "additionalProperties": True,
-        },
-    },
-    "required": ["server_name", "tool_name"],
-}
-
-MCP_TOOL_LIST_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "server_name": {
-            "type": "string",
-            "description": "MCP 服务器名称（可选，不指定则列出所有服务器的工具）",
-        },
-        "include_internal": {
-            "type": "boolean",
-            "description": "是否包含内部工具（默认 false）",
-            "default": False,
-        },
-    },
-    "required": [],
-}
-
-MCP_SERVER_STATUS_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "server_name": {
-            "type": "string",
-            "description": "MCP 服务器名称",
-        },
-    },
-    "required": ["server_name"],
-}
-
-DEFAULT_TIMEOUT = 30.0
-
-DEFAULT_PROTOCOL_VERSION = "2024-11-05"
-
-MCP_JSONRPC_VERSION = "2.0"
-
-TRANSPORT_STDIO = "stdio"
-TRANSPORT_HTTP = "http"
-
-SUPPORTED_TRANSPORTS = {TRANSPORT_STDIO, TRANSPORT_HTTP}
+logger = logging.getLogger("tools.mcp_tool")
 
 
-def mcp_field(result: object, *names: str) -> Any:
-    """兼容访问 snake_case / camelCase 字段。
+class _OriginProxy:
+    """Attribute proxy for ``tools.mcp_tool`` resolved at access time. The split modules read
+    origin state (``_servers``, ``_lock``, SDK symbols, patchable helpers) through this so
+    ``mock.patch("tools.mcp_tool.X")`` and origin-side rebinds stay effective, and so no split
+    module needs the origin imported first (the origin imports them while initialising)."""
 
-    尝试按顺序查找给定的字段名，返回第一个找到的值。
-    如果都找不到，返回 None。
+    __slots__ = ()
 
-    Args:
-        result: 要访问的对象（dict 或 dataclass）
-        *names: 可能的字段名列表（按优先级排序）
-
-    Returns:
-        找到的字段值，或 None
-
-    Example:
-        >>> data = {"serverName": "test", "server_name": "test2"}
-        >>> mcp_field(data, "serverName", "server_name")
-        'test'
-    """
-    if result is None:
-        return None
-
-    if isinstance(result, dict):
-        for name in names:
-            if name in result:
-                return result[name]
-    else:
-        for name in names:
-            if hasattr(result, name):
-                return getattr(result, name)
-            snake_name = _camel_to_snake(name)
-            if hasattr(result, snake_name):
-                return getattr(result, snake_name)
-            kebab_name = _snake_to_kebab(name)
-            if hasattr(result, kebab_name):
-                return getattr(result, kebab_name)
-
-    return None
+    def __getattr__(self, name: str):
+        from tools import mcp_tool
+        return getattr(mcp_tool, name)
 
 
-def _camel_to_snake(name: str) -> str:
-    """将 camelCase 转换为 snake_case。"""
-    result = []
-    for i, char in enumerate(name):
-        if char.isupper() and i > 0:
-            result.append("_")
-        result.append(char.lower())
-    return "".join(result)
+_core = _OriginProxy()
+_MISSING = object()
 
 
-def _snake_to_kebab(name: str) -> str:
-    """将 snake_case 转换为 kebab-case。"""
-    return name.replace("_", "-")
+def mcp_field(obj, snake: str, camel: str, default=None):
+    """Read an MCP model field across the 1.x -> 2.x rename to snake_case. Pydantic aliases
+    don't apply to attribute access, so ``getattr(result, "isError", False)`` silently returns
+    the default on 2.x — failed calls read as successful, schemas as empty."""
+    value = getattr(obj, snake, _MISSING)
+    if value is _MISSING:
+        value = getattr(obj, camel, _MISSING)
+    return default if value is _MISSING else value
 
 
-def format_mcp_error(error: dict[str, Any]) -> str:
-    """格式化 MCP 错误为可读字符串。
-
-    Args:
-        error: MCP 错误对象，通常包含 code、message、data 字段
-
-    Returns:
-        格式化的错误字符串
-
-    Example:
-        >>> err = {"code": -32600, "message": "Invalid Request"}
-        >>> format_mcp_error(err)
-        '[MCP Error -32600] Invalid Request'
-    """
-    if not isinstance(error, dict):
-        return f"[MCP Error] {error}"
-
-    code = error.get("code", 0)
-    message = error.get("message", "Unknown error")
-    data = error.get("data")
-
-    result = f"[MCP Error {code}] {message}"
-    if data is not None:
-        result += f" | Data: {data}"
-
-    return result
+_DEFAULT_TOOL_TIMEOUT = 300      # seconds for tool calls
 
 
-def format_mcp_content(content: list[dict[str, Any]]) -> str:
-    """将 MCP 内容块格式化为文本。
-
-    MCP 响应通常包含 content 数组，每项可能是 text、image、audio 等类型。
-    此函数将所有文本内容连接起来。
-
-    Args:
-        content: MCP 内容块列表
-
-    Returns:
-        格式化的文本内容
-
-    Example:
-        >>> content = [{"type": "text", "text": "Hello"}, {"type": "text", "text": "World"}]
-        >>> format_mcp_content(content)
-        'Hello\\nWorld'
-    """
-    if not content:
-        return ""
-
-    parts = []
-    for block in content:
-        block_type = mcp_field(block, "type", "type")
-        if block_type == "text":
-            text = mcp_field(block, "text", "text")
-            if text:
-                parts.append(text)
-        elif block_type == "image":
-            parts.append("[Image content]")
-        elif block_type == "audio":
-            parts.append("[Audio content]")
-        elif block_type == "resource":
-            parts.append(f"[Resource: {mcp_field(block, 'uri', 'resource')}]")
-        else:
-            parts.append(str(block))
-
-    return "\n".join(parts)
-
-
-def parse_timeout(config: dict[str, Any] | None) -> float:
-    """从配置中解析超时值。
-
-    Args:
-        config: 服务器配置字典
-
-    Returns:
-        超时时间（秒），默认 DEFAULT_TIMEOUT
-    """
-    if not config:
-        return DEFAULT_TIMEOUT
-
-    timeout = config.get("timeout", DEFAULT_TIMEOUT)
+def _resolve_tool_timeout(config: dict) -> float:
+    """Per-server tool-call timeout. Precedence: ``mcp_servers.<name>.timeout`` >
+    ``timeouts.mcp.tool_call`` > the 300s default; values are platform-clamped by
+    ``resolve_timeout``."""
+    per_server = config.get("timeout")
+    if per_server is not None:
+        return per_server
     try:
-        return float(timeout)
-    except (ValueError, TypeError):
-        return DEFAULT_TIMEOUT
+        from agent.deadline import resolve_timeout
+        resolved = resolve_timeout("mcp.tool_call", default=_DEFAULT_TOOL_TIMEOUT)
+        if resolved is not None:
+            return resolved
+    except Exception:
+        logger.debug("mcp.tool_call timeout resolution failed", exc_info=True)
+    return _DEFAULT_TOOL_TIMEOUT
 
 
-def get_error_code_name(code: int) -> str:
-    """获取 JSON-RPC 错误码的友好名称。
-
-    Args:
-        code: JSON-RPC 错误码
-
-    Returns:
-        错误码对应的名称
-    """
-    error_names = {
-        -32700: "Parse Error",
-        -32600: "Invalid Request",
-        -32601: "Method Not Found",
-        -32602: "Invalid Params",
-        -32603: "Internal Error",
-        -32000: "Server Error",
-    }
-    return error_names.get(code, f"Error {code}")
+# Jitter on reconnect backoff so servers that lost the same backend don't retry in lockstep.
+_BACKOFF_JITTER = 0.2            # +/-20%
 
 
-def build_jsonrpc_request(
-    method: str,
-    params: dict[str, Any] | None = None,
-    request_id: int | None = None,
-) -> dict[str, Any]:
-    """构建 JSON-RPC 2.0 请求对象。
-
-    Args:
-        method: 要调用的方法名
-        params: 方法参数
-        request_id: 请求 ID（可选，自动生成）
-
-    Returns:
-        JSON-RPC 2.0 请求字典
-    """
-    request: dict[str, Any] = {
-        "jsonrpc": MCP_JSONRPC_VERSION,
-        "method": method,
-    }
-    if params:
-        request["params"] = params
-    if request_id is not None:
-        request["id"] = request_id
-    return request
+def _jittered(seconds: float) -> float:
+    """``seconds`` with +/-20% uniform jitter, floored at 0."""
+    return max(0.0, seconds * random.uniform(1.0 - _BACKOFF_JITTER, 1.0 + _BACKOFF_JITTER))
 
 
-def is_jsonrpc_success(response: dict[str, Any]) -> bool:
-    """检查 JSON-RPC 响应是否成功。
-
-    Args:
-        response: JSON-RPC 响应对象
-
-    Returns:
-        True 如果响应表示成功
-    """
-    if not isinstance(response, dict):
-        return False
-    return "result" in response and "error" not in response
+# Credential patterns to strip from error messages: GitHub PAT, OpenAI-style key, Bearer token,
+# and ``token= / key= / API_KEY= / password= / secret=`` assignments.
+_CREDENTIAL_PATTERN = re.compile(
+    r"(?:ghp_[A-Za-z0-9_]{1,255}|sk-[A-Za-z0-9_]{1,255}|Bearer\s+\S+"
+    r"|(?:token|key|API_KEY|password|secret)=[^\s&,;\"']{1,255})", re.IGNORECASE)
 
 
-def extract_result(response: dict[str, Any]) -> Any:
-    """从 JSON-RPC 响应中提取结果。
+def _env_ref_name(ref: str) -> str:
+    """Bare env-var name from a ``${...}`` body; strips a Cursor-style ``env:`` prefix."""
+    ref = ref.strip()
+    if ref.startswith("env:"):
+        ref = ref[len("env:"):].strip()
+    return ref
 
-    Args:
-        response: JSON-RPC 响应对象
 
-    Returns:
-        响应结果，或 None（如果响应失败）
+def _sanitize_error(text: str) -> str:
+    """Replace credential-like patterns with [REDACTED] before text reaches the LLM."""
+    return _CREDENTIAL_PATTERN.sub("[REDACTED]", text)
 
-    Raises:
-        RuntimeError: 如果响应包含错误
-    """
-    if "error" in response:
-        error = response["error"]
-        raise RuntimeError(format_mcp_error(error))
-    return response.get("result")
+
+def _exc_str(exc: BaseException) -> str:
+    """Non-empty string for *exc*: some exceptions (``anyio.ClosedResourceError``) carry no
+    message, so fall back to ``repr`` to keep diagnostics."""
+    text = str(exc).strip()
+    return text or repr(exc)
+
+
+def _prepend_path(env: dict, directory: str) -> dict:
+    """Prepend *directory* to env PATH if it is not already present."""
+    updated = dict(env or {})
+    if directory:
+        parts = [part for part in updated.get("PATH", "").split(os.pathsep) if part]
+        if directory not in parts:
+            parts = [directory, *parts]
+        updated["PATH"] = os.pathsep.join(parts) if parts else directory
+    return updated
+
+
+def _safe_numeric(value, default, coerce=int, minimum=1):
+    """Coerce a config value (YAML strings included) to a number, clamped to *minimum*;
+    *default* on failure or non-finite floats."""
+    try:
+        result = coerce(value)
+        if isinstance(result, float) and not math.isfinite(result):
+            return default
+        return max(result, minimum)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+_TRUE_WORDS = frozenset({"true", "1", "yes", "on"})
+_FALSE_WORDS = frozenset({"false", "0", "no", "off"})
+
+
+def _parse_boolish(value: Any, default: bool = True) -> bool:
+    """Parse a bool-like config value with safe fallback."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in _TRUE_WORDS:
+            return True
+        if lowered in _FALSE_WORDS:
+            return False
+    logger.warning("MCP config expected a boolean-ish value, got %r; using default=%s", value, default)
+    return default
+
+
+def _get_lifecycle_seconds(config: dict, key: str) -> Optional[float]:
+    """Optional positive lifecycle timeout from top-level/nested ``lifecycle`` config (``0``
+    disables; negatives and non-numbers are warned about and ignored)."""
+    raw = config.get(key)
+    if raw is None and isinstance(config.get("lifecycle"), dict):
+        raw = config["lifecycle"].get(key)
+    if raw is None:
+        return None
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        logger.warning("MCP config %s must be a number of seconds; ignoring %r", key, raw)
+        return None
+    if seconds < 0:
+        logger.warning("MCP config %s must be positive; ignoring %r", key, raw)
+        return None
+    return seconds or None

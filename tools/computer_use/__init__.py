@@ -1,61 +1,39 @@
-"""Computer-use tools — control the local computer like a human user.
+"""Computer use toolset — universal (any-model) desktop control via cua-driver.
 
-Provides 8 tools for desktop automation:
+Drives apps through cua-driver's background primitive (focus-without-raise + pid-scoped
+event posting): it does NOT steal the user's cursor, keyboard focus, or Space. Plain
+OpenAI function-calling schema; vision models get SOM captures (numbered overlays + AX
+tree) and click by index, non-vision models use the AX tree alone. Model-facing guidance
+lives in the schema description and each action result's `verdict`.
 
-* computer_screenshot  — capture screen / window / region as base64 PNG
-* computer_mouse_move  — move the mouse cursor
-* computer_mouse_click — left / right / middle / double click
-* computer_key_press   — type text or press a key combination
-* computer_scroll      — scroll vertically or horizontally
-* computer_window_list — list visible windows
-* computer_window_focus— bring a window to the foreground
-* computer_get_display — return screen size / DPI
-
-All backends are pluggable; if the optional ``pyautogui`` package is
-not installed, tools return a friendly error message instead of crashing.
+Modules: `tool.py` (handler, approval gate, response shaping), `backend.py` (abstract
+`ComputerUseBackend` + result dataclasses), `cua_backend.py` (default MCP-over-stdio
+backend + `cua_backend_parse`/`_session`/`_daemon` siblings), `schema.py` (byte-frozen).
 """
 
-from __future__ import annotations
 
-import logging
-from typing import Any
-
-logger = logging.getLogger(__name__)
-
-__all__ = [
-    "screenshot",
-    "mouse",
-    "keyboard",
-    "scroll",
-    "window_manager",
-    "display",
-    "state_tracker",
-    "backends",
-]
+# ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----
+# Names external plugins imported from this module before the Sep 2026 decomposition.
+# Internal code MUST NOT use these (scripts/check_compat_pointers.py fails CI if it does).
+# The whole block is removed by reverting the commit that added it.
+from __future__ import annotations  # noqa: F401,E402
 
 
-def is_backend_available() -> bool:
-    """Return True if the GUI backend (pyautogui / pygetwindow) is available."""
-    try:
-        import pyautogui  # noqa: F401
+_PLUGIN_COMPAT_LAZY = {
+    'check_computer_use_requirements': ('tools.computer_use.tool', 'check_computer_use_requirements'),
+    'get_computer_use_schema': ('tools.computer_use.tool', 'get_computer_use_schema'),
+    'handle_computer_use': ('tools.computer_use.tool', 'handle_computer_use'),
+    'release_computer_use_session': ('tools.computer_use.tool', 'release_computer_use_session'),
+    'set_approval_callback': ('tools.computer_use.tool', 'set_approval_callback'),
+}
 
-        return True
-    except ImportError:
-        return False
 
-
-def require_backend() -> tuple[Any, Any]:
-    """Import and return the (pyautogui, pygetwindow) modules.
-
-    Raises ``RuntimeError`` with an installation hint if either is missing.
-    """
-    try:
-        import pyautogui  # type: ignore[import-untyped]
-        import pygetwindow  # type: ignore[import-untyped]
-    except ImportError as exc:
-        raise RuntimeError(
-            "Computer-use tools require pyautogui + pygetwindow. "
-            "Install with: pip install pyautogui pygetwindow"
-        ) from exc
-
-    return pyautogui, pygetwindow
+def __getattr__(name):  # PEP 562 — lazy so no import cycles
+    target = _PLUGIN_COMPAT_LAZY.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+    from zeloo_cli.plugin_compat import warn_once
+    warn_once(__name__, name, *target)
+    return getattr(importlib.import_module(target[0]), target[1])
+# ---- END PLUGIN-COMPAT ----

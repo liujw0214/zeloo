@@ -1,27 +1,14 @@
-"""i18n — lightweight internationalization for Zeloo.
+"""Lightweight i18n for Zeloo' static user-facing strings (approval prompts, a few gateway replies).
 
-This module
-provides a simple YAML-based translation loader with lazy string
-lookup and fallback to English.
-
-Usage::
-
-    from agent.i18n import gettext, set_language
-
-    set_language("zh-CN")
-    print(gettext("hello_world"))  # "你好，世界"
-
-Language files are YAML in ``locales/``::
-
-    locales/
-    ├── en.yaml
-    ├── zh-CN.yaml
-    └── ...
+Catalogs are ``locales/<lang>.yaml`` flattened to dotted keys. Missing keys
+fall back to English, then to the key itself, so a broken catalog never crashes.
+Language resolution: explicit ``lang=`` > ``ZELOO_LANGUAGE`` > ``display.language`` > ``en``.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from functools import lru_cache
 from pathlib import Path
@@ -29,91 +16,166 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_LANGUAGE = "en"
-_LOCALES_DIR = Path(__file__).resolve().parent.parent / "locales"
+SUPPORTED_LANGUAGES: tuple[str, ...] = (
+    "en", "zh", "zh-hant", "ja", "de", "es", "fr", "tr", "uk",
+    "af", "ko", "it", "ga", "pt", "ru", "hu", "ar",
+)
+DEFAULT_LANGUAGE = "en"
 
-# Thread-local current language
-_thread_local = threading.local()
+# Natural aliases so "chinese" / "zh-CN" / "jp" hit the right catalog instead of
+# silently falling back to English. Bare "chinese" defaults to Simplified;
+# Taiwan/HK/Macau tags route to the distinct Traditional catalog. pt-br shares
+# the pt catalog (no separate br one).
+_LANGUAGE_ALIASES: dict[str, str] = {
+    "english": "en", "en-us": "en", "en-gb": "en",
+    "chinese": "zh", "mandarin": "zh", "zh-cn": "zh", "zh-hans": "zh", "zh-sg": "zh",
+    "traditional-chinese": "zh-hant", "traditional_chinese": "zh-hant",
+    "zh-tw": "zh-hant", "zh-hk": "zh-hant", "zh-mo": "zh-hant",
+    "japanese": "ja", "jp": "ja", "ja-jp": "ja",
+    "german": "de", "deutsch": "de", "de-de": "de", "de-at": "de", "de-ch": "de",
+    "spanish": "es", "español": "es", "espanol": "es", "es-es": "es", "es-mx": "es", "es-ar": "es",
+    "french": "fr", "français": "fr", "france": "fr", "fr-fr": "fr", "fr-be": "fr", "fr-ca": "fr", "fr-ch": "fr",
+    "ukrainian": "uk", "ukrainisch": "uk", "українська": "uk", "uk-ua": "uk", "ua": "uk",
+    "turkish": "tr", "türkçe": "tr", "tr-tr": "tr",
+    "afrikaans": "af", "af-za": "af",
+    "korean": "ko", "한국어": "ko", "ko-kr": "ko",
+    "italian": "it", "italiano": "it", "it-it": "it", "it-ch": "it",
+    "irish": "ga", "gaeilge": "ga", "ga-ie": "ga",
+    "portuguese": "pt", "português": "pt", "portugues": "pt",
+    "pt-pt": "pt", "pt-br": "pt", "brazilian": "pt", "brasileiro": "pt",
+    "russian": "ru", "русский": "ru", "ru-ru": "ru",
+    "hungarian": "hu", "magyar": "hu", "hu-hu": "hu",
+    "arabic": "ar", "العربية": "ar",
+    "ar-sa": "ar", "ar-eg": "ar", "ar-ae": "ar", "ar-ma": "ar", "ar-dz": "ar",
+}
+
+_catalog_cache: dict[str, dict[str, str]] = {}
+_catalog_lock = threading.Lock()
 
 
-def _get_language() -> str:
-    """Get the current language for this thread."""
-    return getattr(_thread_local, "language", _DEFAULT_LANGUAGE)
+def _locales_dir() -> Path:
+    """Locale dir: ``ZELOO_BUNDLED_LOCALES`` (sealed packaging, e.g. Nix) if it exists, else ``<repo-root>/locales``.
 
-
-def set_language(lang: str) -> None:
-    """Set the current language for this thread.
-
-    Falls back to English if the language is not available.
+    The source path is returned even when missing so ``_load_catalog`` can log
+    the path it looked at rather than raise.
     """
-    if not _is_language_available(lang):
-        logger.warning("Language '%s' not available, falling back to 'en'", lang)
-        lang = _DEFAULT_LANGUAGE
-    _thread_local.language = lang
+    override = os.getenv("ZELOO_BUNDLED_LOCALES", "").strip()
+    if override and Path(override).is_dir():
+        return Path(override)
+    if override:
+        logger.warning(
+            "ZELOO_BUNDLED_LOCALES points to a non-directory path (%s); "
+            "falling back to bundled/source locale resolution", override,
+        )
+    return Path(__file__).resolve().parent.parent / "locales"
 
 
-def _is_language_available(lang: str) -> bool:
-    """Check if a language file exists."""
-    return (_LOCALES_DIR / f"{lang}.yaml").exists()
+def _normalize_lang(value: Any) -> str:
+    """Map a user-supplied value (code, alias, or regional tag like ``zh-CN``) to a supported code, else default."""
+    key = value.strip().lower() if isinstance(value, str) else ""
+    if key in SUPPORTED_LANGUAGES:
+        return key
+    if key in _LANGUAGE_ALIASES:
+        return _LANGUAGE_ALIASES[key]
+    base = key.split("-", 1)[0]  # strip region suffix
+    return base if base in SUPPORTED_LANGUAGES else DEFAULT_LANGUAGE
 
 
-@lru_cache(maxsize=32)
-def _load_language(lang: str) -> dict[str, Any]:
-    """Load a language file. Returns empty dict if not found."""
-    path = _LOCALES_DIR / f"{lang}.yaml"
-    if not path.exists():
-        return {}
+def _cache_catalog(lang: str, flat: dict[str, str]) -> dict[str, str]:
+    with _catalog_lock:
+        _catalog_cache[lang] = flat
+    return flat
+
+
+def _load_catalog(lang: str) -> dict[str, str]:
+    """Load one locale YAML flattened to dotted keys; cached per language (empty dict on any failure)."""
+    with _catalog_lock:
+        cached = _catalog_cache.get(lang)
+        if cached is not None:
+            return cached
+
+    path = _locales_dir() / f"{lang}.yaml"
+    flat: dict[str, str] = {}
+    if not path.is_file():
+        logger.debug("i18n catalog missing for %s at %s", lang, path)
+        return _cache_catalog(lang, flat)
     try:
         import yaml
+        with path.open("r", encoding="utf-8") as f:
+            _flatten_into(yaml.safe_load(f) or {}, "", flat)
+    except Exception as exc:
+        logger.warning("Failed to load i18n catalog %s: %s", path, exc)
+        flat = {}
+    return _cache_catalog(lang, flat)
 
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        logger.exception("Failed to load language file %s", path)
-        return {}
+
+def _flatten_into(node: Any, prefix: str, out: dict[str, str]) -> None:
+    # Non-string, non-dict leaves are ignored -- catalogs are text-only.
+    if isinstance(node, dict):
+        for key, value in node.items():
+            _flatten_into(value, f"{prefix}.{key}" if prefix else str(key), out)
+    elif isinstance(node, str):
+        out[prefix] = node
 
 
-def gettext(key: str, **kwargs: Any) -> str:
-    """Translate a key to the current language.
+@lru_cache(maxsize=8)
+def _config_language_cached(zeloo_home: str) -> str | None:
+    """``display.language`` from config.yaml, read once per profile home (``t()`` is a hot path).
+    Keyed by home so a multiplexed gateway serving several profiles doesn't freeze the first
+    profile's language for every other profile."""
+    try:
+        from zeloo_cli.config import load_config_readonly
+        lang = (load_config_readonly().get("display") or {}).get("language")
+        return _normalize_lang(lang) if lang else None
+    except Exception as exc:
+        logger.debug("Could not read display.language from config: %s", exc)
+        return None
 
-    Supports simple key substitution with ``{var}`` placeholders.
-    Falls back to the English translation, then to the key itself.
+
+def _config_language() -> str | None:
+    from zeloo_constants import get_zeloo_home
+    return _config_language_cached(str(get_zeloo_home()))
+
+
+def reset_language_cache() -> None:
+    """Invalidate cached language resolution and catalogs (call after ``save_config`` changes ``display.language``)."""
+    _config_language_cached.cache_clear()
+    with _catalog_lock:
+        _catalog_cache.clear()
+
+
+def get_language() -> str:
+    """Resolve the active language using env > config > default order. ``ZELOO_LANGUAGE`` is a
+    per-profile ``.env`` value, so it is read through the secret scope: under multiplexing a raw
+    environ read would impose the default profile's language on every other profile."""
+    from agent.secret_scope import UnscopedSecretError, get_secret
+    try:
+        env_lang = get_secret("ZELOO_LANGUAGE")
+    except UnscopedSecretError:
+        env_lang = os.environ.get("ZELOO_LANGUAGE")  # unscoped default-profile path: environ IS its own value
+    return _normalize_lang(env_lang) if env_lang else _config_language() or DEFAULT_LANGUAGE
+
+
+def t(key: str, lang: str | None = None, **format_kwargs: Any) -> str:
+    """Translate a dotted catalog key to the active (or explicit ``lang``) language.
+
+    ``format_kwargs`` are applied with ``str.format``. Falls back to English,
+    then to the bare key; a format failure returns the unformatted string.
     """
-    lang = _get_language()
-    translations = _load_language(lang)
-
-    if key not in translations:
-        # Fall back to English
-        en_translations = _load_language(_DEFAULT_LANGUAGE)
-        if key in en_translations:
-            translations = en_translations
-        else:
-            return key
-
-    value = translations[key]
-    if not isinstance(value, str):
-        return str(value)
-
-    # Substitute placeholders
-    if kwargs:
-        try:
-            value = value.format(**kwargs)
-        except (KeyError, IndexError, ValueError):
-            pass
-    return value
+    target = _normalize_lang(lang) if lang else get_language()
+    value = _load_catalog(target).get(key)
+    if value is None and target != DEFAULT_LANGUAGE:
+        value = _load_catalog(DEFAULT_LANGUAGE).get(key)
+    if value is None:
+        logger.debug("i18n miss: key=%r lang=%r", key, target)
+        value = key
+    if not format_kwargs:
+        return value
+    try:
+        return value.format(**format_kwargs)
+    except (KeyError, IndexError, ValueError) as exc:
+        logger.warning("i18n format failed for key=%r lang=%r kwargs=%r: %s", key, target, format_kwargs, exc)
+        return value
 
 
-def get_available_languages() -> list[str]:
-    """Return a sorted list of available language codes."""
-    if not _LOCALES_DIR.exists():
-        return [_DEFAULT_LANGUAGE]
-    langs = [
-        p.stem
-        for p in _LOCALES_DIR.glob("*.yaml")
-        if p.stem != _DEFAULT_LANGUAGE
-    ]
-    return sorted([_DEFAULT_LANGUAGE] + langs)
-
-
-# Alias for convenience
-_ = gettext
+__all__ = ["SUPPORTED_LANGUAGES", "DEFAULT_LANGUAGE", "t", "get_language", "reset_language_cache"]

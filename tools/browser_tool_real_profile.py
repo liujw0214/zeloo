@@ -1,472 +1,302 @@
-"""Browser with real Chrome user profile.
+"""Real-profile local browsing: snapshot the user's default Chromium profile into a
+Zeloo-owned copy, launch the real browser binary on it, and attach agent-browser.
 
-Launch Chrome using the user's actual Chrome profile (cookies, history,
-extensions, etc.). This is required when bot detection is aggressive
-enough to reject headless / anonymous Chromium builds.
-
-The module never shells out automatically; it only *resolves* the
-profile directory and *plans* the launch arguments. Actual process
-spawning is the caller's responsibility (so it can plug into the
-project's approval / sandbox layers).
-
-Example::
-
-    browser = RealProfileBrowser(browser="chrome")
-    profile = browser.find_profile_dir("chrome")
-    plan = await browser.launch(headless=False)
+State (``_REAL_PROFILE_SESSION``, ``_real_profile_cdp_lock``, ``_real_profile_cdp_cache``,
+``_real_profile_chrome_procs``) lives in ``tools.browser_tool``; it is read
+through ``_bt`` (resolved per call — never import ``tools.browser_tool`` at import time).
 """
 
-from __future__ import annotations
-
-import asyncio
-import logging
 import os
-import platform
-import shutil
+import re
 import subprocess
-import uuid
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+import sys
+import time
+from typing import Optional, Tuple
+from tools.browser_tool_origin import origin_module as _origin
+from tools import browser_tool_cloud as _cloud
+from tools import browser_tool_install as _install
+from tools import browser_tool_lightpanda_fallback as _lp
+from tools import browser_tool_session as _session
 
-logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Defaults
-# ---------------------------------------------------------------------------
-
-
-# Common per-OS profile directories for each supported browser. Values
-# are templates; the first existing candidate wins.
-_PROFILE_CANDIDATES: dict[str, dict[str, list[str]]] = {
-    "chrome": {
-        "Windows": [
-            r"%LOCALAPPDATA%\Google\Chrome\User Data",
-            r"%USERPROFILE%\AppData\Local\Google\Chrome\User Data",
-        ],
-        "Darwin": [
-            "~/Library/Application Support/Google/Chrome",
-        ],
-        "Linux": [
-            "~/.config/google-chrome",
-            "~/.config/chromium",
-        ],
-    },
-    "edge": {
-        "Windows": [
-            r"%LOCALAPPDATA%\Microsoft\Edge\User Data",
-        ],
-        "Darwin": [
-            "~/Library/Application Support/Microsoft Edge",
-        ],
-        "Linux": [
-            "~/.config/microsoft-edge",
-        ],
-    },
-    "brave": {
-        "Windows": [
-            r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data",
-        ],
-        "Darwin": [
-            "~/Library/Application Support/BraveSoftware/Brave-Browser",
-        ],
-        "Linux": [
-            "~/.config/BraveSoftware/Brave-Browser",
-        ],
-    },
-    "chromium": {
-        "Windows": [
-            r"%LOCALAPPDATA%\Chromium\User Data",
-        ],
-        "Darwin": [
-            "~/Library/Application Support/Chromium",
-        ],
-        "Linux": [
-            "~/.config/chromium",
-        ],
-    },
-}
-
-# Browser executable locations, keyed by browser/OS.
-_EXECUTABLE_CANDIDATES: dict[str, dict[str, list[str]]] = {
-    "chrome": {
-        "Windows": [
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-            r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe",
-        ],
-        "Darwin": [
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        ],
-        "Linux": [
-            "/usr/bin/google-chrome",
-            "/usr/bin/google-chrome-stable",
-            "/usr/bin/chromium-browser",
-            "/snap/bin/chromium",
-        ],
-    },
-    "edge": {
-        "Windows": [
-            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-        ],
-        "Darwin": [
-            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-        ],
-        "Linux": [
-            "/usr/bin/microsoft-edge",
-            "/usr/bin/microsoft-edge-stable",
-        ],
-    },
-    "brave": {
-        "Windows": [
-            r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe",
-            r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
-        ],
-        "Darwin": [
-            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-        ],
-        "Linux": [
-            "/usr/bin/brave-browser",
-            "/usr/bin/brave",
-        ],
-    },
-    "chromium": {
-        "Windows": [
-            r"%LOCALAPPDATA%\Chromium\Application\chrome.exe",
-        ],
-        "Darwin": [
-            "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        ],
-        "Linux": [
-            "/usr/bin/chromium",
-            "/usr/bin/chromium-browser",
-            "/snap/bin/chromium",
-        ],
-    },
-}
+_RP = "browser.use_real_profile is on, but "
 
 
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
+def _terminate_real_profile_chrome() -> None:
+    """Terminate real-browser processes launched for real-profile sessions (idempotent, atexit-safe);
+    agent-browser only ATTACHED to them, so its own session cleanup never kills them."""
+    from tools.browser_lightpanda import _terminate
+    _bt = _origin()
+    while _bt._real_profile_chrome_procs:
+        _terminate(_bt._real_profile_chrome_procs.pop(), what="real-profile chrome")
 
 
-@dataclass
-class LaunchPlan:
-    """The resolved launch parameters for a real-profile browser.
-
-    Attributes:
-        browser: Browser key (chrome/edge/brave/chromium).
-        executable: Resolved path to the browser binary.
-        profile_dir: Resolved path to the user profile directory.
-        args: Full argument list (without executable).
-        working_dir: Optional working directory for the subprocess.
-        env: Optional environment overrides.
-        session_id: Stable identifier for this plan.
-    """
-
-    browser: str
-    executable: str
-    profile_dir: str
-    args: list[str]
-    working_dir: str | None = None
-    env: dict[str, str] = field(default_factory=dict)
-    session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-
-    def command_line(self) -> list[str]:
-        """Return the full argv ready for ``subprocess.Popen``."""
-        return [self.executable, *self.args]
+def _cdp_http_ready(http_cdp: str) -> bool:
+    """True when an ``http://host:port`` CDP discovery root answers."""
+    from tools.browser_lightpanda import _cdp_ready
+    return _cdp_ready(http_cdp, timeout=1.0)
 
 
-class RealProfileError(RuntimeError):
-    """Raised when the browser or profile cannot be located."""
+def _real_profile_daemon_env() -> dict:
+    """Reaper-visible socket dir + ``owner_pid`` claim like every other lane (agent-browser's
+    default dir is invisible to the reaper — #100855). The daemon-side idle timeout is dropped:
+    Chrome is launched by Zeloo, not the daemon, so a self-exiting daemon would leave Chrome
+    holding the copy dir under the next snapshot overlay."""
+    _bt = _origin()
+    socket_dir = _session._prepare_session_socket_dir(_bt._REAL_PROFILE_SESSION)
+    env = _session._agent_browser_command_env(socket_dir)
+    env.pop("AGENT_BROWSER_IDLE_TIMEOUT_MS", None)
+    return env
 
 
-# ---------------------------------------------------------------------------
-# Main class
-# ---------------------------------------------------------------------------
-
-
-class RealProfileBrowser:
-    """Browser that uses a real Chromium user profile.
-
-    The class encapsulates *resolution* of the profile directory and
-    executable path, plus the argument list needed to launch the
-    browser. Subclasses (or tests) can override :meth:`launch` to
-    actually spawn the process.
-
-    Attributes:
-        browser: Browser identifier (one of ``SUPPORTED_BROWSERS``).
-        profile_dir: Explicit profile directory override.
-    """
-
-    SUPPORTED_BROWSERS: list[str] = ["chrome", "edge", "brave", "chromium"]
-
-    def __init__(
-        self,
-        browser: str = "chrome",
-        profile_dir: str | Path | None = None,
-        profile_name: str = "Default",
-    ) -> None:
-        """Initialize the launcher.
-
-        Args:
-            browser: One of ``SUPPORTED_BROWSERS``.
-            profile_dir: Override the auto-detected profile directory.
-            profile_name: Sub-directory within the profile to use.
-        """
-        browser_norm = browser.lower().strip()
-        if browser_norm not in self.SUPPORTED_BROWSERS:
-            raise ValueError(
-                f"Unsupported browser {browser!r}. "
-                f"Choose one of: {', '.join(self.SUPPORTED_BROWSERS)}"
-            )
-
-        self.browser: str = browser_norm
-        self.profile_dir: Path | None = (
-            Path(profile_dir).expanduser() if profile_dir else None
-        )
-        self.profile_name: str = profile_name
-        self._executable: str | None = None
-        self._last_plan: LaunchPlan | None = None
-
-    # ------------------------------------------------------------------
-    # Resolution helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _expand(path: str) -> str:
-        """Expand ``%VAR%`` (Windows) and ``~``/``$VAR`` (POSIX) markers."""
-        expanded = os.path.expandvars(os.path.expanduser(path))
-        return expanded
-
-    def find_profile_dir(self, browser: str | None = None) -> Path | None:
-        """Locate the user's default profile directory.
-
-        Args:
-            browser: Override for :attr:`browser`.
-
-        Returns:
-            The first existing candidate path, or ``None`` if nothing
-            matched.
-        """
-        target = (browser or self.browser).lower()
-        if target not in _PROFILE_CANDIDATES:
-            raise RealProfileError(f"Unknown browser {target!r}")
-
-        if self.profile_dir is not None and self.profile_dir.exists():
-            return self.profile_dir
-
-        system = platform.system() or ""
-        candidates = _PROFILE_CANDIDATES[target].get(system, [])
-        for raw in candidates:
-            try:
-                expanded = Path(self._expand(raw))
-            except Exception:  # pragma: no cover - defensive
-                continue
-            if expanded.exists():
-                self.profile_dir = expanded
-                return expanded
+def _agent_browser_session_cmd(session_name: str, *cmd: str, log_label: str) -> Optional[subprocess.CompletedProcess]:
+    """Run ``agent-browser --session <name> <cmd...>``; None when agent-browser is missing or the run fails."""
+    _bt = _origin()
+    try:
+        browser_cmd = _install._find_agent_browser()
+    except FileNotFoundError:
+        return None
+    try:
+        return subprocess.run([*_session._agent_browser_argv(browser_cmd), "--session", session_name, *cmd],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+                              env=_real_profile_daemon_env(), stdin=subprocess.DEVNULL)
+    except (subprocess.SubprocessError, OSError) as e:
+        _bt.logger.debug("real-profile %s failed: %s", log_label, e)
         return None
 
-    def find_executable(self, browser: str | None = None) -> str | None:
-        """Locate the browser binary, falling back to ``PATH`` lookup."""
-        target = (browser or self.browser).lower()
-        if target not in _EXECUTABLE_CANDIDATES:
-            raise RealProfileError(f"Unknown browser {target!r}")
 
-        system = platform.system() or ""
-        for raw in _EXECUTABLE_CANDIDATES[target].get(system, []):
-            try:
-                expanded = self._expand(raw)
-            except Exception:  # pragma: no cover - defensive
-                continue
-            if Path(expanded).exists():
-                self._executable = expanded
-                return expanded
+def _agent_browser_get_cdp(session_name: str) -> Optional[str]:
+    """HTTP CDP discovery root of an agent-browser session (from its ``ws://`` cdp-url), or None."""
+    proc = _agent_browser_session_cmd(session_name, "get", "cdp-url", log_label="get cdp-url")
+    m = re.search(r"ws://127\.0\.0\.1:(\d+)/", (proc.stdout or "").strip()) if proc is not None else None
+    return f"http://127.0.0.1:{m.group(1)}" if m else None
 
-        # Last-ditch: ask the OS PATH for the binary name.
-        names = {
-            "chrome": ["google-chrome", "chrome", "chromium"],
-            "edge": ["msedge", "microsoft-edge"],
-            "brave": ["brave-browser", "brave"],
-            "chromium": ["chromium", "chromium-browser"],
-        }
-        for name in names.get(target, []):
-            found = shutil.which(name)
-            if found:
-                self._executable = found
-                return found
+
+def _read_devtools_port(data_dir: str) -> Optional[str]:
+    """First line of Chrome's ``DevToolsActivePort`` in ``data_dir`` (None when unreadable)."""
+    try:
+        with open(os.path.join(data_dir, "DevToolsActivePort"), encoding="utf-8") as fh:
+            return fh.readline().strip()
+    except OSError:
         return None
 
-    # ------------------------------------------------------------------
-    # Argument synthesis
-    # ------------------------------------------------------------------
 
-    def build_launch_args(
-        self,
-        *,
-        headless: bool = False,
-        remote_debugging_port: int = 9222,
-        start_url: str = "about:blank",
-        extra_args: list[str] | None = None,
-        no_first_run: bool = True,
-        disable_default_apps: bool = True,
-    ) -> list[str]:
-        """Compose the Chromium argument list.
+def _surviving_chrome_cdp(data_dir: str) -> Optional[str]:
+    """HTTP CDP root of a Chrome still running on ``data_dir``, or None. ``DevToolsActivePort``
+    outlives a crashed Chrome and its port can be recycled by another local CDP server, so the
+    file's browser id (line 2) must match what ``/json/version`` reports before it is trusted."""
+    try:
+        with open(os.path.join(data_dir, "DevToolsActivePort"), encoding="utf-8") as fh:
+            port, browser_path = fh.readline().strip(), fh.readline().strip()
+    except OSError:
+        return None
+    if not port.isdigit() or not browser_path.startswith("/devtools/browser/"):
+        return None
+    http_cdp = f"http://127.0.0.1:{port}"
+    try:
+        import requests
+        ws_url = str(requests.get(f"{http_cdp}/json/version", timeout=2).json().get("webSocketDebuggerUrl") or "")
+    except Exception:
+        return None
+    return http_cdp if ws_url.endswith(browser_path) else None
 
-        Args:
-            headless: Use new headless mode when True.
-            remote_debugging_port: CDP debug port (0 disables).
-            start_url: Initial page to open.
-            extra_args: Caller-supplied extra switches.
-            no_first_run: Skip the first-run wizard.
-            disable_default_apps: Don't restore the default apps.
 
-        Returns:
-            The complete argv tail (no executable prefix).
-        """
-        profile = self.profile_dir or self.find_profile_dir()
-        args: list[str] = []
-        if profile:
-            args.append(f"--user-data-dir={str(profile)}")
-            args.append(f"--profile-directory={self.profile_name}")
-        if headless:
-            args.append("--headless=new")
-        if remote_debugging_port:
-            args.append(f"--remote-debugging-port={int(remote_debugging_port)}")
-        if no_first_run:
-            args.append("--no-first-run")
-        if disable_default_apps:
-            args.append("--disable-default-apps")
-        if extra_args:
-            args.extend(extra_args)
-        if start_url:
-            args.append(start_url)
-        return args
+def _cdp_on_data_dir(http_cdp: str, data_dir: str) -> bool:
+    """True when the CDP endpoint's browser runs on ``data_dir`` (DevToolsActivePort match proves it
+    is our profile copy, not a throwaway temp dir a raced/stale launch fell back to)."""
+    m = re.search(r":(\d+)", http_cdp or "")
+    return bool(m) and _read_devtools_port(data_dir) == m.group(1)
 
-    # ------------------------------------------------------------------
-    # Launch (planning + optional subprocess)
-    # ------------------------------------------------------------------
 
-    async def launch(
-        self,
-        *,
-        headless: bool = False,
-        remote_debugging_port: int = 9222,
-        start_url: str = "about:blank",
-        extra_args: list[str] | None = None,
-        spawn: bool = False,
-        wait_for_debug_port: bool = False,
-        wait_timeout: float = 15.0,
-    ) -> dict[str, Any]:
-        """Plan (and optionally spawn) the browser launch.
+def _agent_browser_close_session(session_name: str) -> None:
+    """Best-effort close of an agent-browser session (stale/wrong-dir cleanup)."""
+    _agent_browser_session_cmd(session_name, "close", log_label="session close")
 
-        Args:
-            headless: Run in new headless mode.
-            remote_debugging_port: CDP port to expose.
-            start_url: Initial URL.
-            extra_args: Extra Chromium switches.
-            spawn: If True, actually start the subprocess.
-            wait_for_debug_port: If True, poll the debug port until it
-                accepts connections (only when ``spawn`` is True).
-            wait_timeout: Maximum wait time for the debug port.
 
-        Returns:
-            Dict containing the resolved plan. When ``spawn`` is True
-            also includes ``pid`` and ``debug_url`` keys.
-        """
-        exe = self._executable or self.find_executable()
-        if not exe:
-            raise RealProfileError(
-                f"Could not find executable for browser {self.browser!r}. "
-                "Set CHROME_PATH / EDGE_PATH / BRAVE_PATH or install the browser."
-            )
-        profile = self.profile_dir or self.find_profile_dir()
-        if not profile:
-            logger.warning(
-                "real_profile_missing browser=%s — launching without --user-data-dir",
-                self.browser,
-            )
+_REAL_PROFILE_CHROME_FLAGS = (
+    "--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
+    "--disable-background-networking", "--disable-component-update", "--disable-default-apps",
+    "--disable-hang-monitor", "--disable-popup-blocking", "--disable-prompt-on-repost",
+    "--disable-sync", "--disable-features=Translate", "--no-startup-window",
+)
 
-        args = self.build_launch_args(
-            headless=headless,
-            remote_debugging_port=remote_debugging_port,
-            start_url=start_url,
-            extra_args=extra_args,
-        )
 
-        plan = LaunchPlan(
-            browser=self.browser,
-            executable=exe,
-            profile_dir=str(profile) if profile else "",
-            args=args,
-        )
-        self._last_plan = plan
+def _real_profile_unsupported_reason(browser) -> Optional[str]:
+    """Fail-closed message when the default browser can't be used, else None.
 
-        result: dict[str, Any] = {
-            "session_id": plan.session_id,
-            "browser": plan.browser,
-            "executable": plan.executable,
-            "profile_dir": plan.profile_dir,
-            "args": list(plan.args),
-            "spawned": False,
-        }
+    A pre-release channel lives in a profile dir we don't resolve; normalizing to the stable
+    family would drive a DIFFERENT profile/account (wrong-principal bug), so refuse rather than guess.
+    """
+    from zeloo_cli.browser_connect import UNSUPPORTED_CHANNEL
+    if browser is None:
+        return (_RP + "your default browser is not a supported Chromium browser (Chrome, Edge, Brave, "
+                "Brave Origin, Chromium). Real-profile browsing requires a Chromium default; set one or turn the toggle off.")
+    if browser == UNSUPPORTED_CHANNEL:
+        return (_RP + "your default browser is a pre-release Chromium channel (Beta / Dev / Canary), which "
+                "real-profile browsing does not support. Set your default to a "
+                "stable Chrome / Edge / Brave / Brave Origin / Chromium, or turn the toggle off.")
+    return None
 
-        if not spawn:
-            return result
 
+def _real_profile_snapshot_error(err: str) -> str:
+    """User-facing message for a failed profile snapshot; a locked profile adds the approved-close
+    command, which the agent must ASK the user about first (it quits their browser)."""
+    from zeloo_cli.browser_connect import _PROFILE_LOCKED_PREFIX
+    if err and err.startswith(_PROFILE_LOCKED_PREFIX):
+        return (err[len(_PROFILE_LOCKED_PREFIX):] + " To close it (only after the user approves — it "
+                "quits their browser and loses unsaved tabs), run: `Zeloo browser close-profile`, then retry.")
+    return f"{_RP}{err}"
+
+
+def _launch_real_profile_chrome(real_binary: str, copy_dir: str) -> Tuple[Optional[int], Optional[str]]:
+    """Launch the user's REAL browser binary on the profile COPY; return (debug_port, error).
+
+    agent-browser's own launch force-adds --use-mock-keychain / --password-store=basic, which makes
+    macOS Chrome drop every keychain-encrypted cookie (signed-out copy); launching the real binary
+    ourselves keeps the OS keychain path intact and agent-browser attaches via ``--cdp <port>``.
+    Headless by default (a focus-stealing window defeats a background capability); Chrome's NEW
+    headless shares the profile's cookie store (legacy --headless does not). browser.headed /
+    AGENT_BROWSER_HEADED opts into a window, except on a display-less Linux host (launch would die).
+    """
+    _bt = _origin()
+    try:
+        os.unlink(os.path.join(copy_dir, "DevToolsActivePort"))  # stale port confuses reuse probes
+    except OSError:
+        pass
+    chrome_argv = [real_binary, f"--user-data-dir={copy_dir}", *_REAL_PROFILE_CHROME_FLAGS]
+    _has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    if not (_cloud._is_headed_mode() and (_has_display or not sys.platform.startswith("linux"))):
+        chrome_argv.append("--headless=new")
+    try:
+        chrome_proc = subprocess.Popen(chrome_argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                       stdin=subprocess.DEVNULL, start_new_session=True, env=_bt._build_browser_env())
+    except (subprocess.SubprocessError, OSError) as e:
+        return None, f"{_RP}the launch failed: {e}"
+    _bt._real_profile_chrome_procs.append(chrome_proc)
+
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        line = _read_devtools_port(copy_dir) or ""
+        if line.isdigit():
+            return int(line), None
+        if chrome_proc.poll() is not None:
+            _terminate_real_profile_chrome()
+            return None, _RP + "Chrome exited during startup (another instance may hold the profile copy)."
+        time.sleep(0.25)
+    _terminate_real_profile_chrome()
+    return None, _RP + "the real-profile browser did not expose a debug port in time. Retry, or turn the toggle off."
+
+
+def _attach_agent_browser_to_real_profile(port: int, copy_dir: str) -> Tuple[Optional[str], Optional[str]]:
+    """Make agent-browser ATTACH to the running Chrome (never launch its own); returns ``(http_cdp, error)``.
+
+    The daemon may answer with the endpoint of a browser IT spawned (throwaway temp profile);
+    the DevToolsActivePort OUR Chrome wrote is authoritative on disagreement.
+    """
+    _bt = _origin()
+    try:
+        browser_cmd = _install._find_agent_browser()
+    except FileNotFoundError as e:
+        return None, f"{_RP}the local browser engine (agent-browser) is not installed: {e}"
+    argv = [*_session._agent_browser_argv(browser_cmd), "--session", _bt._REAL_PROFILE_SESSION,
+            "--cdp", str(port), "open", "about:blank"]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=_bt._get_open_command_timeout(first_open=True), env=_real_profile_daemon_env(),
+                              stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return None, _RP + "the real-profile browser took too long to start. Retry, or turn the toggle off."
+    except (subprocess.SubprocessError, OSError) as e:
+        return None, f"{_RP}the launch failed: {e}"
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        return None, f"{_RP}the real-profile browser failed to start: {tail[-1] if tail else f'exit {proc.returncode}'}"
+    cdp = _agent_browser_get_cdp(_bt._REAL_PROFILE_SESSION)
+    our_port = _read_devtools_port(copy_dir)
+    if our_port is not None and (m := re.search(r":(\d+)", cdp or "")) and m.group(1) != our_port:
+        cdp = f"http://127.0.0.1:{our_port}"
+    if not cdp:
+        return None, _RP + "the real-profile browser started without exposing a devtools endpoint. Retry, or turn the toggle off."
+    return cdp, None
+
+
+def _real_profile_cdp() -> tuple:
+    """Resolve ``(cdp_url, error)`` for consented real-profile browsing.
+
+    Snapshot -> launch real binary on the copy -> return its HTTP CDP endpoint. The copy is a
+    non-default dir, so it sidesteps the Chrome >=136 default-profile remote-debugging block and
+    never contends with the user's running browser. One shared agent-browser session is reused
+    across calls (cached, re-validated). ``(None, message)`` fail-closed; ``(None, None)`` when consent is off.
+    """
+    _bt = _origin()
+    if not _cloud._use_real_profile():
+        # Consent is off: delete any snapshot store (copies of cookies/logins) so
+        # revoking consent actually removes the credential copies.
         try:
-            proc = subprocess.Popen(  # noqa: S603 — caller opted in
-                plan.command_line(),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=platform.system() != "Windows",
-            )
-        except OSError as exc:
-            raise RealProfileError(f"Failed to launch {exe}: {exc}") from exc
+            from zeloo_cli.browser_connect import cleanup_real_profile_snapshots
+            cleanup_real_profile_snapshots()
+        except Exception as e:
+            _bt.logger.debug("real-profile cleanup-on-consent-off failed: %s", e)
+        _bt._real_profile_cdp_cache.pop("cdp", None)
+        return None, None
 
-        result["spawned"] = True
-        result["pid"] = int(proc.pid)
+    # Lightpanda rejects ``--profile``; check BEFORE default-browser detection so a
+    # host with no Chromium default still reports the actionable engine conflict.
+    if _lp._using_lightpanda_engine():
+        return None, (_RP + "browser.engine is set to 'lightpanda', which cannot load a real Chromium profile. "
+                      "Set browser.engine to 'auto' or 'chrome' to use real-profile browsing, or turn the toggle off.")
 
-        debug_url = ""
-        if remote_debugging_port and wait_for_debug_port:
-            debug_url = await self._wait_for_debug_port(
-                remote_debugging_port, wait_timeout
-            )
-            result["debug_url"] = debug_url
+    from zeloo_cli.browser_connect import (chromium_executable, detect_default_chromium,
+                                            real_profile_copy_dir, snapshot_real_profile)
 
-        # Hand the process off to the caller through the plan metadata.
-        result["process_handle"] = proc
-        return result
+    with _bt._real_profile_cdp_lock:
+        cached = _bt._real_profile_cdp_cache.get("cdp")
+        if cached and _cdp_http_ready(cached):
+            # Re-claim the shared daemon's socket dir so the orphan reaper's idle clock sees
+            # this process still using it (a cache hit never runs a daemon command).
+            _session._prepare_session_socket_dir(_bt._REAL_PROFILE_SESSION)
+            return cached, None
+        _bt._real_profile_cdp_cache.pop("cdp", None)
 
-    async def _wait_for_debug_port(self, port: int, timeout: float) -> str:
-        """Poll ``http://localhost:<port>/json/version`` until it answers."""
-        import socket
+        browser = detect_default_chromium()
+        unsupported = _real_profile_unsupported_reason(browser)
+        if unsupported:
+            return None, unsupported
 
-        deadline = asyncio.get_event_loop().time() + max(0.0, float(timeout))
-        url = f"http://127.0.0.1:{port}/json/version"
-        while asyncio.get_event_loop().time() < deadline:
-            try:
-                with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-                    return url
-            except OSError:
-                await asyncio.sleep(0.2)
-        return ""
+        # Reuse BEFORE writing anything. CRITICAL: the snapshot overlay (truncates/rewrites
+        # Cookies / Login Data) must NOT run while a live copy-browser (maybe from a previous
+        # Zeloo process) holds the user-data-dir open — that corrupts the databases.
+        copy_dir = real_profile_copy_dir(browser)
+        existing = _agent_browser_get_cdp(_bt._REAL_PROFILE_SESSION)
+        if existing and _cdp_http_ready(existing) and _cdp_on_data_dir(existing, copy_dir):
+            _bt._real_profile_cdp_cache["cdp"] = existing
+            return existing, None
+        if existing:  # stale/wrong-dir session: close it so nothing holds the dir open
+            _agent_browser_close_session(_bt._REAL_PROFILE_SESSION)
+        # A Chrome from an earlier Zeloo process can still hold the copy dir after its attach
+        # daemon was reaped (that owner died). Re-attach to it rather than overlay a live profile;
+        # if the daemon cannot attach, fail closed — never snapshot over an open profile. Not ours
+        # to terminate (no Popen handle): it lives until the user closes it, by design.
+        surviving = _surviving_chrome_cdp(copy_dir)
+        if surviving:
+            cdp, err = _attach_agent_browser_to_real_profile(int(surviving.rsplit(":", 1)[1]), copy_dir)
+            if not cdp:
+                return None, err
+            _bt._real_profile_cdp_cache["cdp"] = cdp
+            _bt.logger.info("real-profile: re-attached to surviving Chrome at %s (%s)", cdp, copy_dir)
+            return cdp, None
 
-    # ------------------------------------------------------------------
-    # Diagnostics
-    # ------------------------------------------------------------------
-
-    def describe(self) -> dict[str, Any]:
-        """Return a diagnostic summary (no I/O)."""
-        return {
-            "browser": self.browser,
-            "profile_dir": str(self.profile_dir) if self.profile_dir else None,
-            "profile_name": self.profile_name,
-            "resolved_executable": self._executable,
-            "supported_browsers": list(self.SUPPORTED_BROWSERS),
-            "platform": platform.system(),
-        }
+        copy_dir, err = snapshot_real_profile(browser)
+        if err or not copy_dir:
+            return None, _real_profile_snapshot_error(err)
+        real_binary = chromium_executable(browser)
+        if real_binary is None:
+            return None, f"{_RP}the real browser binary for '{browser}' could not be found. Reinstall it or turn the toggle off."
+        port, err = _launch_real_profile_chrome(real_binary, copy_dir)
+        if port is None:
+            return None, err
+        cdp, err = _attach_agent_browser_to_real_profile(port, copy_dir)
+        if not cdp:
+            return None, err
+        _bt._real_profile_cdp_cache["cdp"] = cdp
+        _bt.logger.info("real-profile browser ready for %s at %s (%s)", browser, cdp, copy_dir)
+        return cdp, None

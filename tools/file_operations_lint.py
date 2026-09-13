@@ -1,426 +1,295 @@
-"""File linting: syntax check, formatting, security scan."""
+"""Syntax-lint and LSP-diagnostics tier for ``tools.file_operations``.
 
-from __future__ import annotations
+``ShellFileOperations`` inherits ``LintMixin``; module constants and in-process
+linters are pure functions importable from this module.
+"""
 
 import ast
-import re
-import tokenize
-from io import StringIO
-from pathlib import Path
-from typing import Any, Callable
+import json
+import os
+import tomllib
+from typing import Callable, Dict, Optional
+
+from tools.file_operations_common import LintResult
+
+# Shell linters by extension (external toolchain). ``.tsx`` is deliberately absent:
+# it hits the "No linter" skip and LSP covers it when enabled.
+LINTERS = {
+    '.py': 'python -m py_compile {file} 2>&1',
+    '.js': 'node --check {file} 2>&1',
+    '.ts': 'npx tsc --noEmit {file} 2>&1',
+    '.go': 'go vet {file} 2>&1',
+    '.rs': 'rustfmt --check {file} 2>&1',
+}
+
+# Per-file shell linters that flood phantom errors on real projects (single-file
+# ``tsc`` ignores tsconfig, ``go vet`` fails outside a module, ``rustfmt --check``
+# is style-only): skipped when an LSP server claims the file. py_compile /
+# node --check are file-local and correct so always run.
+_SHELL_LINTER_LSP_REDUNDANT = frozenset({'.ts', '.go', '.rs'})
+
+# Output substrings (case-insensitive) meaning the linter binary exists but could
+# not run → ``skipped`` so the write isn't flagged and the LSP tier still runs.
+_LINTER_UNUSABLE_PATTERNS = {
+    'npx': (
+        'this is not the tsc command you are looking for',  # tsc not installed locally
+        'could not determine executable to run',
+        'not found in npm registry',
+    ),
+    'rustfmt': (
+        'no input filename given',  # outside a Cargo project
+        'error: not a workspace',
+    ),
+    'go': (
+        'cannot find package',  # outside a module / GOPATH
+        'go: cannot find main module',
+    ),
+}
 
 
-class FileLint:
-    """File linting and formatting tool.
+def _looks_like_linter_unusable(base_cmd: str, output: str) -> bool:
+    """True iff ``output`` from ``base_cmd`` (first word of the linter cmd) says the tool itself couldn't run."""
+    patterns = _LINTER_UNUSABLE_PATTERNS.get(base_cmd)
+    if not patterns:
+        return False
+    lower = output.lower()
+    return any(p in lower for p in patterns)
 
-    Provides syntax checking, formatting, and security scanning
-    capabilities for various file types.
-    """
 
-    PYTHON_EXTENSIONS = {".py", ".pyw", ".pyi"}
-    JAVASCRIPT_EXTENSIONS = {".js", ".jsx", ".mjs", ".cjs"}
-    TYPESCRIPT_EXTENSIONS = {".ts", ".tsx"}
-    JSON_EXTENSIONS = {".json"}
-    YAML_EXTENSIONS = {".yaml", ".yml"}
+def _lint_json_inproc(content: str) -> tuple[bool, str]:
+    """In-process JSON syntax check. Returns (ok, error_message)."""
+    try:
+        json.loads(content)
+        return True, ""
+    except json.JSONDecodeError as e:
+        return False, f"JSONDecodeError: {e.msg} (line {e.lineno}, column {e.colno})"
+    except Exception as e:  # noqa: BLE001 — any parse failure is a lint failure
+        return False, f"{type(e).__name__}: {e}"
 
-    DANGEROUS_PATTERNS = [
-        (r"password\s*=\s*['\"][^'\"]{0,}", "Hardcoded password detected"),
-        (r"api[_-]?key\s*=\s*['\"][^'\"]{0,}", "Hardcoded API key detected"),
-        (r"secret\s*=\s*['\"][^'\"]{0,}", "Hardcoded secret detected"),
-        (r"token\s*=\s*['\"][^'\"]{8,}", "Hardcoded token detected"),
-        (r"eval\s*\(", "Use of eval() is dangerous"),
-        (r"exec\s*\(", "Use of exec() is dangerous"),
-        (r"__import__\s*\(", "Dynamic import detected"),
-        (r"subprocess\s*\.\s*(call|run|Popen)\s*\(", "Subprocess call without shell=True check"),
-        (r"os\s*\.\s*system\s*\(", "os.system() call detected"),
-        (r"pickle\s*\.\s*(load|loads)\s*\(", "Pickle deserialization is unsafe"),
-        (r"hashlib\s*\.\s*new\s*\(\s*['\"]md5['\"]", "MD5 hash usage detected"),
-        (r"crypto\.createCipher", "Deprecated crypto usage detected"),
-        (r"DES\.new\s*\(", "DES encryption is insecure"),
-        (r"\.sendmail\s*\(", "sendmail without proper validation"),
-        (r"shell\s*=\s*True", "Shell=True is a security risk"),
-    ]
 
-    def __init__(self, config: dict[str, Any] | None = None) -> None:
-        """Initialize file lint.
+def _lint_yaml_inproc(content: str) -> tuple[bool, str]:
+    """In-process YAML syntax check; ``__SKIP__`` when PyYAML is missing. Syntax-only
+    (``yaml.parse``), NOT ``safe_load``: loading rejects valid multi-doc streams and
+    app tags (``!Sub``, ``!vault``), and this is a fail-closed WRITE gate."""
+    try:
+        import yaml as _yaml
+    except ImportError:
+        return True, "__SKIP__"
+    try:
+        for _event in _yaml.parse(content):
+            pass
+        return True, ""
+    except _yaml.YAMLError as e:
+        return False, f"YAMLError: {e}"
+    except Exception as e:  # noqa: BLE001
+        return False, f"{type(e).__name__}: {e}"
 
-        Args:
-            config: Optional configuration dictionary.
-        """
-        self._config = config or {}
-        self._linters: dict[str, Callable[[Path], dict[str, Any]]] = {}
-        self._register_default_linters()
 
-    def _register_default_linters(self) -> None:
-        """Register default linters for common file types."""
-        self.register_linter(".py", self._lint_python)
-        self.register_linter(".js", self._lint_javascript)
-        self.register_linter(".ts", self._lint_typescript)
-        self.register_linter(".json", self._lint_json)
-        self.register_linter(".yaml", self._lint_yaml)
-        self.register_linter(".yml", self._lint_yaml)
+def _lint_toml_inproc(content: str) -> tuple[bool, str]:
+    """In-process TOML syntax check (stdlib tomllib)."""
+    try:
+        tomllib.loads(content)
+        return True, ""
+    except Exception as e:  # TOMLDecodeError is a ValueError subclass
+        return False, f"{type(e).__name__}: {e}"
 
-    def register_linter(self, extension: str, linter: Callable[[Path], dict[str, Any]]) -> None:
-        """Register a custom linter for a file extension.
 
-        Args:
-            extension: File extension (e.g., '.py').
-            linter: Callable that takes a Path and returns lint results.
-        """
-        self._linters[extension] = linter
+def _lint_python_inproc(content: str) -> tuple[bool, str]:
+    """In-process Python syntax check via ast.parse (py_compile's scope, no subprocess)."""
+    try:
+        ast.parse(content)
+        return True, ""
+    except SyntaxError as e:
+        loc = f" (line {e.lineno}, column {e.offset})" if e.lineno else ""
+        return False, f"{type(e).__name__}: {e.msg}{loc}"
+    except Exception as e:  # noqa: BLE001
+        return False, f"{type(e).__name__}: {e}"
 
-    async def lint(self, path: Path) -> dict[str, Any]:
-        """Lint a file using the appropriate linter.
 
-        Args:
-            path: Path to the file to lint.
+# In-process linters, preferred over shell linters (no subprocess). Each returns
+# (ok, error); error ``"__SKIP__"`` = unavailable dependency, counts as "no linter".
+LINTERS_INPROC: Dict[str, Callable[[str], tuple[bool, str]]] = {
+    '.py': _lint_python_inproc,
+    '.json': _lint_json_inproc,
+    '.yaml': _lint_yaml_inproc,
+    '.yml': _lint_yaml_inproc,
+    '.toml': _lint_toml_inproc,
+}
 
-        Returns:
-            Dictionary with lint results.
-        """
+# Extensions where write_file REFUSES on a parse failure. ``.py`` is excluded on
+# purpose: test fixtures use ``*.py`` paths as a stand-in for arbitrary text, so
+# Python keeps the non-blocking lint-delta report.
+_FAIL_CLOSED_INPROC_EXTS = frozenset({'.json', '.yaml', '.yml', '.toml'})
+
+
+class LintMixin:
+    """Post-write syntax lint + LSP diagnostics. Requires ``_exec``,
+    ``_has_command``, ``_escape_shell_arg``, ``_escape_native_tool_arg`` and
+    ``env`` from the host class."""
+
+    def _check_lint(self, path: str, content: Optional[str] = None) -> LintResult:
+        """Syntax-check ``path``: in-process linter when one matches the
+        extension (``content`` avoids a re-read), else the shell linter table."""
+        ext = os.path.splitext(path)[1].lower()
+        inproc = LINTERS_INPROC.get(ext)
+        if inproc is not None:
+            if content is None:
+                read_result = self._exec(f"cat {self._escape_shell_arg(path)} 2>/dev/null")
+                if read_result.exit_code != 0:
+                    return LintResult(skipped=True, message=f"Failed to read {path} for lint")
+                content = read_result.stdout
+            ok, err = inproc(content)
+            if err == "__SKIP__":
+                return LintResult(skipped=True, message=f"No linter available for {ext} (missing dependency)")
+            return LintResult(success=ok, output="" if ok else err)
+        if ext not in LINTERS:
+            return LintResult(skipped=True, message=f"No linter for {ext} files")
+        # Single-file tsc can't read tsconfig.json and floods phantom TS2307/TS2339
+        # errors the delta filter misreports as "pre-existing"; let the LSP tier speak.
+        if ext == '.ts' and self._has_ancestor_tsconfig(path):
+            return LintResult(skipped=True, message=(
+                "Project tsconfig.json detected — per-file tsc skipped "
+                "(single-file tsc can't resolve project aliases/globals; "
+                "use the LSP tier or `tsc -p tsconfig.json` for real "
+                "diagnostics)."
+            ))
+        if ext in _SHELL_LINTER_LSP_REDUNDANT and self._lsp_will_handle(path):
+            return LintResult(skipped=True, message=f"LSP server handles {ext} — shell linter skipped")
+        linter_cmd = LINTERS[ext]
+        base_cmd = linter_cmd.split()[0]
+        if not self._has_command(base_cmd):
+            return LintResult(skipped=True, message=f"{base_cmd} not available")
+        # Native Windows binaries need C:/... not MSYS /c/... (→ phantom ENOENT).
+        result = self._exec(linter_cmd.replace("{file}", self._escape_native_tool_arg(path)), timeout=30)
+        if result.exit_code != 0 and _looks_like_linter_unusable(base_cmd, result.stdout):
+            from tools.ansi_strip import strip_ansi
+            cleaned = strip_ansi(result.stdout).strip()
+            # Collapse to one line — the npx banner is multi-line ASCII art.
+            first_line = next((ln.strip() for ln in cleaned.splitlines() if ln.strip()), cleaned[:120])
+            return LintResult(skipped=True, message=f"{base_cmd} not usable: {first_line[:200]}")
+        return LintResult(success=result.exit_code == 0, output=result.stdout.strip())
+
+    def _check_lint_delta(self, path: str, pre_content: Optional[str],
+                          post_content: Optional[str] = None) -> LintResult:
+        """Post-write lint; when it fails and ``pre_content`` is known, report only
+        errors this edit introduced (pre-existing lines filtered out). Semantic
+        (LSP) diagnostics are a separate channel — see ``_maybe_lsp_diagnostics``."""
+        post = self._check_lint(path, content=post_content)
+        if post.success or post.skipped or pre_content is None:
+            return post
+        pre = self._check_lint(path, content=pre_content)
+        if pre.success or pre.skipped or not pre.output:
+            return post  # pre-write was clean (or unlintable): all post errors are new
+        # Single-error parsers stop at the first error, so if every post error already
+        # existed we can't prove the edit is clean — say nothing new was introduced.
+        pre_lines = {ln.strip() for ln in pre.output.splitlines() if ln.strip()}
+        post_lines = [ln for ln in post.output.splitlines() if ln.strip() and ln.strip() not in pre_lines]
+        if not post_lines:
+            return LintResult(success=False, output=post.output, message=(
+                "Pre-existing lint errors — this edit didn't introduce new ones but the file is still broken."))
+        return LintResult(success=False, output=(
+            "New lint errors introduced by this edit "
+            "(pre-existing errors filtered out):\n" + "\n".join(post_lines)
+        ))
+
+    def _lsp_local_only(self) -> bool:
+        """True iff wired to a local backend. LSP servers run on the host and
+        can't see files inside Docker/Modal/SSH/Daytona sandboxes."""
+        env = getattr(self, "env", None)  # tests may build via __new__ without __init__
+        if env is None:
+            return False
         try:
-            if not path.exists():
-                return {"success": False, "error": "File not found", "path": str(path)}
+            from tools.environments.local import LocalEnvironment
+        except Exception:  # noqa: BLE001
+            return False
+        return isinstance(env, LocalEnvironment)
 
-            extension = path.suffix.lower()
-            if extension not in self._linters:
-                return {
-                    "success": False,
-                    "error": f"No linter registered for {extension}",
-                    "path": str(path),
-                }
-
-            result = self._linters[extension](path)
-            result["path"] = str(path)
-            result["extension"] = extension
-            return result
-
-        except Exception as e:
-            return {"success": False, "error": str(e), "path": str(path)}
-
-    def _lint_python(self, path: Path) -> dict[str, Any]:
-        """Lint a Python file.
-
-        Args:
-            path: Path to Python file.
-
-        Returns:
-            Dictionary with lint results.
-        """
-        issues: list[dict[str, Any]] = []
-        warnings: list[dict[str, Any]] = []
-
+    def _lsp_service(self):
+        """The active LSPService, or None on a non-local backend / any failure.
+        LSP is an enrichment layer and must never break a write."""
+        if not self._lsp_local_only():
+            return None
         try:
-            content = path.read_text(encoding="utf-8", errors="replace")
-        except (OSError, PermissionError) as e:
-            return {"success": False, "error": str(e)}
+            from agent.lsp import get_service
+            return get_service()
+        except Exception:  # noqa: BLE001
+            return None
 
-        lines = content.split("\n")
-        for i, line in enumerate(lines, 1):
-            stripped = line.rstrip()
-            if stripped != line:
-                warnings.append({
-                    "line": i,
-                    "column": len(line) - len(stripped),
-                    "message": "Trailing whitespace",
-                    "severity": "warning",
-                })
-
-            if len(line) > 120:
-                warnings.append({
-                    "line": i,
-                    "message": f"Line too long ({len(line)} > 120)",
-                    "severity": "warning",
-                })
-
+    def _lsp_handles_extension(self, ext: str) -> bool:
+        """True iff some registered LSP server claims ``ext`` (static registry
+        only; safe on remote backends). Decides whether pre-write content is
+        worth capturing for the line-shift map."""
+        if not ext:
+            return False
         try:
-            tree = ast.parse(content, filename=str(path))
-            for node in ast.walk(tree):
-                if isinstance(node, ast.FunctionDef):
-                    if len(node.args.args) > 6:
-                        issues.append({
-                            "message": f"Function {node.name} has too many parameters ({len(node.args.args)})",
-                            "severity": "warning",
-                        })
+            from agent.lsp.servers import SERVERS
+        except Exception:  # noqa: BLE001
+            return False
+        return any(ext.lower() in srv.extensions for srv in SERVERS)
 
-                if isinstance(node, (ast.For, ast.While)):
-                    if isinstance(node.body, list) and len(node.body) > 50:
-                        issues.append({
-                            "message": "Loop body is too long (> 50 statements)",
-                            "severity": "warning",
-                        })
-
-        except SyntaxError as e:
-            issues.append({
-                "message": f"Syntax error: {e.msg}",
-                "line": e.lineno or 0,
-                "column": e.offset or 0,
-                "severity": "error",
-            })
-        except ValueError as e:
-            issues.append({
-                "message": f"Parse error: {e}",
-                "severity": "error",
-            })
-
-        return {
-            "success": True,
-            "issues": issues,
-            "warnings": warnings,
-            "total_issues": len(issues),
-            "total_warnings": len(warnings),
-        }
-
-    def _lint_javascript(self, path: Path) -> dict[str, Any]:
-        """Lint a JavaScript file.
-
-        Args:
-            path: Path to JavaScript file.
-
-        Returns:
-            Dictionary with lint results.
-        """
-        issues: list[dict[str, Any]] = []
-        warnings: list[dict[str, Any]] = []
-
+    def _has_ancestor_tsconfig(self, path: str) -> bool:
+        """True iff a tsconfig.json exists in ``path``'s directory or any ancestor.
+        Host-side walk, local backend only: on a remote backend this answers False so
+        the shell linter still runs — never suppress lint on a probe that couldn't answer."""
+        if not self._lsp_local_only():
+            return False
         try:
-            content = path.read_text(encoding="utf-8", errors="replace")
-        except (OSError, PermissionError) as e:
-            return {"success": False, "error": str(e)}
+            d = os.path.dirname(os.path.abspath(path))
+            while not os.path.isfile(os.path.join(d, "tsconfig.json")):
+                parent = os.path.dirname(d)
+                if parent == d:
+                    return False
+                d = parent
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
-        lines = content.split("\n")
-        for i, line in enumerate(lines, 1):
-            if len(line) > 120:
-                warnings.append({
-                    "line": i,
-                    "message": f"Line too long ({len(line)} > 120)",
-                    "severity": "warning",
-                })
-
-            if "var " in line:
-                warnings.append({
-                    "line": i,
-                    "message": "Use 'let' or 'const' instead of 'var'",
-                    "severity": "warning",
-                })
-
-        return {
-            "success": True,
-            "issues": issues,
-            "warnings": warnings,
-            "total_issues": len(issues),
-            "total_warnings": len(warnings),
-        }
-
-    def _lint_typescript(self, path: Path) -> dict[str, Any]:
-        """Lint a TypeScript file.
-
-        Args:
-            path: Path to TypeScript file.
-
-        Returns:
-            Dictionary with lint results.
-        """
-        return self._lint_javascript(path)
-
-    def _lint_json(self, path: Path) -> dict[str, Any]:
-        """Lint a JSON file.
-
-        Args:
-            path: Path to JSON file.
-
-        Returns:
-            Dictionary with lint results.
-        """
-        issues: list[dict[str, Any]] = []
-
+    def _lsp_call(self, method: str, path: str, default):
+        """``svc.<method>(path)`` on the active service; ``default`` when there is
+        no service or the call raises (LSP never breaks a write)."""
+        svc = self._lsp_service()
+        if svc is None:
+            return default
         try:
-            content = path.read_text(encoding="utf-8", errors="replace")
-            import json
-            json.loads(content)
-        except json.JSONDecodeError as e:
-            issues.append({
-                "message": f"Invalid JSON: {e.msg}",
-                "line": e.lineno,
-                "column": e.colno,
-                "severity": "error",
-            })
-        except (OSError, PermissionError) as e:
-            return {"success": False, "error": str(e)}
+            return getattr(svc, method)(path)
+        except Exception:  # noqa: BLE001
+            return default
 
-        return {
-            "success": True,
-            "issues": issues,
-            "warnings": [],
-            "total_issues": len(issues),
-            "total_warnings": 0,
-        }
+    def _lsp_will_handle(self, path: str) -> bool:
+        """True iff the LSP service is active AND ``enabled_for(path)`` (workspace
+        detection, disabled-server set, broken-pair short-circuit). Any failure →
+        False so the shell linter still runs."""
+        return bool(self._lsp_call("enabled_for", path, False))
 
-    def _lint_yaml(self, path: Path) -> dict[str, Any]:
-        """Lint a YAML file.
+    def _snapshot_lsp_baseline(self, path: str) -> None:
+        """Capture pre-edit LSP diagnostics so the post-write delta is correct. Silent on failure."""
+        self._lsp_call("snapshot_baseline", path, None)
 
-        Args:
-            path: Path to YAML file.
-
-        Returns:
-            Dictionary with lint results.
-        """
-        issues: list[dict[str, Any]] = []
-
+    def _maybe_lsp_diagnostics(self, path: str, *, pre_content: Optional[str] = None,
+                               post_content: Optional[str] = None) -> str:
+        """Formatted LSP diagnostics introduced by this edit, or "" when LSP is
+        unavailable/disabled/clean. With both pre and post content a line-shift map
+        remaps baseline diagnostics into post-edit coordinates; otherwise every
+        pre-existing diagnostic below an inserted line would look new."""
+        svc = self._lsp_service()
+        if svc is None or not svc.enabled_for(path):
+            return ""
+        line_shift = None
+        if pre_content is not None and post_content is not None and pre_content != post_content:
+            try:
+                from agent.lsp.range_shift import build_line_shift
+                line_shift = build_line_shift(pre_content, post_content)
+            except Exception:  # noqa: BLE001
+                line_shift = None
         try:
-            content = path.read_text(encoding="utf-8", errors="replace")
-            import yaml
-            yaml.safe_load(content)
-        except yaml.YAMLError as e:
-            issues.append({
-                "message": f"Invalid YAML: {e}",
-                "severity": "error",
-            })
-        except ImportError:
-            issues.append({
-                "message": "PyYAML not installed, skipping YAML validation",
-                "severity": "warning",
-            })
-        except (OSError, PermissionError) as e:
-            return {"success": False, "error": str(e)}
-
-        return {
-            "success": True,
-            "issues": issues,
-            "warnings": [],
-            "total_issues": len(issues),
-            "total_warnings": 0,
-        }
-
-    async def format(self, path: Path, formatter: str = "auto") -> dict[str, Any]:
-        """Format a file.
-
-        Args:
-            path: Path to the file to format.
-            formatter: Formatter to use ('auto', 'black', 'ruff', etc).
-
-        Returns:
-            Dictionary with formatting results.
-        """
+            diagnostics = svc.get_diagnostics_sync(path, delta=True, line_shift=line_shift)
+        except Exception:  # noqa: BLE001
+            return ""
+        if not diagnostics:
+            return ""
         try:
-            extension = path.suffix.lower()
-
-            if extension == ".py":
-                if formatter == "auto":
-                    content = path.read_text(encoding="utf-8", errors="replace")
-                    return {
-                        "success": True,
-                        "message": "Use external formatter like 'ruff' or 'black' for Python formatting",
-                        "path": str(path),
-                    }
-
-            return {
-                "success": False,
-                "error": f"No formatter available for {extension}",
-                "path": str(path),
-            }
-
-        except Exception as e:
-            return {"success": False, "error": str(e), "path": str(path)}
-
-    async def check_syntax(self, path: Path) -> dict[str, Any]:
-        """Check file syntax.
-
-        Args:
-            path: Path to the file to check.
-
-        Returns:
-            Dictionary with syntax check results.
-        """
-        try:
-            extension = path.suffix.lower()
-
-            if extension == ".py":
-                content = path.read_text(encoding="utf-8", errors="replace")
-                ast.parse(content, filename=str(path))
-                return {
-                    "success": True,
-                    "valid": True,
-                    "path": str(path),
-                    "message": "Syntax is valid",
-                }
-
-            elif extension in self.JAVASCRIPT_EXTENSIONS:
-                return await self._check_js_syntax(path)
-
-            elif extension in self.TYPESCRIPT_EXTENSIONS:
-                return await self._check_js_syntax(path)
-
-            return {
-                "success": True,
-                "valid": True,
-                "path": str(path),
-                "message": f"Syntax check not implemented for {extension}",
-            }
-
-        except SyntaxError as e:
-            return {
-                "success": True,
-                "valid": False,
-                "path": str(path),
-                "error": str(e),
-                "line": getattr(e, "lineno", 0),
-                "column": getattr(e, "offset", 0),
-            }
-        except Exception as e:
-            return {"success": False, "error": str(e), "path": str(path)}
-
-    async def _check_js_syntax(self, path: Path) -> dict[str, Any]:
-        """Check JavaScript/TypeScript syntax.
-
-        Args:
-            path: Path to the file.
-
-        Returns:
-            Dictionary with check results.
-        """
-        return {
-            "success": True,
-            "valid": True,
-            "path": str(path),
-            "message": "Use Node.js or ESLint for JS/TS syntax checking",
-        }
-
-    async def security_scan(self, path: Path) -> list[dict[str, Any]]:
-        """Scan file for security issues.
-
-        Args:
-            path: Path to the file to scan.
-
-        Returns:
-            List of security issues found.
-        """
-        issues: list[dict[str, Any]] = []
-
-        try:
-            if not path.is_file():
-                return [{"severity": "error", "message": "Not a file"}]
-
-            extension = path.suffix.lower()
-            if extension not in self.PYTHON_EXTENSIONS | self.JAVASCRIPT_EXTENSIONS | self.TYPESCRIPT_EXTENSIONS:
-                return []
-
-            content = path.read_text(encoding="utf-8", errors="replace")
-            lines = content.split("\n")
-
-            for pattern, description in self.DANGEROUS_PATTERNS:
-                regex = re.compile(pattern, re.IGNORECASE)
-                for i, line in enumerate(lines, 1):
-                    if regex.search(line):
-                        issues.append({
-                            "line": i,
-                            "message": description,
-                            "pattern": pattern,
-                            "severity": "warning" if "warning" in description.lower() else "error",
-                            "code": line.strip()[:100],
-                        })
-
-            return issues
-
-        except Exception as e:
-            return [{"severity": "error", "message": str(e)}]
+            from agent.lsp.reporter import report_for_file, truncate
+            block = report_for_file(path, diagnostics)
+            return truncate("LSP diagnostics introduced by this edit:\n" + block) if block else ""
+        except Exception:  # noqa: BLE001
+            return ""

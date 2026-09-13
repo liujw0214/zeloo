@@ -1,323 +1,248 @@
-"""Track file state changes for undo/redo and conflict detection."""
+"""Cross-agent file state coordination.
 
+Prevents mangled edits when concurrent subagents (same process, same
+filesystem) touch the same file: B writes a file A already read, so A's next
+write would clobber B's changes. Complements the single-agent path-overlap
+check in ``agent.tool_dispatch_helpers._should_parallelize_tool_batch``. A process-wide
+``FileStateRegistry`` tracks per-agent read stamps, the global last writer and
+a per-path lock; every method is a no-op under ``ZELOO_DISABLE_FILE_STATE_GUARD=1``.
+"""
 from __future__ import annotations
 
-import json
-import sqlite3
+import os
 import threading
 import time
-import uuid
-from dataclasses import dataclass, field, asdict
+from collections import defaultdict
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Dict, Iterable, List, Optional, Tuple
+
+# (mtime, read_ts, partial). partial=True when read_file returned a windowed
+# view (offset > 1 or limit < total_lines) — a later write should still warn
+# so the model re-reads in full.
+ReadStamp = Tuple[float, float, bool]
+
+# Bounded so long sessions don't accumulate unbounded state.
+_MAX_PATHS_PER_AGENT = 4096
+_MAX_GLOBAL_WRITERS = 4096
 
 
-@dataclass
-class FileSnapshot:
-    """Represents a snapshot of file state."""
-    snapshot_id: str
-    path: str
-    content_hash: str
-    created_at: float
-    content: str = ""
-    size: int = 0
-    line_count: int = 0
+def _disabled() -> bool:
+    # Re-read each call so tests can toggle via monkeypatch.setenv.
+    return os.environ.get("ZELOO_DISABLE_FILE_STATE_GUARD", "").strip() == "1"
 
 
-class FileStateTracker:
-    """Track file state changes for undo/redo and conflict detection.
+def _mtime_or_none(resolved: str) -> Optional[float]:
+    try:
+        return os.path.getmtime(resolved)
+    except OSError:
+        return None
 
-    Stores snapshots in SQLite for persistence and provides methods
-    to create, compare, and restore file states.
-    """
 
-    def __init__(self, db_path: Path | None = None) -> None:
-        """Initialize the file state tracker.
+def _fmt_ts(ts: float) -> str:
+    # Short wall-clock for warnings; avoids datetime formatting on the hot path.
+    return time.strftime("%H:%M:%S", time.localtime(ts))
 
-        Args:
-            db_path: Optional path to SQLite database. Uses in-memory DB if None.
-        """
-        if db_path is None:
-            db_path = Path.home() / ".zeloo" / "file_state.db"
 
-        self._db_path = db_path
-        self._conn: sqlite3.Connection | None = None
-        self._lock = threading.RLock()
-        self._init_db()
+def _evict_oldest(container, cap: int) -> None:
+    """Pop entries until *container* is within *cap* (sets: arbitrary; dicts: oldest
+    by insertion order). An eviction only costs one redundant re-send or staleness check."""
+    for _ in range(len(container) - cap):
+        try:
+            if isinstance(container, set):
+                container.pop()
+            else:
+                container.pop(next(iter(container)))
+        except (StopIteration, KeyError):
+            break
 
-    def _init_db(self) -> None:
-        """Initialize the SQLite database."""
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
-        self._conn.execute("""
-            CREATE TABLE IF NOT EXISTS snapshots (
-                snapshot_id TEXT PRIMARY KEY,
-                path TEXT NOT NULL,
-                content_hash TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                content TEXT,
-                size INTEGER DEFAULT 0,
-                line_count INTEGER DEFAULT 0
-            )
-        """)
-        self._conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_path ON snapshots(path)
-        """)
-        self._conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_created_at ON snapshots(created_at)
-        """)
-        self._conn.commit()
 
-    def snapshot(self, path: Path) -> dict[str, Any]:
-        """Create a snapshot of the current file state.
+class FileStateRegistry:
+    """Process-wide coordinator for cross-agent file edits."""
 
-        Args:
-            path: Path to the file to snapshot.
+    def __init__(self) -> None:
+        self._reads: Dict[str, Dict[str, ReadStamp]] = defaultdict(dict)
+        self._last_writer: Dict[str, Tuple[str, float]] = {}
+        self._path_locks: Dict[str, threading.Lock] = {}
+        self._path_lock_users: Dict[str, int] = {}
+        self._meta_lock = threading.Lock()  # guards _path_locks
+        self._state_lock = threading.Lock()  # guards _reads + _last_writer
 
-        Returns:
-            Dictionary with snapshot information.
-        """
-        with self._lock:
-            if self._conn is None:
-                return {"success": False, "error": "Database not initialized"}
+    @contextmanager
+    def lock_path(self, resolved: str):
+        """Per-path lock: threads on the same path serialize, different paths proceed.
+        The lock entry is dropped once the last holder/waiter exits."""
+        with self._meta_lock:
+            lock = self._path_locks.setdefault(resolved, threading.Lock())
+            self._path_lock_users[resolved] = self._path_lock_users.get(resolved, 0) + 1
+        lock.acquire()
+        try:
+            yield
+        finally:
+            lock.release()
+            with self._meta_lock:
+                users = self._path_lock_users[resolved] - 1
+                if users:
+                    self._path_lock_users[resolved] = users
+                else:
+                    self._path_lock_users.pop(resolved, None)
+                    self._path_locks.pop(resolved, None)
 
-            try:
-                normalized = str(path.resolve())
-                if not path.exists():
-                    return {"success": False, "error": "File does not exist"}
+    def _stamp(self, task_id: str, resolved: str, mtime: float, now: float, partial: bool) -> None:
+        """Caller holds ``_state_lock``."""
+        agent_reads = self._reads[task_id]
+        agent_reads[resolved] = (float(mtime), now, bool(partial))
+        _evict_oldest(agent_reads, _MAX_PATHS_PER_AGENT)
 
-                content = path.read_text(encoding="utf-8", errors="replace")
-                size = len(content.encode("utf-8"))
-                line_count = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+    def record_read(self, task_id: str, resolved: str, *, partial: bool = False,
+                    mtime: Optional[float] = None) -> None:
+        if _disabled():
+            return
+        mtime = _mtime_or_none(resolved) if mtime is None else mtime
+        if mtime is None:
+            return
+        with self._state_lock:
+            self._stamp(task_id, resolved, mtime, time.time(), partial)
 
-                from tools.file_operations_common import compute_hash
-                content_hash = compute_hash(path, "sha256")
+    def note_write(self, task_id: str, resolved: str, *, mtime: Optional[float] = None) -> None:
+        """Record a successful write: global last-writer AND this agent's own
+        read stamp (a write is an implicit read of the current content)."""
+        if _disabled():
+            return
+        mtime = _mtime_or_none(resolved) if mtime is None else mtime
+        if mtime is None:
+            return
+        now = time.time()
+        with self._state_lock:
+            self._last_writer[resolved] = (task_id, now)
+            _evict_oldest(self._last_writer, _MAX_GLOBAL_WRITERS)
+            self._stamp(task_id, resolved, mtime, now, False)
 
-                snapshot_id = str(uuid.uuid4())
-                created_at = time.time()
+    def check_stale(self, task_id: str, resolved: str) -> Optional[str]:
+        """Model-facing warning if this write would be stale, else ``None``. Severity
+        order: sibling wrote after our read > mtime drift / partial read > never read."""
+        if _disabled():
+            return None
+        with self._state_lock:
+            stamp = self._reads.get(task_id, {}).get(resolved)
+            last_writer = self._last_writer.get(resolved)
 
-                snapshot = FileSnapshot(
-                    snapshot_id=snapshot_id,
-                    path=normalized,
-                    content_hash=content_hash,
-                    created_at=created_at,
-                    content=content[:10000],
-                    size=size,
-                    line_count=line_count,
-                )
+        if stamp is None and last_writer is None:  # net-new file / first touch
+            return None
+        current_mtime = _mtime_or_none(resolved)
+        if current_mtime is None:
+            return None  # file doesn't exist — write creates it; not stale
 
-                self._conn.execute(
-                    """
-                    INSERT INTO snapshots (snapshot_id, path, content_hash, created_at, content, size, line_count)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        snapshot.snapshot_id,
-                        snapshot.path,
-                        snapshot.content_hash,
-                        snapshot.created_at,
-                        snapshot.content,
-                        snapshot.size,
-                        snapshot.line_count,
-                    ),
-                )
-                self._conn.commit()
+        if last_writer is not None:
+            writer_tid, writer_ts = last_writer
+            if writer_tid != task_id:
+                if stamp is None:
+                    return (
+                        f"{resolved} was modified by sibling subagent "
+                        f"{writer_tid!r} but this agent never read it. "
+                        "Read the file before writing to avoid overwriting "
+                        "the sibling's changes.")
+                read_ts = stamp[1]
+                if writer_ts > read_ts:
+                    return (
+                        f"{resolved} was modified by sibling subagent "
+                        f"{writer_tid!r} at {_fmt_ts(writer_ts)} — after "
+                        f"this agent's last read at {_fmt_ts(read_ts)}. "
+                        "Re-read the file before writing.")
 
-                return {
-                    "success": True,
-                    "snapshot_id": snapshot_id,
-                    "path": normalized,
-                    "hash": content_hash,
-                    "size": size,
-                    "line_count": line_count,
-                    "created_at": created_at,
-                }
+        if stamp is not None:
+            read_mtime, _read_ts, partial = stamp
+            if current_mtime != read_mtime:
+                return (
+                    f"{resolved} was modified since you last read it "
+                    "on disk (external edit or unrecorded writer). "
+                    "Re-read the file before writing.")
+            if partial:
+                return (
+                    f"{resolved} was last read with offset/limit pagination "
+                    "(partial view). Re-read the whole file before "
+                    "overwriting it.")
+            return None
 
-            except Exception as e:
-                return {"success": False, "error": str(e)}
+        return (
+            f"{resolved} was not read by this agent. "
+            "Read the file first so you can write an informed edit.")
 
-    def diff(self, path: Path) -> dict[str, Any] | None:
-        """Get diff between current file and latest snapshot.
+    def writes_since(self, exclude_task_id: str, since_ts: float,
+                     paths: Iterable[str]) -> Dict[str, List[str]]:
+        """``{writer_task_id: [paths]}`` for writes after ``since_ts`` by agents
+        other than ``exclude_task_id`` (delegate_task's "subagent modified files
+        you previously read" reminder)."""
+        if _disabled():
+            return {}
+        paths_set = set(paths)
+        out: Dict[str, List[str]] = defaultdict(list)
+        with self._state_lock:
+            for p, (writer_tid, ts) in self._last_writer.items():
+                if writer_tid != exclude_task_id and ts >= since_ts and p in paths_set:
+                    out[writer_tid].append(p)
+        return dict(out)
 
-        Args:
-            path: Path to check.
+    def known_reads(self, task_id: str) -> List[str]:
+        """Resolved paths this agent has read."""
+        if _disabled():
+            return []
+        with self._state_lock:
+            return list(self._reads.get(task_id, {}).keys())
 
-        Returns:
-            Dictionary with diff information or None if no snapshot exists.
-        """
-        with self._lock:
-            if self._conn is None:
-                return None
+    def forget_task(self, task_id: str) -> None:
+        """Release read stamps owned by a task after its lifecycle ends."""
+        with self._state_lock:
+            self._reads.pop(task_id, None)
 
-            normalized = str(path.resolve())
+    def clear(self) -> None:
+        """Reset all state. Intended for tests only."""
+        with self._state_lock:
+            self._reads.clear()
+            self._last_writer.clear()
+        with self._meta_lock:
+            self._path_locks.clear()
+            self._path_lock_users.clear()
 
-            cursor = self._conn.execute(
-                """
-                SELECT snapshot_id, content_hash, content, size, line_count, created_at
-                FROM snapshots WHERE path = ?
-                ORDER BY created_at DESC LIMIT 1
-                """,
-                (normalized,),
-            )
-            row = cursor.fetchone()
 
-            if row is None:
-                return None
+_registry = FileStateRegistry()
 
-            snapshot_id, old_hash, old_content, old_size, old_lines, old_time = row
 
-            if not path.exists():
-                return {
-                    "changed": True,
-                    "deleted": True,
-                    "snapshot_id": snapshot_id,
-                    "old_hash": old_hash,
-                }
+def get_registry() -> FileStateRegistry:
+    return _registry
 
-            current_hash = None
-            try:
-                from tools.file_operations_common import compute_hash
-                current_hash = compute_hash(path, "sha256")
-            except Exception:
-                pass
 
-            if current_hash == old_hash:
-                return {"changed": False, "snapshot_id": snapshot_id}
+# Convenience wrappers (short names used at call sites).
+def record_read(task_id: str, resolved_or_path: str | Path, *, partial: bool = False) -> None:
+    _registry.record_read(task_id, str(resolved_or_path), partial=partial)
 
-            current_content = path.read_text(encoding="utf-8", errors="replace")
-            current_size = len(current_content.encode("utf-8"))
-            current_lines = current_content.count("\n") + (1 if current_content else 0)
 
-            return {
-                "changed": True,
-                "snapshot_id": snapshot_id,
-                "old_hash": old_hash,
-                "current_hash": current_hash,
-                "old_size": old_size,
-                "current_size": current_size,
-                "old_lines": old_lines,
-                "current_lines": current_lines,
-                "size_diff": current_size - old_size,
-                "lines_diff": current_lines - old_lines,
-            }
+def note_write(task_id: str, resolved_or_path: str | Path) -> None:
+    _registry.note_write(task_id, str(resolved_or_path))
 
-    def restore(self, path: Path, snapshot_id: str) -> bool:
-        """Restore file to a specific snapshot.
 
-        Args:
-            path: Path to the file to restore.
-            snapshot_id: ID of the snapshot to restore.
+def check_stale(task_id: str, resolved_or_path: str | Path) -> Optional[str]:
+    return _registry.check_stale(task_id, str(resolved_or_path))
 
-        Returns:
-            True if restoration succeeded, False otherwise.
-        """
-        with self._lock:
-            if self._conn is None:
-                return False
 
-            cursor = self._conn.execute(
-                "SELECT content, path FROM snapshots WHERE snapshot_id = ?",
-                (snapshot_id,),
-            )
-            row = cursor.fetchone()
+def lock_path(resolved_or_path: str | Path):
+    return _registry.lock_path(str(resolved_or_path))
 
-            if row is None:
-                return False
 
-            content, stored_path = row
+def writes_since(exclude_task_id: str, since_ts: float, paths: Iterable[str | Path]) -> Dict[str, List[str]]:
+    return _registry.writes_since(exclude_task_id, since_ts, [str(p) for p in paths])
 
-            if stored_path != str(path.resolve()):
-                return False
 
-            try:
-                from tools.file_operations_common import safe_write
-                safe_write(path, content, atomic=True)
-                return True
-            except Exception:
-                return False
+def known_reads(task_id: str) -> List[str]:
+    return _registry.known_reads(task_id)
 
-    def list_snapshots(self, path: Path) -> list[dict[str, Any]]:
-        """List all snapshots for a file.
 
-        Args:
-            path: Path to list snapshots for.
-
-        Returns:
-            List of snapshot information dictionaries.
-        """
-        with self._lock:
-            if self._conn is None:
-                return []
-
-            normalized = str(path.resolve())
-            cursor = self._conn.execute(
-                """
-                SELECT snapshot_id, content_hash, created_at, size, line_count
-                FROM snapshots WHERE path = ?
-                ORDER BY created_at DESC
-                """,
-                (normalized,),
-            )
-
-            snapshots = []
-            for row in cursor.fetchall():
-                snapshots.append({
-                    "snapshot_id": row[0],
-                    "hash": row[1],
-                    "created_at": row[2],
-                    "created_at_str": time.strftime(
-                        "%Y-%m-%d %H:%M:%S", time.localtime(row[2])
-                    ),
-                    "size": row[3],
-                    "line_count": row[4],
-                })
-
-            return snapshots
-
-    def get_snapshot_content(self, snapshot_id: str) -> str | None:
-        """Get content of a specific snapshot.
-
-        Args:
-            snapshot_id: ID of the snapshot.
-
-        Returns:
-            Content string or None if not found.
-        """
-        with self._lock:
-            if self._conn is None:
-                return None
-
-            cursor = self._conn.execute(
-                "SELECT content FROM snapshots WHERE snapshot_id = ?",
-                (snapshot_id,),
-            )
-            row = cursor.fetchone()
-            return row[0] if row else None
-
-    def delete_old_snapshots(self, max_age_days: int = 30) -> int:
-        """Delete snapshots older than specified days.
-
-        Args:
-            max_age_days: Maximum age in days for snapshots.
-
-        Returns:
-            Number of snapshots deleted.
-        """
-        with self._lock:
-            if self._conn is None:
-                return 0
-
-            cutoff_time = time.time() - (max_age_days * 86400)
-            cursor = self._conn.execute(
-                "DELETE FROM snapshots WHERE created_at < ?",
-                (cutoff_time,),
-            )
-            self._conn.commit()
-            return cursor.rowcount
-
-    def close(self) -> None:
-        """Close the database connection."""
-        with self._lock:
-            if self._conn is not None:
-                self._conn.close()
-                self._conn = None
+__all__ = [
+    "FileStateRegistry",
+    "get_registry",
+    "record_read",
+    "note_write",
+    "check_stale",
+    "lock_path",
+    "writes_since",
+    "known_reads"]

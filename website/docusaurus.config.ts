@@ -1,102 +1,208 @@
-﻿import { themes as prismThemes } from "prism-react-renderer";
-import type { Config } from "@docusaurus/types";
-import type * as Preset from "@docusaurus/preset-classic";
+import {themes as prismThemes} from 'prism-react-renderer';
+import type {Config} from '@docusaurus/types';
+import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
-  title: "Zeloo",
-  tagline: "A self-hosted, self-evolving AI agent runtime",
-  favicon: "img/favicon.ico",
+  title: 'Zeloo Agent',
+  tagline: 'The self-improving AI agent',
+  favicon: 'img/favicon.ico',
 
-  url: "https://Zeloo.dev",
-  baseUrl: "/",
+  url: 'https://Zeloo-agent.nousresearch.com',
+  baseUrl: '/docs/',
 
-  organizationName: "Zeloo",
-  projectName: "Zeloo",
+  organizationName: 'NousResearch',
+  projectName: 'Zeloo-agent',
 
-  onBrokenLinks: "throw",
-  onBrokenMarkdownLinks: "warn",
+  onBrokenLinks: 'warn',
+
+  markdown: {
+    mermaid: true,
+    hooks: {
+      onBrokenMarkdownLinks: 'warn',
+    },
+  },
 
   i18n: {
-    defaultLocale: "en",
-    locales: ["en", "zh"],
+    defaultLocale: 'en',
+    locales: ['en', 'zh-Hans'],
+    localeConfigs: {
+      en: {
+        label: 'English',
+      },
+      'zh-Hans': {
+        label: '简体中文',
+        htmlLang: 'zh-Hans',
+      },
+    },
   },
+
+  themes: [
+    '@docusaurus/theme-mermaid',
+  ],
+
+  plugins: [
+    [
+      '@docusaurus/plugin-client-redirects',
+      {
+        // Static-host redirects for renamed doc pages (GitHub Pages can't
+        // do server-side redirects). Paths are relative to baseUrl (/docs/).
+        redirects: [
+          {
+            // Renamed in #44470 (Automation Blueprints terminology rebrand)
+            from: '/guides/automation-templates',
+            to: '/guides/automation-blueprints',
+          },
+          {
+            // Moved when the Plugins subcategory was created under
+            // Developer Guide > Extending (docs restructure, July 2026)
+            from: '/guides/build-a-Zeloo-plugin',
+            to: '/developer-guide/plugins',
+          },
+          {
+            // Users guess these short paths from abbreviated links and hit
+            // raw 404s (consumer-onboarding audit finding #1, Aug 2026).
+            from: '/quickstart',
+            to: '/getting-started/quickstart',
+          },
+          {
+            from: '/installation',
+            to: '/getting-started/installation',
+          },
+        ],
+      },
+    ],
+  ],
 
   presets: [
     [
-      "classic",
+      'classic',
       {
         docs: {
-          sidebarPath: "./sidebars.ts",
-          routeBasePath: "/",
-          showLastUpdateTime: true,
+          routeBasePath: '/',  // Docs at the root of /docs/
+          sidebarPath: './sidebars.ts',
+          editUrl: 'https://github.com/NousResearch/Zeloo-agent/edit/main/website/',
         },
         blog: false,
         theme: {
-          image: "img/social-card.png",
-        },
-        sitemap: {
-          changefreq: "weekly",
-          priority: 0.5,
+          customCss: './src/css/custom.css',
         },
       } satisfies Preset.Options,
     ],
   ],
 
   themeConfig: {
-    image: "img/social-card.png",
+    image: 'img/Zeloo-agent-banner.png',
+    // Algolia DocSearch (replaces @easyops-cn/docusaurus-search-local).
+    // The local plugin shipped a ~16 MB client-side lunr index that every
+    // visitor downloaded and hydrated before their first result; DocSearch
+    // answers from Algolia's servers with no client index at all. These are
+    // public search-only credentials — safe to commit (the admin key is not
+    // in the repo). Index is populated by the Algolia Crawler configured at
+    // crawler.algolia.com; contextualSearch scopes results to the active
+    // locale via the docusaurus_tag/lang facets the crawler records carry.
+    algolia: {
+      appId: '2JLBVEYZN5',
+      apiKey: '8fda2a49223ce185ac30c2dbf6898a07',
+      indexName: 'Zeloo docs',
+      contextualSearch: true,
+    },
     colorMode: {
-      defaultMode: "dark",
+      defaultMode: 'dark',
       respectPrefersColorScheme: true,
     },
+    docs: {
+      sidebar: {
+        hideable: true,
+        autoCollapseCategories: true,
+      },
+    },
     navbar: {
-      title: "Zeloo",
+      title: 'Zeloo Agent',
       logo: {
-        alt: "Zeloo Logo",
-        src: "img/logo.svg",
+        alt: 'Zeloo Agent',
+        src: 'img/logo.png',
       },
       items: [
         {
-          type: "docSidebar",
-          sidebarId: "ZelooSidebar",
-          position: "left",
-          label: "Docs",
+          type: 'docSidebar',
+          sidebarId: 'docs',
+          position: 'left',
+          label: 'Docs',
         },
         {
-          href: "https://github.com/Zeloo/Zeloo",
-          label: "GitHub",
-          position: "right",
+          to: '/skills',
+          label: 'Skills',
+          position: 'left',
+        },
+        {
+          to: '/plugins',
+          label: 'Plugins',
+          position: 'left',
+        },
+        {
+          href: 'https://Zeloo-agent.nousresearch.com/',
+          label: 'Download',
+          position: 'left',
+        },
+        {
+          type: 'localeDropdown',
+          position: 'right',
+        },
+        {
+          href: 'https://Zeloo-agent.nousresearch.com',
+          label: 'Home',
+          position: 'right',
+        },
+        {
+          href: 'https://github.com/NousResearch/Zeloo-agent',
+          label: 'GitHub',
+          position: 'right',
+        },
+        {
+          href: 'https://discord.gg/NousResearch',
+          label: 'Discord',
+          position: 'right',
         },
       ],
     },
     footer: {
-      style: "dark",
+      style: 'dark',
       links: [
         {
-          title: "Docs",
+          title: 'Docs',
           items: [
-            { label: "Getting Started", to: "/docs/intro" },
-            { label: "Architecture", to: "/docs/architecture" },
-            { label: "Roadmap", to: "/docs/roadmap" },
+            { label: 'Getting Started', to: '/getting-started/quickstart' },
+            { label: 'User Guide', to: '/user-guide/cli' },
+            { label: 'Developer Guide', to: '/developer-guide/architecture' },
+            { label: 'Reference', to: '/reference/cli-commands' },
           ],
         },
         {
-          title: "Community",
+          title: 'Community',
           items: [
-            { label: "GitHub", href: "https://github.com/Zeloo/Zeloo" },
-            { label: "Discord", href: "https://discord.gg/Zeloo" },
+            { label: 'Discord', href: 'https://discord.gg/NousResearch' },
+            { label: 'GitHub Issues', href: 'https://github.com/NousResearch/Zeloo-agent/issues' },
+            { label: 'Skills Hub', href: 'https://agentskills.io' },
+          ],
+        },
+        {
+          title: 'More',
+          items: [
+            { label: 'Desktop Download', href: 'https://Zeloo-agent.nousresearch.com/' },
+            { label: 'GitHub', href: 'https://github.com/NousResearch/Zeloo-agent' },
+            { label: 'Nous Research', href: 'https://nousresearch.com' },
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} Zeloo Project.`,
+      copyright: `Built by <a href="https://nousresearch.com">Nous Research</a> · MIT License · ${new Date().getFullYear()}`,
     },
     prism: {
       theme: prismThemes.github,
       darkTheme: prismThemes.dracula,
+      additionalLanguages: ['bash', 'yaml', 'json', 'python', 'toml'],
     },
-    algolia: {
-      appId: "PLACEHOLDER",
-      apiKey: "PLACEHOLDER",
-      indexName: "Zeloo",
+    mermaid: {
+      theme: {light: 'neutral', dark: 'dark'},
     },
   } satisfies Preset.ThemeConfig,
 };

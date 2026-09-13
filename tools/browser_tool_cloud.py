@@ -1,379 +1,247 @@
-"""Cloud browser adapter (Browserless / Browserbase / Steel.dev).
+"""Cloud browser provider resolution (explicit browser.cloud_provider, auto-detect, per-profile cache), backend/engine selection and headed-mode flags.
 
-Provides a thin async connector for talking to remote Chromium instances
-via WebSocket CDP. Lets the agent drive a managed browser without
-requiring a local Chrome installation. Supports the most common
-commercial providers plus a generic "anchor" passthrough for any
-CDP-compatible endpoint.
-
-Example::
-
-    adapter = CloudBrowserAdapter(provider="browserless", api_key="...")
-    session = await adapter.connect()
-    await adapter.navigate("https://example.com")
-    png = await adapter.screenshot()
-    await adapter.close()
-"""
+Split out of ``tools/browser_tool.py``. Facade-owned state is read through ``_bt`` (``tools.browser_tool``, resolved per call) — no import cycle."""
 
 from __future__ import annotations
 
-import asyncio
-import logging
 import os
-import socket
-import time
-import uuid
-from dataclasses import dataclass, field
-from typing import Any
-from urllib.parse import urlparse
+from typing import Callable, Optional
 
-logger = logging.getLogger(__name__)
-
-
-def _now() -> float:
-    """Return the current Unix timestamp in seconds."""
-    return time.time()
+from agent.browser_provider import BrowserProvider as CloudBrowserProvider
+from agent.browser_registry import get_provider as _registry_get_browser_provider
+from zeloo_constants import get_zeloo_home_override, zeloo_home_key
+from plugins.browser.browser_use.provider import BrowserUseBrowserProvider
+from plugins.browser.browserbase.provider import BrowserbaseBrowserProvider
+from tools.tool_backend_helpers import normalize_browser_cloud_provider
+from utils import is_truthy_value
+from tools.browser_tool_origin import origin_module as _origin
+from tools import browser_tool_cdp as _cdp
 
 
-# ---------------------------------------------------------------------------
-# Provider endpoint resolution
-# ---------------------------------------------------------------------------
-
-# Default CDP WebSocket endpoints for each known provider. These are the
-# canonical URLs published by the vendors; if your tenant lives on a
-# different region or proxy, override ``ws_url`` at construction time.
-_PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
-    "browserless": {
-        "rest": "https://chrome.browserless.io",
-        "ws": "wss://chrome.browserless.io",
-    },
-    "browserbase": {
-        "rest": "https://www.browserbase.com/api/v1",
-        "ws": "wss://connect.browserbase.com",
-    },
-    "steel": {
-        "rest": "https://api.steel.dev",
-        "ws": "wss://api.steel.dev/cdp",
-    },
-    "anchor": {
-        # Generic CDP passthrough — caller must supply ``ws_url``.
-        "rest": "",
-        "ws": "",
-    },
-}
+def _memo(_bt, resolved_attr: str, cache_attr: str, compute: Callable[[], object]):
+    """Process-lifetime cache on ``_bt``: the resolved flag is set BEFORE computing, then the final value is stored."""
+    if not getattr(_bt, resolved_attr):
+        setattr(_bt, resolved_attr, True)
+        setattr(_bt, cache_attr, compute())
+    return getattr(_bt, cache_attr)
 
 
-@dataclass
-class CloudSession:
-    """Metadata describing a live cloud browser session."""
-
-    session_id: str
-    provider: str
-    ws_url: str
-    created_at: float
-    headers: dict[str, str] = field(default_factory=dict)
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to a JSON-friendly dict."""
-        return {
-            "session_id": self.session_id,
-            "provider": self.provider,
-            "ws_url": self.ws_url,
-            "created_at": self.created_at,
-            "headers": dict(self.headers),
-            "extra": dict(self.extra),
-        }
+def _ensure_browser_plugins_loaded() -> None:
+    """Idempotently trigger plugin discovery (standalone scripts/tests may never import ``model_tools``)."""
+    try:
+        from zeloo_cli.plugins import _ensure_plugins_discovered
+        _ensure_plugins_discovered()
+    except Exception as exc:
+        _origin().logger.debug("Browser plugin discovery failed (non-fatal): %s", exc)
 
 
-class CloudBrowserError(RuntimeError):
-    """Raised when a cloud browser operation fails."""
+def _get_cloud_provider() -> Optional[CloudBrowserProvider]:
+    """Return the provider cached for the active Zeloo profile."""
+    _bt = _origin()
+    scope = zeloo_home_key()
+    with _bt._cloud_provider_cache_lock:
+        # A cleared boolean (tests / legacy reset) is a full reset even if a scoped resolution is still mirrored here.
+        if not _bt._cloud_provider_resolved:
+            _bt._cached_cloud_provider_scope = None
+            _bt._cached_cloud_providers.clear()
+        while True:
+            before_generation = _bt._browser_registry_generation(scope=scope)
+            cache_key = (scope, before_generation)
+            if cache_key in _bt._cached_cloud_providers:
+                _bt._cached_cloud_provider = _bt._cached_cloud_providers[cache_key]
+                _bt._cloud_provider_resolved = True
+                _bt._cached_cloud_provider_scope = scope
+                return _bt._cached_cloud_provider
+            _bt._cached_cloud_provider = None
+            _bt._cloud_provider_resolved = False
+            resolved = _resolve_cloud_provider_uncached()
+            after_generation = _bt._browser_registry_generation(scope=scope)
+            if before_generation != after_generation:  # force reload mid-resolution: discard, resolve again
+                continue
+            if _bt._cloud_provider_resolved:
+                _bt._cached_cloud_provider_scope = scope
+                for stale_key in [key for key in _bt._cached_cloud_providers if key[0] == scope]:
+                    _bt._cached_cloud_providers.pop(stale_key, None)
+                _bt._cached_cloud_providers[cache_key] = resolved
+            return resolved
 
 
-class CloudBrowserAdapter:
-    """Connect to a remote Chromium instance via WebSocket CDP.
+def _instantiate_explicit_cloud_provider(provider_key: str) -> Optional[CloudBrowserProvider]:
+    """Build the provider named by ``browser.cloud_provider``.
 
-    The adapter deliberately avoids importing any specific websocket
-    library so that it remains usable in environments where only the
-    standard library is available. Real I/O is performed lazily by
-    :meth:`_send_command`, which returns a placeholder unless a
-    transport has been injected.
-
-    Attributes:
-        provider: One of ``SUPPORTED_PROVIDERS``.
-        api_key: Vendor API key (kept in-memory only).
-        ws_url: Override for the CDP WebSocket URL.
-        timeout: Default network timeout in seconds.
+    Strict: an unregistered name raises ``ValueError`` (never a silent reroute to auto-detect); any
+    other instantiation error is logged and yields None so the next call retries.
     """
+    _bt = _origin()
+    try:
+        _ensure_browser_plugins_loaded()
+        resolved = _registry_get_browser_provider(provider_key)
+        if resolved is None:
+            from tools.tool_backend_helpers import selection_error
+            raise ValueError(selection_error(
+                "browser", f"'{provider_key}'",
+                "no registered browser plugin has that name (install the corresponding plugin or fix the config key spelling)",
+            ))
+        return resolved
+    except ValueError:
+        raise
+    except Exception:
+        _bt.logger.warning("Failed to instantiate explicit cloud_provider %r; will retry on next call", provider_key, exc_info=True)
+        return None
 
-    SUPPORTED_PROVIDERS: list[str] = ["browserless", "browserbase", "steel", "anchor"]
 
-    def __init__(
-        self,
-        provider: str = "browserless",
-        api_key: str = "",
-        ws_url: str = "",
-        timeout: float = 30.0,
-    ) -> None:
-        """Initialize the adapter.
+def _autodetect_cloud_provider() -> Optional[CloudBrowserProvider]:
+    """Auto-detect: Browser Use, then Browserbase; never raises.
 
-        Args:
-            provider: Vendor identifier. Must be in ``SUPPORTED_PROVIDERS``.
-            api_key: Vendor API token. Falls back to ``BROWSERLESS_API_KEY``
-                / ``BROWSERBASE_API_KEY`` / ``STEEL_API_KEY`` env vars.
-            ws_url: Optional explicit CDP WebSocket URL.
-            timeout: Default request timeout in seconds.
-        """
-        provider_norm = provider.lower().strip()
-        if provider_norm not in self.SUPPORTED_PROVIDERS:
-            raise ValueError(
-                f"Unsupported provider {provider!r}. "
-                f"Choose one of: {', '.join(self.SUPPORTED_PROVIDERS)}"
-            )
+    Third-party plugins are only reachable via explicit ``browser.cloud_provider: <name>``.
+    """
+    _bt = _origin()
+    try:
+        for cls in (BrowserUseBrowserProvider, BrowserbaseBrowserProvider):
+            fallback_provider = cls()
+            if fallback_provider.is_available():
+                return fallback_provider
+    except Exception:  # pragma: no cover - defensive: never poison cache
+        _bt.logger.debug("Cloud provider auto-detect failed", exc_info=True)
+    return None
 
-        self.provider: str = provider_norm
-        self.api_key: str = api_key or self._resolve_api_key(provider_norm)
-        self.ws_url_override: str = ws_url
-        self.timeout: float = float(timeout)
 
-        self._session: CloudSession | None = None
-        self._command_id: int = 0
-        self._closed: bool = False
+def _resolve_cloud_provider_uncached() -> Optional[CloudBrowserProvider]:
+    """Return the configured cloud browser provider, or None for local mode.
 
-    # ------------------------------------------------------------------
-    # Setup helpers
-    # ------------------------------------------------------------------
+    Pins the cache only when definitive (explicit ``local``/``camofox`` or a resolved provider); a transient None
+    (unreadable config, missing credentials) is NOT cached so it can self-heal. Auto-detect runs only when no
+    selection was ever written.
+    """
+    _bt = _origin()
+    resolved: Optional[CloudBrowserProvider] = None
+    provider_key = None
+    try:
+        from zeloo_cli.config import read_raw_config
+        browser_cfg = read_raw_config().get("browser", {})
+        if isinstance(browser_cfg, dict) and "cloud_provider" in browser_cfg:
+            provider_key = normalize_browser_cloud_provider(browser_cfg.get("cloud_provider"))
+            if provider_key in ("local", "camofox"):
+                # Camofox runs through the built-in browser tools, not a cloud provider.
+                _bt._cached_cloud_provider = None
+                _bt._cloud_provider_resolved = True
+                return None
+            if provider_key == "nous":
+                # Managed "Nous Subscription" is serviced by the Browser Use provider.
+                provider_key = "browser-use"
+        if provider_key:
+            resolved = _instantiate_explicit_cloud_provider(provider_key)
+            if resolved is None:
+                return None
+    except ValueError:
+        raise
+    except Exception as e:
+        # Config may be temporarily unreadable; still try auto-detect (env/managed creds). Don't pin cache.
+        _bt.logger.debug("Could not read cloud_provider from config: %s", e)
 
-    @staticmethod
-    def _resolve_api_key(provider: str) -> str:
-        """Look up an API key from the environment based on provider."""
-        env_keys = {
-            "browserless": "BROWSERLESS_API_KEY",
-            "browserbase": "BROWSERBASE_API_KEY",
-            "steel": "STEEL_API_KEY",
-            "anchor": "CDP_API_KEY",
-        }
-        return os.environ.get(env_keys.get(provider, ""), "")
+    if resolved is None and provider_key is None:
+        resolved = _autodetect_cloud_provider()
+    if resolved is None:
+        return None
+    _bt._cached_cloud_provider = resolved
+    _bt._cloud_provider_resolved = True
+    return _bt._cached_cloud_provider
 
-    def _build_ws_url(self) -> str:
-        """Compose the WebSocket URL, honouring overrides and defaults."""
-        if self.ws_url_override:
-            return self.ws_url_override
 
-        default = _PROVIDER_DEFAULTS.get(self.provider, {}).get("ws", "")
-        if not default:
-            raise CloudBrowserError(
-                f"No default WebSocket URL for provider {self.provider!r}; "
-                "pass ws_url= explicitly."
-            )
+def _is_local_mode() -> bool:
+    """Return True when the browser tool will use a local browser backend."""
+    _bt = _origin()
+    return not _cdp._get_cdp_override_raw() and _get_cloud_provider() is None
 
-        if self.provider == "browserless" and self.api_key:
-            # Browserless uses the API key as a token in the path.
-            return f"{default}?token={self.api_key}"
-        if self.provider == "browserbase" and self.api_key:
-            return f"{default}?apiKey={self.api_key}"
-        if self.provider == "steel" and self.api_key:
-            return f"{default}?apiKey={self.api_key}"
-        return default
 
-    def _auth_headers(self) -> dict[str, str]:
-        """Build HTTP headers for REST calls (screenshot, PDF, etc.)."""
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if not self.api_key:
-            return headers
-        if self.provider == "browserless":
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        elif self.provider == "browserbase":
-            headers["X-BB-API-Key"] = self.api_key
-        elif self.provider == "steel":
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        else:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        return headers
+def _is_local_backend() -> bool:
+    """True when the browser runs locally AND the terminal is also local.
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    SSRF protection only matters when the browser can reach networks the terminal cannot (cloud backends,
+    containerized terminals). A CDP override is never trusted as local (that Chrome may live off-host) and MUST
+    be checked before the Camofox short-circuit; ``_is_local_mode`` treats overrides the same way — keep the two
+    in agreement.
+    """
+    _bt = _origin()
+    if _cdp._get_cdp_override_raw():
+        return False
+    if _bt._is_camofox_mode():
+        return True
+    if _get_cloud_provider() is not None:
+        return False
+    # Scope-aware: under gateway multiplexing the routed profile's terminal backend lives in the per-turn scope.
+    # When terminal runs in a container, browser on host can access internal networks the terminal can't →
+    # treat as non-local. See #68559.
+    from tools.terminal_scope import terminal_env
+    return terminal_env("TERMINAL_ENV", "local").strip().lower() in ("local", "")
 
-    async def connect(self) -> dict[str, Any]:
-        """Connect to the cloud browser and return session metadata.
 
-        Returns:
-            Dict containing session_id, provider, ws_url, etc.
-        """
-        if self._session is not None and not self._closed:
-            return self._session.to_dict()
+def _get_browser_engine() -> str:
+    """Return the browser engine: ``auto`` (no ``--engine`` flag), ``lightpanda`` or ``chrome``.
 
-        try:
-            ws_url = self._build_ws_url()
-        except CloudBrowserError:
-            raise
-        except Exception as exc:  # pragma: no cover - defensive
-            raise CloudBrowserError(f"Failed to build WS URL: {exc}") from exc
+    ``browser.engine`` first, then ``AGENT_BROWSER_ENGINE``, then ``auto``; cached. Lightpanda is faster on
+    navigation but has no graphical renderer (no screenshots).
+    """
+    _bt = _origin()
+    def compute() -> str:
+        engine = _bt._browser_cfg("engine", "auto", lambda v: str(v).strip().lower() if v and str(v).strip() else "auto", "browser.engine from config")
+        if engine == "auto":
+            engine = os.environ.get("AGENT_BROWSER_ENGINE", "").strip().lower() or engine
+        # agent-browser only accepts "chrome" and "lightpanda".
+        _VALID_ENGINES = {"auto", "lightpanda", "chrome"}
+        if engine not in _VALID_ENGINES:
+            _bt.logger.warning("Unknown browser engine %r (valid: %s), falling back to 'auto'", engine, ", ".join(sorted(_VALID_ENGINES)))
+            engine = "auto"
+        return engine
+    return _memo(_bt, "_browser_engine_resolved", "_cached_browser_engine", compute)
 
-        self._session = CloudSession(
-            session_id=str(uuid.uuid4()),
-            provider=self.provider,
-            ws_url=ws_url,
-            created_at=_now(),
-            headers=self._auth_headers(),
-            extra={"timeout": self.timeout},
-        )
-        self._closed = False
-        logger.info(
-            "cloud_browser_connected provider=%s session_id=%s",
-            self.provider,
-            self._session.session_id,
-        )
-        return self._session.to_dict()
 
-    async def navigate(self, url: str) -> dict[str, Any]:
-        """Navigate the cloud page to ``url``.
+def _is_headed_mode() -> bool:
+    """True when the browser should launch headed: ``browser.headed``, else ``AGENT_BROWSER_HEADED``; cached."""
+    _bt = _origin()
+    def compute() -> bool:
+        headed = _bt._browser_cfg("headed", False, lambda v: False if v is None else str(v).strip().lower() in ("true", "1", "yes"), "browser.headed from config")
+        return headed or os.environ.get("AGENT_BROWSER_HEADED", "").strip().lower() in ("true", "1", "yes")
+    return _memo(_bt, "_headed_mode_resolved", "_cached_headed_mode", compute)
 
-        Args:
-            url: Target URL (must be absolute; ``javascript:`` is rejected).
 
-        Returns:
-            Dict with status, final URL and HTTP code (best-effort).
-        """
-        self._ensure_connected()
-        parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"}:
-            raise CloudBrowserError(f"Refusing to navigate to non-http(s) URL: {url!r}")
+def _should_inject_engine(engine: str) -> bool:
+    """True when ``--engine`` should be added: explicit (non-``auto``) engine on a non-cloud, non-camofox local session."""
+    _bt = _origin()
+    return engine != "auto" and not _bt._is_camofox_mode() and _is_local_mode()
 
-        cmd = {
-            "id": self._next_id(),
-            "method": "Page.navigate",
-            "params": {"url": url},
-        }
-        result = await self._send_command(cmd)
-        return {
-            "session_id": self._session.session_id,  # type: ignore[union-attr]
-            "navigated_to": url,
-            "command": cmd,
-            "result": result,
-        }
 
-    async def screenshot(self, fmt: str = "png") -> bytes:
-        """Capture a screenshot from the cloud page.
+def _auto_local_for_private_urls() -> bool:
+    """``browser.auto_local_for_private_urls`` (default True), cached: route private/LAN URLs to a local sidecar even with a cloud provider."""
+    _bt = _origin()
+    return _memo(
+        _bt, "_auto_local_for_private_urls_resolved", "_cached_auto_local_for_private_urls",
+        lambda: _bt._browser_cfg("auto_local_for_private_urls", _bt._cached_auto_local_for_private_urls, bool, "auto_local_for_private_urls from config"),
+    )
 
-        Args:
-            fmt: Image format (``png`` or ``jpeg``).
 
-        Returns:
-            Raw image bytes. Empty bytes when no transport is wired.
-        """
-        self._ensure_connected()
-        fmt = fmt.lower().strip()
-        if fmt not in {"png", "jpeg", "jpg"}:
-            raise CloudBrowserError(f"Unsupported screenshot format: {fmt!r}")
+def _use_real_profile() -> bool:
+    """Whether the user consented to real-profile local browsing.
 
-        cmd = {
-            "id": self._next_id(),
-            "method": "Page.captureScreenshot",
-            "params": {"format": "jpeg" if fmt == "jpg" else fmt},
-        }
-        result = await self._send_command(cmd)
-        # Real transports would return base64-encoded payload here.
-        return result.get("payload", b"") if isinstance(result, dict) else b""
+    Read on EVERY call: it is a consent switch (flipping it off must not need a restart) and each multiplexed
+    profile must decide for itself. One YAML load per local session creation, so no hot-path cost.
+    """
+    return _origin()._browser_cfg("use_real_profile", False, bool, "use_real_profile from config")
 
-    async def evaluate(self, expression: str) -> dict[str, Any]:
-        """Evaluate a JavaScript expression in the page context."""
-        self._ensure_connected()
-        if not expression.strip():
-            raise CloudBrowserError("evaluate() requires a non-empty expression")
 
-        cmd = {
-            "id": self._next_id(),
-            "method": "Runtime.evaluate",
-            "params": {"expression": expression, "returnByValue": True},
-        }
-        result = await self._send_command(cmd)
-        return {
-            "session_id": self._session.session_id,  # type: ignore[union-attr]
-            "expression": expression,
-            "result": result,
-        }
+def _allow_private_urls() -> bool:
+    """Whether the browser may navigate to private/internal addresses (default False: SSRF protection on).
 
-    async def close(self) -> None:
-        """Disconnect from the cloud browser.
+    Single-profile calls cache for the process lifetime; multiplexed profile turns (ContextVar-scoped config)
+    resolve on every call so one profile's opt-out is never reused by another.
+    """
+    _bt = _origin()
+    if get_zeloo_home_override() is not None:
+        return _resolve_allow_private_urls()
+    return _memo(_bt, "_allow_private_urls_resolved", "_cached_allow_private_urls", _resolve_allow_private_urls)
 
-        Safe to call multiple times; subsequent calls are no-ops.
-        """
-        if self._closed:
-            return
-        self._closed = True
-        if self._session is not None:
-            logger.info(
-                "cloud_browser_closed session_id=%s provider=%s",
-                self._session.session_id,
-                self.provider,
-            )
-        self._session = None
 
-    # ------------------------------------------------------------------
-    # Context manager helpers
-    # ------------------------------------------------------------------
-
-    async def __aenter__(self) -> "CloudBrowserAdapter":
-        await self.connect()
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
-        await self.close()
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _ensure_connected(self) -> None:
-        if self._session is None or self._closed:
-            raise CloudBrowserError(
-                "CloudBrowserAdapter is not connected; call connect() first."
-            )
-
-    def _next_id(self) -> int:
-        self._command_id += 1
-        return self._command_id
-
-    async def _send_command(self, cmd: dict[str, Any]) -> dict[str, Any]:
-        """Send a raw CDP command to the cloud browser.
-
-        This is intentionally a no-op stub: actual transport wiring
-        (websockets / httpx long-poll) is environment-specific. Callers
-        can subclass and override this to plug in a real transport.
-        """
-        # Yield to the event loop so concurrent adapters don't starve.
-        await asyncio.sleep(0)
-        logger.debug("cloud_browser_cmd provider=%s cmd=%s", self.provider, cmd)
-        return {"ok": True, "id": cmd.get("id"), "echo": cmd.get("method")}
-
-    # ------------------------------------------------------------------
-    # Diagnostics
-    # ------------------------------------------------------------------
-
-    def health_check(self) -> dict[str, Any]:
-        """Return a lightweight diagnostic snapshot (no network I/O)."""
-        try:
-            parsed = urlparse(self._build_ws_url()) if not self._closed else None
-        except Exception:  # pragma: no cover - defensive
-            parsed = None
-
-        reachable = False
-        if parsed and parsed.hostname:
-            try:
-                # Cheap TCP probe with a 1-second timeout; only useful as
-                # a hint, not a guarantee of service health.
-                with socket.create_connection((parsed.hostname, parsed.port or 443), timeout=1):
-                    reachable = True
-            except OSError:
-                reachable = False
-
-        return {
-            "provider": self.provider,
-            "connected": self._session is not None and not self._closed,
-            "session_id": self._session.session_id if self._session else None,
-            "ws_url": self._session.ws_url if self._session else None,
-            "tcp_reachable": reachable,
-            "timeout": self.timeout,
-        }
+def _resolve_allow_private_urls() -> bool:
+    """Read the browser private-URL toggle from the active config scope."""
+    _bt = _origin()
+    return _bt._browser_cfg("allow_private_urls", False, lambda v: is_truthy_value(v, default=False), "allow_private_urls from config")

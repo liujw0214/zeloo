@@ -1,436 +1,167 @@
-"""Gateway 审批等待循环
+"""Blocking gateway approval wait for :mod:`tools.approval`.
 
-提供 Gateway 审批请求的等待和处理功能，支持：
-- 异步等待审批决策
-- 审批请求提交
-- 超时处理
+Mirrors the CLI's synchronous ``input()`` flow: the agent thread enqueues a
+pending approval, the gateway notifies the user, and the thread blocks until
+``/approve`` / ``/deny`` resolves it or the approval timeout elapses. Multiple
+threads (parallel subagents, execute_code RPC handlers) can block concurrently
+— each gets its own ``threading.Event``; ``/approve`` resolves the oldest,
+``/approve all`` every pending entry. Queue state (``_gateway_queues``,
+``_lock``) is owned by ``tools.approval`` and reached through that module at
+call time.
 """
-
-from __future__ import annotations
 
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
-from typing import Any, Optional
+import uuid
 
-logger = logging.getLogger(__name__)
+from tools.interrupt import is_interrupted
+from tools import approval_context as _ctx
+from tools.approval_human_wait import activity_heartbeat, human_wait_window
 
-_decisions: dict[str, dict[str, str]] = {}
-_decisions_lock = threading.Lock()
-_pending_requests: dict[str, dict[str, Any]] = {}
-_pending_lock = threading.Lock()
-_callbacks: dict[str, list] = {}
-_callbacks_lock = threading.Lock()
+logger = logging.getLogger("tools.approval")
 
 
-@dataclass
-class GatewayDecision:
-    """Gateway 审批决策"""
+class _ApprovalEntry:
+    """One pending dangerous-command approval inside a gateway session."""
+    __slots__ = ("event", "data", "result", "reason", "acknowledged")
 
-    request_id: str
-    decision: str
-    reason: str
-    timestamp: float = field(default_factory=time.time)
+    def __init__(self, data: dict):
+        self.event = threading.Event()
+        self.data = dict(data)
+        self.data.setdefault("request_id", uuid.uuid4().hex)
+        self.acknowledged = False
+        self.result: str | None = None  # "once"|"session"|"always"|"deny"
+        # Free-text reason from ``/deny <reason>`` so the agent can adapt, not just hear "denied".
+        self.reason: str | None = None
 
 
-def _get_decision(request_id: str) -> Optional[GatewayDecision]:
-    """获取审批决策
+def _poll_event(event: threading.Event, session_key: str, *, interrupt_log: str) -> str:
+    """Wait on *event* until it fires, the turn is interrupted, or approvals.timeout
+    elapses; returns ``"set"`` | ``"interrupted"`` | ``"timeout"``. Polls in ~1s
+    slices so activity heartbeats reach the agent's inactivity tracker every ~10s —
+    otherwise the gateway watchdog kills the agent while the user is still
+    responding (mirrors ``_wait_for_process()`` cadence). The loop is recorded as
+    human-wait time so the concurrent batch deadline excludes it.
 
-    Args:
-        request_id: 请求 ID
+    ``is_interrupted()`` deliberately does NOT distinguish a deliberate /stop from
+    a gateway inactivity timeout — both resolve as 'deny' (not outcome='timeout').
+    The per-thread interrupt flag carries no stable machine-checkable cause, so a
+    fail-closed deny preserves the historical semantics; changing this needs a
+    dedicated interrupt-cause channel, not string matching."""
+    deadline = time.monotonic() + max(_ctx._get_approval_timeout(), 0)
+    heartbeat = activity_heartbeat("waiting for user approval")
+    with human_wait_window(session_key):
+        while True:
+            # The poll loop below is verifiably blocked on a human answer (the user tapping approve/deny on
+            # the gateway surface), bounded by the approval timeout. Record it as human-wait time so the
+            # concurrent batch deadline excludes it (#79719).
+            if is_interrupted():
+                logger.info(interrupt_log, session_key)
+                return "interrupted"
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return "timeout"
+            if event.wait(timeout=min(1.0, remaining)):
+                return "set"
+            heartbeat()
 
-    Returns:
-        审批决策或 None
-    """
-    with _decisions_lock:
-        data = _decisions.get(request_id)
-        if data:
-            return GatewayDecision(
-                request_id=request_id,
-                decision=data.get("decision", "timeout"),
-                reason=data.get("reason", ""),
-                timestamp=data.get("timestamp", time.time()),
-            )
+
+def _finish(payload: dict, resolved: bool, choice: str | None, reason, **extra) -> dict:
+    """Fire the post hook and build the decision dict. Unresolved (timeout) and
+    a None choice both mean the user never answered."""
+    _ctx._fire_approval_hook("post_approval_response", **payload,
+                        choice="timeout" if not resolved else (choice or "timeout"), **extra)
+    return {"resolved": resolved, "choice": choice, "reason": reason, **extra}
+
+
+def _await_coalesced_leader(session_key: str, leader, payload: dict):
+    """Wait on an already-pending identical approval instead of re-prompting.
+    Adopts the leader's decision: ``session``/``always`` → approval (same dict
+    shape as a direct resolution; persistence stays the caller's and is
+    idempotent across leader and followers); ``deny`` → denial carrying the
+    leader's reason; leader timeout / our own deadline → unresolved. ``once``
+    returns ``None``: single-use consent covers only the leader's execution,
+    so the caller must issue a fresh prompt. Hooks fire with ``coalesced=True``
+    so observers see the follower's lifecycle without a duplicate prompt."""
+    _ctx._fire_approval_hook("pre_approval_request", **payload, coalesced=True)
+    state = _poll_event(leader.event, session_key,
+                        interrupt_log="Coalesced approval wait interrupted by user signal — "
+                                      "returning deny for session %s")
+    if state == "interrupted":
+        # Deny only OUR follower; the leader thread handles its own signal.
+        choice, resolved = "deny", True
+    elif state == "timeout":
+        choice, resolved = None, False
+    else:
+        choice = leader.result
+        resolved = choice is not None
+    if choice == "once":
+        # The post hook fires for the fresh prompt's own lifecycle, not here.
         return None
+    return _finish(payload, resolved, choice, getattr(leader, "reason", None), coalesced=True)
 
 
-def _store_decision(request_id: str, decision: str, reason: str = "") -> None:
-    """存储审批决策
+def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *, surface: str = "gateway") -> dict:
+    """Enqueue *approval_data*, notify the user, and block until resolved or timed
+    out. Shared by the terminal command guard, the execute_code guard, the plugin
+    escalation gate, and MCP elicitation. Returns ``{"resolved", "choice",
+    "reason"}`` or ``{"resolved": False, "choice": None, "notify_failed": True}``
+    when the notify callback raised. Persisting the choice and building the
+    tool-facing result stay with the caller.
 
-    Args:
-        request_id: 请求 ID
-        decision: 决策结果
-        reason: 决策原因
-    """
-    with _decisions_lock:
-        _decisions[request_id] = {
-            "decision": decision,
-            "reason": reason,
-            "timestamp": time.time(),
-        }
-        logger.info("Gateway decision stored: %s = %s", request_id, decision)
+    Identical concurrent approvals (same command text + pattern-key set) are
+    coalesced: parallel tool calls would otherwise fire N identical prompts
+    the user must /approve N times while the agent sits wedged. Followers adopt
+    the leader's ``session``/``always``/``deny``/timeout; a ``once`` covers only
+    the leader, so the follower falls through to a fresh prompt."""
+    from tools import approval as _approval
 
-    with _callbacks_lock:
-        callbacks = _callbacks.pop(request_id, [])
-        for callback in callbacks:
-            try:
-                callback(decision, reason)
-            except Exception as e:
-                logger.error("Callback error: %s", e)
-
-
-def await_gateway_decision(
-    session_key: str,
-    request_id: str,
-    timeout: float = 300.0,
-) -> tuple[str, str]:
-    """等待 Gateway 审批决策
-
-    Args:
-        session_key: 会话标识符
-        request_id: 请求 ID
-        timeout: 超时时间（秒）
-
-    Returns:
-        (decision, reason)
-        decision: approve | deny | timeout
-    """
-    start_time = time.time()
-    poll_interval = 0.5
-    max_poll_interval = 2.0
-
-    while time.time() - start_time < timeout:
-        decision = _get_decision(request_id)
-        if decision:
-            return decision.decision, decision.reason
-
-        time.sleep(poll_interval)
-
-        poll_interval = min(poll_interval * 1.2, max_poll_interval)
-
-        remaining = timeout - (time.time() - start_time)
-        if remaining < poll_interval:
-            poll_interval = remaining / 2
-
-        if poll_interval <= 0:
-            break
-
-    logger.warning("Gateway approval timeout for request: %s", request_id)
-    return "timeout", "approval_timeout"
-
-
-def submit_approval_request(
-    session_key: str,
-    request_id: str,
-    command: str,
-    context: dict[str, Any],
-) -> None:
-    """提交审批请求到 Gateway
-
-    Args:
-        session_key: 会话标识符
-        request_id: 请求 ID
-        command: 待审批的命令
-        context: 上下文信息
-    """
-    from tools.approval_detection import get_command_risk_level
-    from tools.approval_detection import detect_dangerous_command
-
-    dangerous, reason = detect_dangerous_command(command)
-    risk_level = get_command_risk_level(command)
-
-    request_data = {
-        "session_key": session_key,
-        "request_id": request_id,
-        "command": command,
-        "reason": reason,
-        "risk_level": risk_level,
-        "context": context,
-        "timestamp": time.time(),
-        "requires_approval": dangerous or risk_level in ("high", "critical"),
+    primary_key = approval_data.get("pattern_key", "")
+    payload = {
+        "command": approval_data.get("command", ""),
+        "description": approval_data.get("description", ""),
+        "pattern_key": primary_key,
+        "pattern_keys": list(approval_data.get("pattern_keys", [primary_key])),
+        "session_key": session_key, "surface": surface,
     }
+    keys = list(approval_data.get("pattern_keys") or [])
+    with _approval._lock:
+        leader = next((e for e in _approval._gateway_queues.get(session_key, [])
+                       if e.data.get("command") == approval_data.get("command")
+                       and list(e.data.get("pattern_keys") or []) == keys), None)
+    if leader is not None:
+        adopted = _await_coalesced_leader(session_key, leader, payload)
+        if adopted is not None:
+            return adopted
 
-    with _pending_lock:
-        _pending_requests[request_id] = request_data
+    entry = _ApprovalEntry(approval_data)
+    with _approval._lock:
+        _approval._gateway_queues.setdefault(session_key, []).append(entry)
 
+    def _drop_entry() -> None:
+        with _approval._lock:
+            queue = _approval._gateway_queues.get(session_key, [])
+            if entry in queue:
+                queue.remove(entry)
+            if not queue:
+                _approval._gateway_queues.pop(session_key, None)
+
+    # Plugins hear about the request before the gateway does (real-time observers).
+    _ctx._fire_approval_hook("pre_approval_request", **payload)
+    # Bridges sync agent thread → async gateway.
     try:
-        _submit_to_gateway_api(session_key, request_data)
-    except Exception as e:
-        logger.warning("Failed to submit to Gateway API: %s", e)
+        notify_cb(dict(entry.data))
+    except Exception as exc:
+        logger.warning("Gateway approval notify failed: %s", exc)
+        _drop_entry()
+        _ctx._fire_approval_hook("post_approval_response", **payload, choice="notify_failed")
+        return {"resolved": False, "choice": None, "notify_failed": True}
 
-
-def _submit_to_gateway_api(session_key: str, request_data: dict[str, Any]) -> None:
-    """提交请求到 Gateway API
-
-    Args:
-        session_key: 会话标识符
-        request_data: 请求数据
-    """
-    try:
-        import os
-
-        gateway_url = os.environ.get("ZELOO_GATEWAY_URL", "")
-        if not gateway_url:
-            return
-
-        import json
-
-        data = {
-            "session_key": session_key,
-            "request_id": request_data["request_id"],
-            "command": request_data["command"],
-            "reason": request_data["reason"],
-            "risk_level": request_data["risk_level"],
-            "timestamp": request_data["timestamp"],
-        }
-
-        try:
-            import urllib.request
-
-            req = urllib.request.Request(
-                f"{gateway_url}/api/approval/request",
-                data=json.dumps(data).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                resp.read()
-                logger.debug("Approval request submitted to Gateway")
-        except Exception as e:
-            logger.debug("Gateway API not available: %s", e)
-
-    except Exception as e:
-        logger.warning("Failed to submit approval request: %s", e)
-
-
-def handle_gateway_callback(
-    request_id: str,
-    decision: str,
-    reason: str = "",
-) -> None:
-    """处理来自 Gateway 的回调
-
-    Args:
-        request_id: 请求 ID
-        decision: 决策结果
-        reason: 决策原因
-    """
-    if decision not in ("approve", "deny", "timeout"):
-        logger.warning("Invalid gateway decision: %s", decision)
-        decision = "deny"
-
-    _store_decision(request_id, decision, reason)
-
-    logger.info(
-        "Gateway callback processed: request=%s decision=%s reason=%s",
-        request_id,
-        decision,
-        reason,
-    )
-
-
-def register_approval_callback(
-    request_id: str,
-    callback: Any,
-) -> None:
-    """注册审批回调
-
-    Args:
-        request_id: 请求 ID
-        callback: 回调函数
-    """
-    with _callbacks_lock:
-        if request_id not in _callbacks:
-            _callbacks[request_id] = []
-        _callbacks[request_id].append(callback)
-
-
-def get_pending_requests(session_key: Optional[str] = None) -> list[dict[str, Any]]:
-    """获取待审批请求列表
-
-    Args:
-        session_key: 可选的会话过滤
-
-    Returns:
-        待审批请求列表
-    """
-    with _pending_lock:
-        requests = []
-        for req_id, req in _pending_requests.items():
-            if session_key is None or req.get("session_key") == session_key:
-                requests.append(
-                    {
-                        "request_id": req_id,
-                        "session_key": req.get("session_key"),
-                        "command": req.get("command", "")[:100],
-                        "reason": req.get("reason", ""),
-                        "risk_level": req.get("risk_level", ""),
-                        "timestamp": req.get("timestamp", 0),
-                        "age_seconds": time.time() - req.get("timestamp", time.time()),
-                    }
-                )
-        return requests
-
-
-def cancel_pending_request(request_id: str) -> bool:
-    """取消待审批请求
-
-    Args:
-        request_id: 请求 ID
-
-    Returns:
-        True 如果成功取消
-    """
-    with _pending_lock:
-        if request_id in _pending_requests:
-            del _pending_requests[request_id]
-            logger.info("Pending request cancelled: %s", request_id)
-            return True
-        return False
-
-
-def clear_session_requests(session_key: str) -> int:
-    """清除会话的所有待审批请求
-
-    Args:
-        session_key: 会话标识符
-
-    Returns:
-        清除的请求数量
-    """
-    count = 0
-    with _pending_lock:
-        to_remove = [
-            req_id
-            for req_id, req in _pending_requests.items()
-            if req.get("session_key") == session_key
-        ]
-        for req_id in to_remove:
-            del _pending_requests[req_id]
-            count += 1
-
-    logger.info("Cleared %d pending requests for session: %s", count, session_key)
-    return count
-
-
-def get_request_status(request_id: str) -> dict[str, Any]:
-    """获取请求状态
-
-    Args:
-        request_id: 请求 ID
-
-    Returns:
-        状态信息字典
-    """
-    with _decisions_lock:
-        decision = _decisions.get(request_id)
-
-    with _pending_lock:
-        pending = _pending_requests.get(request_id)
-
-    if decision:
-        return {
-            "request_id": request_id,
-            "status": decision["decision"],
-            "reason": decision.get("reason", ""),
-            "timestamp": decision.get("timestamp", 0),
-        }
-
-    if pending:
-        age = time.time() - pending.get("timestamp", time.time())
-        return {
-            "request_id": request_id,
-            "status": "pending",
-            "command": pending.get("command", "")[:100],
-            "risk_level": pending.get("risk_level", ""),
-            "age_seconds": age,
-        }
-
-    return {
-        "request_id": request_id,
-        "status": "not_found",
-    }
-
-
-def set_decision_for_testing(request_id: str, decision: str, reason: str = "") -> None:
-    """设置测试用决策（仅用于测试）
-
-    Args:
-        request_id: 请求 ID
-        decision: 决策结果
-        reason: 决策原因
-    """
-    _store_decision(request_id, decision, reason)
-
-
-def clear_all_decisions() -> None:
-    """清除所有决策（测试用）"""
-    with _decisions_lock:
-        _decisions.clear()
-    with _pending_lock:
-        _pending_requests.clear()
-    with _callbacks_lock:
-        _callbacks.clear()
-
-
-def clear_decisions_older_than(max_age_seconds: float) -> int:
-    """清除超过指定时间的决策
-
-    Args:
-        max_age_seconds: 最大存活时间（秒）
-
-    Returns:
-        清除的决策数量
-    """
-    cutoff = time.time() - max_age_seconds
-    count = 0
-
-    with _decisions_lock:
-        to_remove = [
-            req_id
-            for req_id, data in _decisions.items()
-            if data.get("timestamp", 0) < cutoff
-        ]
-        for req_id in to_remove:
-            del _decisions[req_id]
-            count += 1
-
-    with _pending_lock:
-        to_remove = [
-            req_id
-            for req_id, data in _pending_requests.items()
-            if data.get("timestamp", 0) < cutoff
-        ]
-        for req_id in to_remove:
-            del _pending_requests[req_id]
-            count += 1
-
-    if count > 0:
-        logger.info("Cleared %d expired decisions/requests", count)
-
-    return count
-
-
-def get_gateway_approval_stats() -> dict[str, Any]:
-    """获取 Gateway 审批统计信息
-
-    Returns:
-        统计信息字典
-    """
-    with _decisions_lock:
-        total_decisions = len(_decisions)
-        approve_count = sum(1 for d in _decisions.values() if d.get("decision") == "approve")
-        deny_count = sum(1 for d in _decisions.values() if d.get("decision") == "deny")
-        timeout_count = sum(1 for d in _decisions.values() if d.get("decision") == "timeout")
-
-    with _pending_lock:
-        pending_count = len(_pending_requests)
-
-    return {
-        "total_decisions": total_decisions,
-        "approved": approve_count,
-        "denied": deny_count,
-        "timeout": timeout_count,
-        "pending": pending_count,
-    }
+    state = _poll_event(entry.event, session_key,
+                        interrupt_log="Approval wait interrupted by user signal — returning deny for session %s")
+    if state == "interrupted":
+        entry.result = "deny"
+        entry.event.set()
+    _drop_entry()
+    return _finish(payload, state != "timeout", entry.result, entry.reason)

@@ -1,297 +1,310 @@
-"""Registry of all available delegated task types and their schemas."""
+"""Live-subagent registry + model-facing control plane (list/steer/stop) for delegate_task."""
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Callable
+import json
+import threading
+import time
+from typing import Any, Dict, List, Optional
+from agent.interrupt_compat import request_hard_interrupt
+from tools.registry import tool_error
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("tools.delegate_tool")  # log-record parity with the origin module
 
+_spawn_pause_lock = threading.Lock()
+_spawn_paused: bool = False
+_active_subagents_lock = threading.Lock()
+# subagent_id -> mutable record tracking the live child agent.  Stays only
+# for the lifetime of the run; _run_single_child is the owner.
+_active_subagents: Dict[str, Dict[str, Any]] = {}
+# subagent_id -> {goal, delegation_id, owner_agent_session_id} retained AFTER the child finishes (bounded FIFO).
+# Child-started background processes routinely outlive the child (its npm ci with notify_on_complete=true finishes
+# after the summary was delivered); their completion notifications reach the parent via the shared completion_queue
+# and need delegation attribution even though the live registry entry is gone.
+_RECENT_SUBAGENTS_CAP = 200
+_recent_subagents: Dict[str, Dict[str, Any]] = {}
 
-@dataclass
-class TaskType:
-    """Definition of a task type with schema and handler."""
+def get_subagent_attribution(task_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """``{subagent_id, goal, delegation_id}`` for a process task_id that belongs to a live or recently-finished child
+    (children run their terminal sessions under ``task_id == subagent_id``), else None."""
+    if not task_id or not isinstance(task_id, str):
+        return None
+    with _active_subagents_lock:
+        record = _active_subagents.get(task_id) or _recent_subagents.get(task_id)
+    if record is None:
+        return None
+    return {"subagent_id": task_id, "goal": record.get("goal"), "delegation_id": record.get("delegation_id")}
 
-    name: str
-    schema: dict[str, Any]
-    handler: Callable[..., Any]
-    description: str = ""
-    category: str = "general"
-    tags: list[str] = field(default_factory=list)
+def set_spawn_paused(paused: bool) -> bool:
+    """Globally block/unblock NEW delegate_task spawns (active children keep running). Returns the new state."""
+    global _spawn_paused
+    with _spawn_pause_lock:
+        _spawn_paused = bool(paused)
+        return _spawn_paused
 
-    def validate_params(self, params: dict[str, Any]) -> tuple[bool, str]:
-        """Validate parameters against schema.
+def is_spawn_paused() -> bool:
+    with _spawn_pause_lock:
+        return _spawn_paused
 
-        Args:
-            params: Parameters to validate.
+def _register_subagent(record: Dict[str, Any]) -> None:
+    sid = record.get("subagent_id")
+    if not sid:
+        return
+    record.setdefault("accepting_steer", True)
+    with _active_subagents_lock:
+        _active_subagents[sid] = record
 
-        Returns:
-            Tuple of (is_valid, error_message).
-        """
-        required_fields = self.schema.get("required", [])
-        for field_name in required_fields:
-            if field_name not in params:
-                return False, f"Missing required field: {field_name}"
+def _unregister_subagent(subagent_id: str, *, agent: Any = None) -> None:
+    """Drop the live record (exact agent identity when given) and keep a bounded attribution stub."""
+    with _active_subagents_lock:
+        record = _active_subagents.get(subagent_id)
+        if record is None or not (agent is None or record.get("agent") is agent):
+            return
+        _active_subagents.pop(subagent_id, None)
+        sid = record.get("subagent_id")
+        if not sid:
+            return
+        _recent_subagents[sid] = {k: record.get(k) for k in ("goal", "delegation_id", "owner_agent_session_id")}
+        while len(_recent_subagents) > _RECENT_SUBAGENTS_CAP:
+            _recent_subagents.pop(next(iter(_recent_subagents)), None)
 
-        properties = self.schema.get("properties", {})
-        for field_name, value in params.items():
-            if field_name not in properties:
-                return False, f"Unknown field: {field_name}"
+def _close_subagent_steering(subagent_id: str, agent: Any) -> Optional[str]:
+    """Atomically close steer acceptance and drain its final durable artifact. ``steer_subagent`` holds the same
+    registry lock through ``agent.steer``, so either acceptance wins and this drain sees its exact text, or closure
+    wins and the caller is rejected. Exact agent identity prevents a finishing child with a recycled public id from
+    closing its replacement."""
+    with _active_subagents_lock:
+        record = _active_subagents.get(subagent_id)
+        if record is None or record.get("agent") is not agent:
+            return None
+        record["accepting_steer"] = False
+        drain = getattr(agent, "_drain_pending_steer", None)
+        if not callable(drain):
+            return None
+        try:
+            pending = drain()
+        except Exception as exc:
+            logger.debug("final steer drain for %s failed: %s", subagent_id, exc)
+            return None
+        return pending if isinstance(pending, str) and pending.strip() else None
 
-            expected_type = properties[field_name].get("type")
-            if expected_type:
-                if not self._check_type(value, expected_type):
-                    return False, f"Invalid type for {field_name}: expected {expected_type}"
-
-        return True, ""
-
-    @staticmethod
-    def _check_type(value: Any, expected_type: str) -> bool:
-        """Check if value matches expected JSON schema type.
-
-        Args:
-            value: Value to check.
-            expected_type: Expected JSON schema type.
-
-        Returns:
-            True if type matches.
-        """
-        type_map = {
-            "string": str,
-            "number": (int, float),
-            "integer": int,
-            "boolean": bool,
-            "array": list,
-            "object": dict,
-            "null": type(None),
-        }
-        expected_python_type = type_map.get(expected_type)
-        if expected_python_type is None:
-            return True
-        return isinstance(value, expected_python_type)
-
-
-class TaskRegistry:
-    """Registry of delegated task types."""
-
-    def __init__(self):
-        self.task_types: dict[str, TaskType] = {}
-        self._register_builtin_types()
-
-    def _register_builtin_types(self) -> None:
-        """Register built-in task types."""
-        self.register(
-            "shell_command",
-            schema={
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string", "description": "Shell command to execute"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds"},
-                    "env": {"type": "object", "description": "Environment variables"},
-                },
-                "required": ["command"],
-            },
-            handler=self._default_handler,
-            description="Execute a shell command in an isolated subprocess",
-            category="execution",
-            tags=["shell", "exec"],
-        )
-
-        self.register(
-            "code_generation",
-            schema={
-                "type": "object",
-                "properties": {
-                    "prompt": {"type": "string", "description": "Generation prompt"},
-                    "language": {"type": "string", "description": "Target language"},
-                    "framework": {"type": "string", "description": "Target framework"},
-                },
-                "required": ["prompt"],
-            },
-            handler=self._default_handler,
-            description="Generate code based on a prompt",
-            category="generation",
-            tags=["code", "ai"],
-        )
-
-        self.register(
-            "file_operation",
-            schema={
-                "type": "object",
-                "properties": {
-                    "operation": {
-                        "type": "string",
-                        "enum": ["read", "write", "delete", "copy", "move"],
-                    },
-                    "path": {"type": "string", "description": "File path"},
-                    "content": {"type": "string", "description": "Content for write operations"},
-                },
-                "required": ["operation", "path"],
-            },
-            handler=self._default_handler,
-            description="Perform file system operations",
-            category="filesystem",
-            tags=["file", "io"],
-        )
-
-        self.register(
-            "web_request",
-            schema={
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "Target URL"},
-                    "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE"]},
-                    "headers": {"type": "object", "description": "HTTP headers"},
-                    "body": {"type": "string", "description": "Request body"},
-                },
-                "required": ["url"],
-            },
-            handler=self._default_handler,
-            description="Make HTTP requests",
-            category="network",
-            tags=["http", "web"],
-        )
-
-    @staticmethod
-    def _default_handler(params: dict[str, Any]) -> dict[str, Any]:
-        """Default handler for unregistered operations.
-
-        Args:
-            params: Handler parameters.
-
-        Returns:
-            Result dictionary.
-        """
-        return {"status": "ok", "params": params}
-
-    def register(
-        self,
-        task_type: str,
-        schema: dict[str, Any],
-        handler: Callable[..., Any],
-        description: str = "",
-        category: str = "general",
-        tags: list[str] | None = None,
-    ) -> None:
-        """Register a new task type.
-
-        Args:
-            task_type: Unique name for the task type.
-            schema: JSON schema for task parameters.
-            handler: Function to handle task execution.
-            description: Human-readable description.
-            category: Category for grouping tasks.
-            tags: Optional tags for filtering.
-        """
-        task_def = TaskType(
-            name=task_type,
-            schema=schema,
-            handler=handler,
-            description=description,
-            category=category,
-            tags=tags or [],
-        )
-        self.task_types[task_type] = task_def
-        logger.info("Registered task type: %s", task_type)
-
-    def unregister(self, task_type: str) -> bool:
-        """Unregister a task type.
-
-        Args:
-            task_type: The task type to remove.
-
-        Returns:
-            True if removed, False if not found.
-        """
-        if task_type in self.task_types:
-            del self.task_types[task_type]
-            logger.info("Unregistered task type: %s", task_type)
-            return True
+def interrupt_subagent(subagent_id: str) -> bool:
+    """Request that one running subagent stop at its next iteration boundary
+    (cooperative: the flag propagates to in-flight tools and recurses into
+    grandchildren via AIAgent.interrupt()). True iff a matching subagent was found."""
+    with _active_subagents_lock:
+        record = _active_subagents.get(subagent_id)
+    agent = record.get("agent") if record else None
+    if agent is None:
+        return False
+    try:
+        return bool(request_hard_interrupt(agent, f"Interrupted via TUI ({subagent_id})"))
+    except Exception as exc:
+        logger.debug("interrupt_subagent(%s) failed: %s", subagent_id, exc)
         return False
 
-    def get_schema(self, task_type: str) -> dict[str, Any] | None:
-        """Get the schema for a task type.
+def _subagent_transport_matches(record, transport) -> bool:
+    """Authority follows the owning session's LIVE transport slot, read at check time.
 
-        Args:
-            task_type: The task type to look up.
+    ``owner_transport`` on the record is only the capture-time marker that a gateway session
+    commissioned the child (``None`` = no RPC authority ever). The slot is authoritative because
+    every reattach path (prompt.submit, queued drain, resume, activate, viewer failover) already
+    mutates it; a per-record copy needed a matching registry sync at each of those sites and two
+    were missed (#106663). Records whose owner is not a session dict keep the exact-object rule."""
+    from tui_gateway.transport import FanoutTransport
 
-        Returns:
-            Schema dictionary or None if not found.
-        """
-        task_def = self.task_types.get(task_type)
-        return task_def.schema if task_def else None
+    if record.get("owner_transport") is None:
+        return False
+    owner = record.get("owner_session_record")
+    bound = owner.get("transport") if isinstance(owner, dict) else record.get("owner_transport")
+    return bound is transport or (isinstance(bound, FanoutTransport) and bound.contains(transport))
 
-    def get_handler(self, task_type: str) -> Callable[..., Any] | None:
-        """Get the handler for a task type.
 
-        Args:
-            task_type: The task type to look up.
+def steer_subagent(
+    subagent_id: str, text: str, *, owner_session_id: Optional[str] = None, owner_transport: Any = None,
+    owner_session_record: Any = None,
+) -> bool:
+    """Queue steering text into a running subagent without stopping it.
 
-        Returns:
-            Handler function or None if not found.
-        """
-        task_def = self.task_types.get(task_type)
-        return task_def.handler if task_def else None
+    AIAgent.steer() appends the text to the child's last tool result at its next iteration boundary — the current tool
+    call is never cut. True iff the text was QUEUED while the child still accepted work; False for unknown/closed id,
+    ownership mismatch, no live agent, or empty text. ``owner_session_id=None`` keeps the in-process helper contract;
+    gateway callers must pass exact authority. Acceptance and completion are linearized by the registry lock: if
+    acceptance wins but no delivery boundary remains, the text lands in the entry as ``missed_steer``.
+    """
+    if not text or not text.strip():
+        return False
+    with _active_subagents_lock:
+        record = _active_subagents.get(subagent_id)
+        if not record or not record.get("accepting_steer", False):
+            return False
+        if owner_session_id is not None and (
+            record.get("owner_session_id") != owner_session_id
+            or owner_transport is None
+            or not _subagent_transport_matches(record, owner_transport)
+            or owner_session_record is None
+            or record.get("owner_session_record") is not owner_session_record
+        ):
+            return False
+        agent = record.get("agent")
+        if agent is None:
+            return False
+        try:
+            return bool(agent.steer(text))
+        except Exception as exc:
+            logger.debug("steer_subagent(%s) failed: %s", subagent_id, exc)
+            return False
 
-    def get_task_type(self, task_type: str) -> TaskType | None:
-        """Get the full TaskType definition.
+def _capture_gateway_steer_authority(owner_session_id: Optional[str]) -> tuple[Any, Any]:
+    """Exact request transport + live session generation, if any — an in-process
+    bridge, not a serializable capability. Non-gateway hosts get ``(None, None)``."""
+    if not owner_session_id:
+        return None, None
+    try:
+        from tui_gateway.server import _current_session_steer_authority
+        return _current_session_steer_authority(owner_session_id)
+    except Exception:
+        return None, None
 
-        Args:
-            task_type: The task type to look up.
+# Registry record fields never exposed to the TUI/RPC snapshot.
+_PRIVATE_RECORD_KEYS = frozenset({"agent", "owner_session_id", "owner_transport", "owner_session_record", "accepting_steer"})
 
-        Returns:
-            TaskType object or None if not found.
-        """
-        return self.task_types.get(task_type)
+def list_active_subagents() -> List[Dict[str, Any]]:
+    """Copy of the running subagent tree ({subagent_id, parent_id, depth, goal, model,
+    started_at, tool_count, status, ...}); safe from any thread."""
+    with _active_subagents_lock:
+        return [{k: v for k, v in r.items() if k not in _PRIVATE_RECORD_KEYS} for r in _active_subagents.values()]
 
-    def list_types(self, category: str | None = None, tags: list[str] | None = None) -> list[str]:
-        """List registered task types.
+def _is_descendant_of(child_agent: Any, parent_agent: Any, max_hops: int = 8) -> bool:
+    """True when *child_agent* sits below *parent_agent* in the spawn tree (walks the ``_delegate_parent_ref`` weakref
+    chain stamped at build time). Identity only — a parent may steer/stop its own children and grandchildren, never
+    a sibling tree owned by another conversation."""
+    if child_agent is None or parent_agent is None:
+        return False
+    cur = child_agent
+    for _ in range(max_hops):
+        ref = getattr(cur, "_delegate_parent_ref", None)
+        ancestor = ref() if callable(ref) else None
+        if ancestor is None:
+            return False
+        if ancestor is parent_agent:
+            return True
+        cur = ancestor
+    return False
 
-        Args:
-            category: Filter by category.
-            tags: Filter by required tags (all must match).
+# Model-facing control actions accepted by delegate_task(action=...).
+# "spawn" (or omitted) keeps the historical spawn semantics.
+_CONTROL_ACTIONS = frozenset({"list", "steer", "stop"})
 
-        Returns:
-            List of task type names.
-        """
-        result = []
-        for name, task_def in self.task_types.items():
-            if category and task_def.category != category:
-                continue
-            if tags:
-                if not all(tag in task_def.tags for tag in tags):
-                    continue
-            result.append(name)
-        return result
+def _resolve_session_lineage(session_id: Optional[str], parent_agent: Any) -> str:
+    """Tip of a session id's compression lineage via the parent's live SessionDB (best-effort; input unchanged when
+    unavailable) so a delegation dispatched before a compression rotation still matches the rotated parent."""
+    sid = str(session_id or "")
+    db = getattr(parent_agent, "_session_db", None)
+    if not sid or db is None:
+        return sid
+    try:
+        resolved = db.resolve_resume_session_id(sid)
+        return str(resolved) if resolved else sid
+    except Exception:
+        return sid
 
-    def list_categories(self) -> list[str]:
-        """List all unique categories.
+def _owns_subagent_record(record: Dict[str, Any], parent_agent: Any) -> bool:
+    """True when *parent_agent*'s conversation owns this live-child record.
 
-        Returns:
-            List of category names.
-        """
-        return list(set(t.category for t in self.task_types.values()))
+    Tier 1: identity — the ``_delegate_parent_ref`` weakref chain reaches
+    *parent_agent* (fast path while the parent AIAgent survives the run). Tier 2:
+    durable lineage — the record's ``owner_agent_session_id`` matches the caller's
+    ``session_id`` after resolving compression-rotation lineage on both sides.
+    Tier 2 exists because the identity chain is BRITTLE across parent rebuilds:
+    the CLI sets ``self.agent = None`` mid-session (route change, credential
+    refresh, /model, MoA one-shots) and builds a NEW AIAgent while the child keeps
+    a weakref to the old one. Delivery routes by durable session id; control must
+    use the same spine or running children go invisible/unsteerable.
+    """
+    if _is_descendant_of(record.get("agent"), parent_agent):
+        return True
+    owner_sid = str(record.get("owner_agent_session_id") or "")
+    parent_sid = str(getattr(parent_agent, "session_id", "") or "")
+    if not owner_sid or not parent_sid:
+        return False
+    if owner_sid == parent_sid:
+        return True
+    # Compression rotation on either side: compare lineage tips.
+    return _resolve_session_lineage(owner_sid, parent_agent) in {parent_sid, _resolve_session_lineage(parent_sid, parent_agent)}
 
-    def validate(self, task_type: str, params: dict[str, Any]) -> tuple[bool, str]:
-        """Validate parameters against a task type schema.
+def _list_payload(parent_agent: Any) -> Dict[str, Any]:
+    with _active_subagents_lock:
+        records = list(_active_subagents.values())
+    entries = []
+    for r in records:
+        if not _owns_subagent_record(r, parent_agent):
+            continue
+        started = r.get("started_at")
+        entries.append({
+            "subagent_id": r.get("subagent_id"),
+            "parent_id": r.get("parent_id"),
+            "goal": r.get("goal"),
+            "model": r.get("model"),
+            "status": r.get("status"),
+            "running_seconds": round(time.time() - started, 1) if isinstance(started, (int, float)) else None,
+            "accepting_steer": bool(r.get("accepting_steer", False)),
+            "live_transcript": getattr(r.get("agent"), "_live_transcript_path", None),
+        })
+    payload: Dict[str, Any] = {"action": "list", "count": len(entries), "subagents": entries}
+    if not entries:
+        payload["note"] = (
+            "No live subagents right now. Children that already finished "
+            "have delivered (or will deliver) their results as normal "
+            "completion messages — there is nothing to steer or stop."
+        )
+    return payload
 
-        Args:
-            task_type: The task type to validate against.
-            params: Parameters to validate.
+def _handle_control_action(action: str, subagent_id: Optional[str], message: Optional[str], parent_agent: Any) -> str:
+    """Synchronous control plane for delegate_task: list/steer/stop. Runs in-turn (never backgrounded) over the same
+    registry the TUI overlay drives, scoped so a conversation can only control its own spawn tree."""
+    if action == "list":
+        return json.dumps(_list_payload(parent_agent), ensure_ascii=False)
 
-        Returns:
-            Tuple of (is_valid, error_message).
-        """
-        task_def = self.task_types.get(task_type)
-        if not task_def:
-            return False, f"Unknown task type: {task_type}"
-        return task_def.validate_params(params)
+    # steer / stop need a resolvable, owned target.
+    sid = (subagent_id or "").strip()
+    if not sid:
+        return tool_error(f"action='{action}' requires subagent_id (from the spawn dispatch response or action='list').")
+    with _active_subagents_lock:
+        record = _active_subagents.get(sid)
+    if record is None or not _owns_subagent_record(record, parent_agent):
+        return tool_error(
+            f"No live subagent '{sid}' in this conversation's spawn tree. It "
+            "may have already finished (its result arrives as a normal "
+            "completion message). Use action='list' to see live children."
+        )
+    if action == "steer" and not (message or "").strip():
+        return tool_error("action='steer' requires a non-empty 'message' describing the course correction.")
+    outcome = _CONTROL_OUTCOMES.get(action)
+    if outcome is None:
+        return tool_error(f"Unknown action '{action}'. Use spawn, list, steer, or stop.")
+    status, note, failure = outcome
+    ok = interrupt_subagent(sid) if action == "stop" else steer_subagent(sid, message.strip())
+    if ok:
+        return json.dumps({"action": action, "subagent_id": sid, "status": status, "note": note}, ensure_ascii=False)
+    return tool_error(failure.format(sid=sid))
 
-    def get_all_schemas(self) -> dict[str, dict[str, Any]]:
-        """Get schemas for all registered task types.
-
-        Returns:
-            Dictionary mapping task type names to schemas.
-        """
-        return {name: tt.schema for name, tt in self.task_types.items()}
+# action -> (success status, success note, failure error template)
+_CONTROL_OUTCOMES = {
+    "stop": (
+        "interrupt_requested",
+        "The subagent stops at its next iteration boundary (in-flight tool calls are asked to cancel). Its "
+        "partial result still re-enters the conversation as a completion message — do not wait or poll.",
+        "Could not interrupt '{sid}' — it likely finished in the last "
+        "moment. Its result arrives as a normal completion message.",
+    ),
+    "steer": (
+        "queued",
+        "Steering text queued. The subagent sees it appended to its next tool result — the current tool call is "
+        "never cut. If the child finishes before a delivery boundary remains, the text is reported back as "
+        "missed_steer in its completion entry.", "Subagent '{sid}' is no longer accepting steering (finishing or "
+        "already finished). Its result arrives as a normal completion "
+        "message; re-delegate a follow-up task if more work is needed.",
+    ),
+}

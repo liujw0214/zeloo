@@ -1,363 +1,313 @@
-"""Context breakdown — split large contexts into processable chunks."""
+"""Live session context-window breakdown for UI surfaces.
+
+Estimates system prompt tiers, tool schemas, and conversation history for the
+category breakdown. Overall occupancy retains its provider-usage or estimate
+provenance; category estimates are not exact tokenizer counts or gate authority.
+"""
 
 from __future__ import annotations
 
-import heapq
-import logging
+import json
 import re
-from typing import Any
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from agent.context_compressor import Message
+_SKILLS_BLOCK_RE = re.compile(r"<available_skills>.*?</available_skills>", re.DOTALL)
+_SUBAGENT_TOOL_NAMES = frozenset({"delegate_task"})
 
-logger = logging.getLogger(__name__)
+# id -> (label, dashboard color, /context glyph); declaration order is display order.
+_CATEGORIES = {
+    "system_prompt": ("System prompt", "var(--context-usage-system)", "■"),
+    "tool_definitions": ("Tool definitions", "var(--context-usage-tools)", "▣"),
+    "rules": ("Rules", "var(--context-usage-rules)", "▩"),
+    "skills": ("Skills", "var(--context-usage-skills)", "▤"),
+    "mcp": ("MCP", "var(--context-usage-mcp)", "▥"),
+    "subagent_definitions": ("Subagent definitions", "var(--context-usage-subagents)", "▦"),
+    "memory": ("Memory", "var(--context-usage-memory)", "▧"),
+    "conversation": ("Conversation", "var(--context-usage-conversation)", "▨"),
+}
+_FREE_GLYPH = "·"
+_GRID_COLUMNS = 20
+_GRID_ROWS = 5  # 100 cells → 1 cell per percent of the context window
+_DETAILS_TABLE_LIMIT = 15  # display cap only; the underlying data keeps everything
 
-# Pre-compiled boundary patterns. Building these at module import is
-# ~100× cheaper than re-compiling inside the per-chunk ``finditer``
-# call. Order matters: the most preferred boundary is matched first.
-# All boundaries record ``m.end()`` (the offset right after the
-# separator) so the chunk never starts mid-line / mid-sentence /
-# mid-clause / mid-word.
-_BOUNDARY_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\n\n+"),
-    re.compile(r"\n"),
-    re.compile(r"\. "),
-    re.compile(r", "),
-    re.compile(r" "),
-)
 
+def _chars_to_tokens(text: str) -> int:
+    return (len(text) + 3) // 4
 
-def breakdown_by_tokens(
-    text: str,
-    chunk_size: int = 4000,
-    overlap_tokens: int = 200,
-    model: str = "gpt-4o",
-) -> list[str]:
-    """Split text into token-bounded chunks with optional overlap.
 
-    Args:
-        text: Input text string.
-        chunk_size: Target tokens per chunk.
-        overlap_tokens: Number of overlapping tokens between chunks.
-        model: Model name for token estimation.
+def _json_tokens(value: Any) -> int:
+    return _chars_to_tokens(json.dumps(value, ensure_ascii=False)) if value else 0
 
-    Returns:
-        List of text chunks.
-    """
-    if not text or chunk_size <= 0:
-        return [text] if text else []
 
-    chars_per_token = 4.0
-    chunk_chars = int(chunk_size * chars_per_token)
-    overlap_chars = int(overlap_tokens * chars_per_token)
-    text_len = len(text)
+def _bytes_to_tokens(size: Optional[int]) -> Optional[int]:
+    return None if size is None else (int(size) + 3) // 4
 
-    # Short text that fits in a single chunk — no need to slice.
-    if text_len <= chunk_chars:
-        return [text]
 
-    chunks: list[str] = []
-    start = 0
+def _skills_block(stable: str) -> str:
+    """The live ``<available_skills>`` block inside the stable tier, or ''."""
+    m = _SKILLS_BLOCK_RE.search(stable)
+    return m.group(0) if m else ""
 
-    while start < text_len:
-        end = min(start + chunk_chars, text_len)
 
-        if end < text_len:
-            boundary = _find_safe_boundary(text, start, end)
-            if boundary > start + chunk_chars // 2:
-                end = boundary
+def _split_tools(tools: Sequence[dict]) -> Tuple[List[dict], List[dict], List[dict]]:
+    builtin: List[dict] = []
+    mcp: List[dict] = []
+    subagent: List[dict] = []
+    for tool in tools:
+        fn = tool.get("function") if isinstance(tool, dict) else None
+        name = str((fn if isinstance(fn, dict) else tool).get("name") or "")
+        bucket = mcp if name.startswith("mcp_") else subagent if name in _SUBAGENT_TOOL_NAMES else builtin
+        bucket.append(tool)
+    return builtin, mcp, subagent
 
-        chunk = text[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
 
-        actual_chunk_size = end - start
-        advance = max(1, actual_chunk_size - overlap_chars)
-        start += advance
-        if start >= text_len:
-            break
-
-    return chunks
-
-
-def breakdown_by_turns(
-    messages: list[Message | dict[str, Any]],
-    chunk_turns: int = 10,
-) -> list[list[Message | dict[str, Any]]]:
-    """Split a message list into groups by turn count.
-
-    A "turn" is a user+assistant message pair.
-
-    Args:
-        messages: List of message objects.
-        chunk_turns: Number of turns per chunk.
-
-    Returns:
-        List of message groups.
-    """
-    if not messages:
-        return []
-
-    result: list[list[Message | dict[str, Any]]] = []
-    current: list[Message | dict[str, Any]] = []
-    turns_in_current = 0
-
-    for msg in messages:
-        current.append(msg)
-        role = getattr(msg, "role", msg.get("role", "user") if isinstance(msg, dict) else "user")
-        if role in ("user", "assistant"):
-            turns_in_current += 1
-        elif role == "tool":
-            pass
-
-        if turns_in_current >= chunk_turns:
-            result.append(current)
-            current = []
-            turns_in_current = 0
-
-    if current:
-        result.append(current)
-
-    return result
-
-
-def breakdown_by_semantic(
-    messages: list[Message | dict[str, Any]],
-    max_groups: int = 5,
-    llm_summarizer: Any | None = None,
-) -> list[list[Message | dict[str, Any]]]:
-    """Split messages into semantic groups using LLM-assisted analysis.
-
-    Groups messages by detected topic/theme boundaries.
-
-    Args:
-        messages: List of message objects.
-        max_groups: Maximum number of groups to produce.
-        llm_summarizer: Optional LLM for semantic analysis.
-
-    Returns:
-        List of semantically grouped message lists.
-    """
-    if not messages:
-        return []
-
-    if len(messages) <= max_groups * 2:
-        return [[m] for m in messages]
-
-    if llm_summarizer is None:
-        return _heuristic_semantic_split(messages, max_groups)
-
-    return _llm_semantic_split(messages, max_groups, llm_summarizer)
-
-
-def breakdown_by_files(
-    files: list[str],
-    max_files_per_chunk: int = 20,
-) -> list[list[str]]:
-    """Split a list of file paths into groups by file count.
-
-    Useful for batch processing of project files.
-
-    Args:
-        files: List of file path strings.
-        max_files_per_chunk: Maximum files per chunk.
-
-    Returns:
-        List of file path groups.
-    """
-    if not files:
-        return []
-
-    result: list[list[str]] = []
-    for i in range(0, len(files), max_files_per_chunk):
-        result.append(files[i : i + max_files_per_chunk])
-
-    return result
-
-
-def breakdown_by_size(
-    items: list[str],
-    max_bytes: int = 100_000,
-) -> list[list[str]]:
-    """Split items by cumulative byte size.
-
-    Args:
-        items: List of string items.
-        max_bytes: Maximum total bytes per group.
-
-    Returns:
-        List of item groups.
-    """
-    if not items:
-        return []
-
-    result: list[list[str]] = []
-    current_group: list[str] = []
-    current_size = 0
-
-    for item in items:
-        item_bytes = len(item.encode("utf-8"))
-        if current_size + item_bytes > max_bytes and current_group:
-            result.append(current_group)
-            current_group = []
-            current_size = 0
-
-        current_group.append(item)
-        current_size += item_bytes
-
-    if current_group:
-        result.append(current_group)
-
-    return result
-
-
-def _find_safe_boundary(text: str, start: int, end: int) -> int:
-    """Find a safe splitting boundary near the target position.
-
-    Uses the precompiled ``_BOUNDARY_PATTERNS`` (paragraph → newline →
-    sentence → comma → space) so each chunk-search costs one slice
-    rather than one slice per pattern.
-    """
-    chunk = text[start:end]
-    target = end - start
-    if not chunk:
-        return end
-
-    safe_points: list[int] = []
-    for pattern in _BOUNDARY_PATTERNS:
-        for m in pattern.finditer(chunk):
-            # ``m.end()`` lands on the first character of the next
-            # chunk — after the separator, not on the separator
-            # itself.
-            safe_points.append(m.end())
-        if safe_points:
-            break
-
-    if not safe_points:
-        return end
-
-    closest = min(safe_points, key=lambda p: abs(p - target))
-    return start + closest
-
-
-def _heuristic_semantic_split(
-    messages: list[Message | dict[str, Any]],
-    max_groups: int,
-) -> list[list[Message | dict[str, Any]]]:
-    """Simple heuristic-based semantic split without LLM."""
-    if len(messages) <= max_groups * 2:
-        return [[m] for m in messages]
-
-    group_size = max(2, len(messages) // max_groups)
-    result: list[list[Message | dict[str, Any]]] = []
-
-    for i in range(0, len(messages), group_size):
-        group = messages[i : i + group_size]
-        if group:
-            result.append(group)
-
-    if len(result) > max_groups:
-        result = _coalesce_groups(result, max_groups)
-
-    return result
-
-
-def _coalesce_groups(
-    groups: list[list[Message | dict[str, Any]]],
-    target: int,
-) -> list[list[Message | dict[str, Any]]]:
-    """Coalesce adjacent groups to reach ``target`` count.
-
-    The previous implementation was O(n²): for each round of merging
-    it scanned every adjacent pair to find the smallest. With 1 000
-    groups reducing to 5, that's ~500 000 comparisons.
-
-    The new implementation uses a min-heap of the *initial* adjacent
-    pair sizes plus lazy invalidation: each merge invalidates the two
-    removed pairs and the one new pair. Total work: O(n log n) where
-    n is the number of rounds (= initial group count − target).
-    """
-    if len(groups) <= target or len(groups) <= 1:
-        return groups
-
-    # Initialise heap with every adjacent pair size. ``(size, index)``
-    # so equal sizes are broken by index (stable / deterministic).
-    heap: list[tuple[int, int]] = []
-    for i in range(len(groups) - 1):
-        combined = len(groups[i]) + len(groups[i + 1])
-        heapq.heappush(heap, (combined, i))
-    # Stale entries (when we pop a pair that no longer exists) are
-    # detected by re-checking the current size at that index.
-    while len(groups) > target and heap:
-        size, idx = heapq.heappop(heap)
-        # Skip stale: the index might have been invalidated by an
-        # earlier merge of its left or right neighbour.
-        if idx + 1 >= len(groups):
-            continue
-        current = len(groups[idx]) + len(groups[idx + 1])
-        if current != size:
-            # Push the fresh size back and try the next candidate.
-            heapq.heappush(heap, (current, idx))
-            continue
-        # Merge the pair at ``idx``.
-        merged = groups[idx] + groups[idx + 1]
-        groups = groups[:idx] + [merged] + groups[idx + 2 :]
-        # A new pair formed at idx (groups[idx] and groups[idx+1] — the
-        # latter being what was groups[idx+2] before the merge). Push
-        # its size. The previous neighbours of the merged pair
-        # (idx-1, idx) and (idx+1, idx+2) are gone — their stale
-        # entries in the heap will be discarded by the staleness check.
-        if idx + 1 < len(groups):
-            new_size = len(groups[idx]) + len(groups[idx + 1])
-            heapq.heappush(heap, (new_size, idx))
-
-    return groups
-
-
-def _llm_semantic_split(
-    messages: list[Message | dict[str, Any]],
-    max_groups: int,
-    summarizer: Any,
-) -> list[list[Message | dict[str, Any]]]:
-    """LLM-assisted semantic split."""
-    topic_prompt = (
-        f"Analyze this conversation and identify {max_groups} topic boundaries. "
-        "Return comma-separated message indices (e.g. '0,5,10,15'):\n\n"
-        + "\n".join(
-            f"[{i}] {getattr(m, 'role', m.get('role','?'))}: "
-            f"{str(getattr(m, 'content', m.get('content','')))[:100]}"
-            for i, m in enumerate(messages[:50])
-        )
-    )
-
+def _memory_blocks(agent: Any) -> Tuple[str, str]:
+    memory_block = user_block = ""
+    store = getattr(agent, "_memory_store", None)
     try:
-        response = summarizer(topic_prompt)
-        content = response.get("content", "")
-        indices = _parse_boundary_indices(content)
-        indices = sorted(set([0] + indices + [len(messages)]))
-
-        groups: list[list[Message | dict[str, Any]]] = []
-        for i in range(len(indices) - 1):
-            group = messages[indices[i] : indices[i + 1]]
-            if group:
-                groups.append(group)
-
-        if len(groups) > max_groups:
-            return _coalesce_groups(groups, max_groups)
-        return groups
-
-    except Exception as e:
-        logger.warning("LLM semantic split failed: %s, using heuristic", e)
-        return _heuristic_semantic_split(messages, max_groups)
+        if store is not None and getattr(agent, "_memory_enabled", True):
+            memory_block = store.format_for_system_prompt("memory") or ""
+        if store is not None and getattr(agent, "_user_profile_enabled", True):
+            user_block = store.format_for_system_prompt("user") or ""
+    except Exception:
+        pass
+    return memory_block, user_block
 
 
-def _parse_boundary_indices(text: str) -> list[int]:
-    """Parse boundary indices from LLM response."""
-    indices: list[int] = []
-    for token in re.split(r"[,;\n]+", text):
-        token = token.strip()
-        try:
-            idx = int(re.sub(r"\D", "", token))
-            indices.append(idx)
-        except ValueError:
-            continue
-    return indices
+def _strip_blocks(text: str, *blocks: str) -> str:
+    for block in blocks:
+        if block:
+            text = text.replace(block, "")
+    return text.strip()
+
+
+def _join(*parts: str) -> str:
+    return "\n\n".join(part for part in parts if part).strip()
+
+
+def _glyph(cat: Dict[str, Any]) -> str:
+    return _CATEGORIES.get(str(cat.get("id") or ""), (None, None, "▪"))[2]
+
+
+def context_display_source(compressor: Any) -> str:
+    """Distinguish the built-in preflight display seed from a provider reading.
+
+    Engines without the built-in real-usage ledger own their occupancy figure.
+    A seed never updates that ledger, even if its number later matches real usage.
+    """
+    real = getattr(compressor, "last_real_prompt_tokens", None)
+    shown = getattr(compressor, "last_prompt_tokens", 0) or 0
+    return "local_estimate" if isinstance(real, (int, float)) and shown > 0 and shown != real else "provider_usage"
+
+
+def context_usage_fields(compressor: Any) -> Dict[str, Any]:
+    """Current occupancy only; lifetime throughput is never a context fallback."""
+    used = max(0, getattr(compressor, "last_prompt_tokens", 0) or 0)
+    maximum = getattr(compressor, "context_length", 0) or 0
+    if not used or not maximum:
+        return {}
+    source = context_display_source(compressor)
+    return {"context_used": used, "context_max": maximum,
+            "context_percent": max(0, min(100, round(used / maximum * 100))),
+            "context_source": source, "context_estimated": source != "provider_usage"}
+
+
+def compute_session_context_breakdown(agent: Any, messages: Optional[List[dict]] = None) -> Dict[str, Any]:
+    """Return a Cursor-style context usage breakdown for one live agent."""
+    from agent.model_metadata import estimate_messages_tokens_rough
+    from agent.usage_anchor import anchored_context_tokens
+    from agent.system_prompt import build_system_prompt_parts
+
+    messages = messages or []
+    parts = build_system_prompt_parts(agent)
+    stable = parts.get("stable", "") or ""
+    skills_index = _skills_block(stable)
+    memory_block, user_block = _memory_blocks(agent)
+    system_prompt_text = _join(
+        _strip_blocks(stable, skills_index), _strip_blocks(parts.get("volatile", "") or "", memory_block, user_block)
+    )
+    builtin_tools, mcp_tools, subagent_tools = _split_tools(list(getattr(agent, "tools", None) or []))
+    tokens_by_id = {
+        "system_prompt": _chars_to_tokens(system_prompt_text),
+        "tool_definitions": _json_tokens(builtin_tools),
+        "rules": _chars_to_tokens(parts.get("context", "") or ""),
+        "skills": _chars_to_tokens(skills_index),
+        "mcp": _json_tokens(mcp_tools),
+        "subagent_definitions": _json_tokens(subagent_tools),
+        "memory": _chars_to_tokens(_join(memory_block, user_block)),
+        "conversation": estimate_messages_tokens_rough(messages),
+    }
+    estimated_total = sum(tokens_by_id.values())
+
+    comp = getattr(agent, "context_compressor", None)
+    context_max = int(getattr(comp, "context_length", 0) or 0) if comp else 0
+    # Usage-anchored figure (provider-exact tokens of a response + delta of what was
+    # appended since) beats last_prompt_tokens (lags) and the heuristic. Prefer the
+    # turn-base anchor: on reasoning models later same-turn responses inflate
+    # prompt_tokens with replayed thinking that evaporates at the turn boundary, so
+    # anchoring on the LAST response makes the meter sawtooth. Fall back to the
+    # last-response anchor, then measured, then estimated.
+    anchor = getattr(agent, "_turn_base_usage_anchor", None)
+    context_used = anchored_context_tokens(messages, anchor, charge_stale_thinking=False)
+    if context_used is None:
+        anchor = getattr(agent, "_usage_anchor", None)
+        context_used = anchored_context_tokens(messages, anchor)
+    if context_used is None:
+        measured_used = int(getattr(comp, "last_prompt_tokens", 0) or 0) if comp else 0
+        context_used = measured_used if measured_used > 0 else estimated_total
+        source = context_display_source(comp) if measured_used > 0 else "local_estimate"
+    else:
+        delta = messages[int(anchor["base_count"]):]
+        if delta and delta[0].get("role") == "assistant":
+            delta = delta[1:]
+        source = "provider_usage_plus_estimate" if delta else "provider_usage"
+
+    return {
+        "categories": [
+            {"color": color, "id": category_id, "label": label, "tokens": tokens_by_id[category_id]}
+            for category_id, (label, color, _glyph_) in _CATEGORIES.items()
+            if tokens_by_id[category_id] > 0
+        ],
+        "context_max": context_max,
+        "context_percent": max(0, min(100, round(context_used / context_max * 100))) if context_max else 0,
+        "context_used": context_used,
+        "context_source": source,
+        "context_estimated": source != "provider_usage",
+        "estimated_total": estimated_total,
+        "model": getattr(agent, "model", "") or "",
+    }
+
+
+def compute_context_details(agent: Any) -> Dict[str, Any]:
+    """Expanded per-skill / per-toolset cost listing for ``/context all``.
+
+    Reuses the ``Zeloo prompt-size`` attribution (index-line bytes from the
+    live skills block; schema bytes via the registry's tool→toolset map).
+    """
+    from zeloo_cli.prompt_size import _compute_skills_breakdown, _compute_toolsets_breakdown
+    from agent.system_prompt import build_system_prompt_parts
+
+    skills_block = _skills_block(build_system_prompt_parts(agent).get("stable", "") or "")
+    tools = list(getattr(agent, "tools", None) or [])
+    return {
+        "skills": [
+            {
+                "name": entry.get("name", ""),
+                "index_tokens": _bytes_to_tokens(entry.get("index_line_bytes")) or 0,
+                "skill_md_tokens": _bytes_to_tokens(entry.get("skill_md_bytes")),
+            }
+            for entry in (_compute_skills_breakdown(skills_block) if skills_block else [])
+        ],
+        "toolsets": [
+            {
+                "toolset": group.get("toolset", ""),
+                "tool_count": int(group.get("tool_count", 0) or 0),
+                "schema_tokens": _bytes_to_tokens(group.get("json_bytes")) or 0,
+            }
+            for group in (_compute_toolsets_breakdown(tools) if tools else [])
+        ],
+    }
+
+
+# ── /context rendering (CLI + gateway) ──────────────────────────────────────
+# Pure text renderers over the payload above. The gateway skips the glyph grid
+# (monospace is not guaranteed on messaging platforms).
+
+
+def render_context_grid(payload: Dict[str, Any]) -> List[str]:
+    """Glyph grid: 100 cells, one per percent of the context window; categories
+    fill in declaration order, the remainder is free space."""
+    context_max = int(payload.get("context_max") or 0)
+    total_cells = _GRID_COLUMNS * _GRID_ROWS
+    cells: List[str] = []
+    if context_max > 0:
+        for cat in payload.get("categories") or []:
+            tokens = int(cat.get("tokens") or 0)
+            # never render a nonzero category as invisible
+            n = round(tokens / context_max * total_cells) or (1 if tokens > 0 else 0)
+            cells.extend([_glyph(cat)] * n)
+        cells = cells[:total_cells]
+    cells.extend([_FREE_GLYPH] * (total_cells - len(cells)))
+    return [" ".join(cells[row * _GRID_COLUMNS:(row + 1) * _GRID_COLUMNS]) for row in range(_GRID_ROWS)]
+
+
+def render_context_category_lines(payload: Dict[str, Any]) -> List[str]:
+    """Render the 'Estimated usage by category' table as plain-text lines."""
+    categories = payload.get("categories") or []
+    context_max = int(payload.get("context_max") or 0)
+    estimated_total = int(payload.get("estimated_total") or 0)
+    denom = context_max or estimated_total
+
+    lines = ["Estimated usage by category"]
+    if not categories:
+        return [*lines, "  (no data yet — send a message first)"]
+    width = max(len("Free space"), *(len(str(cat.get("label") or "")) for cat in categories))
+    for cat in categories:
+        tokens, label = int(cat.get("tokens") or 0), str(cat.get("label") or cat.get("id") or "")
+        lines.append(f"{_glyph(cat)} {label:<{width}} ~{tokens:>9,} tokens ~{tokens / denom * 100 if denom else 0.0:>5.1f}%")
+    if context_max > 0:
+        free = max(0, context_max - estimated_total)
+        lines.append(f"{_FREE_GLYPH} {'Free space':<{width}} ~{free:>9,} tokens ~{free / context_max * 100:>5.1f}%")
+    return lines
+
+
+def _toolset_row(group: Dict[str, Any]) -> str:
+    return f"  {group['toolset']:<24} {group['tool_count']:>3} tools ~{group['schema_tokens']:>8,} tokens"
+
+
+def _skill_row(entry: Dict[str, Any]) -> str:
+    name = str(entry.get("name") or "")
+    if len(name) > 28:
+        name = name[:27] + "…"
+    md = entry.get("skill_md_tokens")
+    md_str = f"~{md:>8,}" if md is not None else f"{'n/a':>8}"
+    return f"  {name:<28} index ~{entry['index_tokens']:>6,}  SKILL.md {md_str} tokens"
+
+
+def _table(lines: List[str], title: str, rows: List[Dict[str, Any]], fmt) -> None:
+    """Append a titled, display-capped table (blank-separated from a preceding one)."""
+    if not rows:
+        return
+    if lines:
+        lines.append("")
+    lines.append(title)
+    lines.extend(fmt(row) for row in rows[:_DETAILS_TABLE_LIMIT])
+    if len(rows) > _DETAILS_TABLE_LIMIT:
+        lines.append(f"  … and {len(rows) - _DETAILS_TABLE_LIMIT} more")
+
+
+def render_context_details_lines(details: Dict[str, Any]) -> List[str]:
+    """Render the expanded ``/context all`` per-skill / per-toolset tables."""
+    lines: List[str] = []
+    _table(lines, "Toolsets by schema cost (largest first)", details.get("toolsets") or [], _toolset_row)
+    _table(lines, "Skills by cost (index = always-on; SKILL.md = cost when loaded)", details.get("skills") or [], _skill_row)
+    return lines
+
+
+def render_context_breakdown_lines(
+    payload: Dict[str, Any],
+    *,
+    details: Optional[Dict[str, Any]] = None,
+    grid: bool = True,
+) -> List[str]:
+    """Full /context view. ``grid`` prepends the glyph grid (CLI; the gateway
+    keeps its own gauge); ``details`` appends the expanded listings."""
+    lines: List[str] = [*render_context_grid(payload), ""] if grid else []
+    lines.extend(render_context_category_lines(payload))
+
+    context_max = int(payload.get("context_max") or 0)
+    if context_max > 0:
+        used, pct = int(payload.get("context_used") or 0), int(payload.get("context_percent") or 0)
+        mark = "~" if payload.get("context_estimated") else ""
+        lines.extend(["", f"Context window: {mark}{used:,} / {context_max:,} tokens ({mark}{pct}%)"])
+        source = payload.get("context_source")
+        if source:
+            labels = {"local_estimate": "local estimate", "provider_usage": "provider usage",
+                      "provider_usage_plus_estimate": "provider usage + estimated new messages"}
+            lines.append(f"Source: {labels.get(source, source)}; category counts are local estimates.")
+
+    if details is None:
+        lines.extend(["", "Use /context all for per-skill and per-toolset costs."])
+    elif detail_lines := render_context_details_lines(details):
+        lines.extend(["", *detail_lines])
+    return lines

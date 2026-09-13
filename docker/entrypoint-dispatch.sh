@@ -1,47 +1,25 @@
-﻿#!/bin/sh
-# docker/entrypoint-dispatch.sh — mode dispatcher based on zeloo_MODE
+#!/bin/sh
+# shellcheck shell=sh
+# Entry-point dispatcher for runtimes that may or may not give the image
+# ownership of PID 1.
 #
-# Supported modes:
-#   cli      — Interactive CLI session  (default)
-#   gateway  — API gateway server
-#   web     — Web interface
-#   tui     — Terminal UI
-#   cron     — Cron scheduler worker
+# Normal Docker / Podman path: this script is PID 1, so we delegate to
+# s6-overlay's /init exactly as before and keep the full supervision tree.
 #
-# Usage (in Dockerfile):
-#   ENTRYPOINT ["/usr/local/bin/entrypoint-dispatch.sh"]
-#   CMD ["cli"]
+# Wrapped-runtime path (Fly Machines, `docker run --init`, some Nomad/K8s
+# setups): the platform's own init is already PID 1 and execs the image
+# entrypoint as a child. s6-overlay aborts there with "can only run as pid 1",
+# so we run the stage2 bootstrap directly and then exec the main wrapper
+# without /init.
 
 set -e
 
-zeloo_MODE="${zeloo_MODE:-cli}"
+if [ "$$" -eq 1 ]; then
+    exec /init /opt/Zeloo/docker/main-wrapper.sh "$@"
+fi
 
-echo "[entrypoint-dispatch] mode=$zeloo_MODE"
-
-case "$zeloo_MODE" in
-    cli)
-        echo "[entrypoint-dispatch] Starting Zeloo CLI..."
-        exec Zeloo chat
-        ;;
-    gateway)
-        echo "[entrypoint-dispatch] Starting Zeloo Gateway..."
-        exec Zeloo gateway
-        ;;
-    web)
-        echo "[entrypoint-dispatch] Starting Zeloo Web..."
-        exec Zeloo web
-        ;;
-    tui)
-        echo "[entrypoint-dispatch] Starting Zeloo TUI..."
-        exec Zeloo tui
-        ;;
-    cron)
-        echo "[entrypoint-dispatch] Starting Zeloo Cron worker..."
-        exec Zeloo cron-worker
-        ;;
-    *)
-        echo "[entrypoint-dispatch] Unknown mode: $zeloo_MODE" >&2
-        echo "Supported: cli | gateway | web | tui | cron" >&2
-        exit 1
-        ;;
-esac
+echo "[Zeloo] WARNING: container entrypoint is not PID 1; skipping s6-overlay /init and falling back to direct bootstrap. Supervised services are unavailable in this runtime, but the requested command will still run." >&2
+# /init normally seeds PATH with s6's helpers; the non-PID-1 fallback skips it.
+export PATH="/command:/package/admin/s6/command:${PATH}"
+/opt/Zeloo/docker/stage2-hook.sh
+exec /opt/Zeloo/docker/main-wrapper.sh "$@"

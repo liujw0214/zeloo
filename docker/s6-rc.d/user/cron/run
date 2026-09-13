@@ -1,4 +1,0 @@
-#!/bin/sh
-# docker/s6-rc.d/user/cron/run — s6 service run script for the cron worker
-
-exec setuidgid zeloo env ZELOO_MODE=cron zeloo cron-worker

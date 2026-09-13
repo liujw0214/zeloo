@@ -1,412 +1,500 @@
-"""Early recovery: detect and repair broken venv/install before main imports.
+"""Dependency-light venv recovery that runs BEFORE zeloo_cli.main's imports.
 
-Runs BEFORE heavy imports. If the venv is broken (missing critical
-packages, corrupted ``site-packages``, mismatched Python version),
-this module will:
-
-1. Detect missing critical imports via :func:`detect_broken_venv`.
-2. Run ``pip install --force-reinstall`` for the critical packages.
-3. Run ``pip install -e .`` to repopulate the editable install.
-4. Exit with status 0 if repair succeeded; otherwise return ``False``
-   so the caller can surface a clean error to the user.
-
-The module is **stdlib + subprocess only** so it can be imported from
-the very top of the bootstrap chain, before any third-party package
-has had a chance to load.
+Deliberately **stdlib-only** so importing it can never fail on a corrupted venv. ``zeloo_cli.main``
+calls :func:`recover_if_needed` at the very top of its module body, before any third-party import.
+Scope: repair only enough for ``zeloo_cli.main`` to become importable again (force-reinstall of
+the known-fragile core packages, using the pins from pyproject.toml).
 """
 
 from __future__ import annotations
 
 import importlib
-import json
 import os
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
-__all__ = [
-    "CRITICAL_PACKAGES",
-    "detect_broken_venv",
-    "recover_if_needed",
-    "repair_venv",
-    "is_in_venv",
-    "log",
-    "recovery_status",
-]
+# Core packages a failed lazy ``uv pip install`` is known to leave with intact distribution
+# metadata but wiped import files. ``module`` is probed via a real import; ``attr`` guards against
+# an empty/stub module. main.py's marker-recovery path reuses these tables — keep them here so
+# both layers probe and repair the same set.
+# See #57828.
+LAZY_REFRESH_IMPORT_PROBES: tuple[tuple[str, str], ...] = (
+    ("yaml", "SafeDumper"), ("dotenv", "load_dotenv"), ("click", "Command"),
+    ("certifi", "contents"), ("rich", "print"), ("cryptography", "__version__"),
+    ("jwt", "encode"),
+)
+
+LAZY_REFRESH_REPAIR_PACKAGES: dict[str, str] = {
+    "yaml": "PyYAML", "dotenv": "python-dotenv", "click": "click", "certifi": "certifi",
+    "rich": "rich", "cryptography": "cryptography", "jwt": "PyJWT",
+}
+
+# ``Zeloo update`` renames the live ``Zeloo*.exe`` shims aside (``Zeloo.exe.old.<unix-ms>``) so
+# uv can write replacements. Putting them BACK is the safety-critical direction: losing that rename
+# leaves no ``Zeloo`` on PATH, and the command that would repair it IS ``Zeloo update``. The
+# updater, the early-recovery installer and the startup orphan sweep all restore through this one
+# stdlib-only helper so the retry ladder and the recovery wording cannot drift apart again.
+# --- Windows entry-point shim quarantine ----------------------------------- They used to be separate
+# one-shot renames with swallowed errors; the two that had messages had already drifted apart. The logic
+# lives here, in the one stdlib-only module all of them can import, so the ladder and the recovery wording
+# stay in lockstep. See #75584.
+QUARANTINE_RESTORE_BACKOFF_MS: tuple[int, ...] = (0, 100, 250, 500, 1000)
 
 
-# Packages that the CLI bootstrap chain depends on. Missing any one of
-# these is treated as a broken venv and triggers recovery.
-CRITICAL_PACKAGES: list[str] = [
-    "click",
-    "rich",
-    "pydantic",
-    "yaml",
-    "httpx",
-    "anyio",
-]
+def restore_quarantined_shims(
+    moved: list[tuple[Path, Path]], *, stream=None,
+    backoff_ms: tuple[int, ...] = QUARANTINE_RESTORE_BACKOFF_MS,
+) -> list[tuple[Path, Path]]:
+    """Rename quarantined shims back, retrying a lock instead of giving up.
 
-
-# Marker written next to the venv after a successful recovery. Lets
-# ``detect_broken_venv`` skip re-running pip when the environment is
-# already known to be good.
-_RECOVERY_MARKER = ".zeloo_recovery_ok"
-_RECOVERY_MARKER_VERSION = 1
-
-# How long the "venv was OK" marker stays valid. Repairs older than
-# this are re-validated to defend against a later dependency upgrade
-# breaking things again.
-_MARKER_TTL_SECONDS = 24 * 60 * 60
-
-# Hard timeout for each pip invocation. Recovery is best-effort — we
-# never want to hang the user.
-_PIP_TIMEOUT_SECONDS = 300
-
-# Where recovery messages go. stderr so they don't pollute stdout
-# pipelines the caller may have set up.
-_LOG_STREAM = sys.stderr
-
-
-# ── logging ──────────────────────────────────────────────────────
-
-
-def log(message: str) -> None:
-    """Log a recovery message to ``stderr`` with a stable prefix.
-
-    Always flushed immediately so a recovery-triggered exit doesn't
-    lose the message.
+    A pair is not a failure when ``original`` already exists or ``quarantined`` has gone: the
+    installer wrote a fresh shim, or a concurrent sweep won the race. Both are silent, so two
+    processes sweeping the same orphan cannot produce a spurious error.
     """
-    line = f"[zeloo-recovery] {message}"
-    try:
-        _LOG_STREAM.write(line + "\n")
-        _LOG_STREAM.flush()
-    except Exception:  # noqa: BLE001
-        # stderr may be closed in odd embedded contexts. Never let
-        # logging itself raise.
-        pass
-
-
-# ── environment probes ───────────────────────────────────────────
-
-
-def is_in_venv() -> bool:
-    """Return ``True`` if the current interpreter is inside a virtualenv.
-
-    Honours both stdlib ``sys.prefix != sys.base_prefix`` (the
-    canonical signal) and the ``VIRTUAL_ENV`` environment variable
-    (covers the ``pip install --target`` style virtualenvs).
-    """
-    try:
-        if getattr(sys, "base_prefix", sys.prefix) != sys.prefix:
-            return True
-    except Exception:  # noqa: BLE001
-        pass
-    return bool(os.environ.get("VIRTUAL_ENV"))
-
-
-def _venv_root() -> Path | None:
-    """Best-effort path to the current venv root, or ``None``."""
-    if not is_in_venv():
-        return None
-    # ``sys.prefix`` points to the venv root for both stdlib venv and
-    # virtualenv-created environments.
-    return Path(getattr(sys, "prefix", sys.prefix))
-
-
-def _site_packages_dir() -> Path | None:
-    """Find the active ``site-packages`` directory for this interpreter.
-
-    Walks ``sys.path`` looking for the first entry that actually
-    exists, ends in ``site-packages``, and is writable. Falls back to
-    the conventional ``<prefix>/lib/pythonX.Y/site-packages``.
-    """
-    candidates: list[Path] = []
-    for entry in sys.path:
-        if not entry:
+    if stream is None:
+        stream = sys.stderr
+    failed: list[tuple[Path, Path]] = []
+    for original, quarantined in moved:
+        last_exc: OSError | None = None
+        for delay_ms in backoff_ms:
+            try:
+                if os.path.exists(original) or not os.path.exists(quarantined):
+                    last_exc = None
+                    break
+                if delay_ms:
+                    time.sleep(delay_ms / 1000.0)
+                os.rename(quarantined, original)
+                last_exc = None
+                break
+            except OSError as exc:
+                last_exc = exc
+        if last_exc is None:
             continue
-        p = Path(entry)
-        if p.name != "site-packages":
-            continue
-        if p.exists():
-            candidates.append(p)
-    if candidates:
-        return candidates[0]
-
-    if is_in_venv():
-        py_version = f"python{sys.version_info.major}.{sys.version_info.minor}"
-        py = "python3" if os.name != "nt" else ""
-        fallback = Path(sys.prefix) / "Lib" / "site-packages" if os.name == "nt" else Path(sys.prefix) / "lib" / py_version / "site-packages"
-        if fallback.exists():
-            return fallback
-    return None
-
-
-def _marker_path() -> Path | None:
-    """Path of the "recovery ok" marker file, or ``None`` if no venv."""
-    root = _venv_root()
-    if root is None:
-        return None
-    return root / _RECOVERY_MARKER
-
-
-def _read_marker() -> dict[str, object] | None:
-    """Return the parsed marker dict if it's fresh enough, else ``None``."""
-    path = _marker_path()
-    if path is None or not path.exists():
-        return None
-    try:
-        import time as _time
-
-        age = _time.time() - path.stat().st_mtime
-        if age > _MARKER_TTL_SECONDS:
-            return None
-        raw = path.read_text(encoding="utf-8")
-        data = json.loads(raw)
-        if isinstance(data, dict) and data.get("version") == _RECOVERY_MARKER_VERSION:
-            return data
-    except (OSError, json.JSONDecodeError, ValueError):
-        return None
-    return None
-
-
-def _write_marker(python: str, repaired: list[str]) -> None:
-    """Persist a "recovery ok" marker so future starts skip detection."""
-    path = _marker_path()
-    if path is None:
-        return
-    try:
-        payload = {
-            "version": _RECOVERY_MARKER_VERSION,
-            "python": python,
-            "repaired": list(repaired),
-        }
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    except OSError as exc:
-        log(f"could not write recovery marker: {exc}")
-
-
-# ── detection ────────────────────────────────────────────────────
-
-
-def _import_works(module_name: str) -> bool:
-    """Return ``True`` if ``module_name`` can be imported in this process.
-
-    Uses ``importlib.util.find_spec`` to avoid the cost of actually
-    executing the module — a missing package should be caught at
-    spec-resolution time. Falls back to a real ``importlib.import_module``
-    for the few pathological packages that don't expose a spec.
-    """
-    try:
-        import importlib.util as _il
-
-        spec = _il.find_spec(module_name)
-        if spec is not None:
-            return True
-    except (ImportError, ValueError):
-        # find_spec raises ImportError for sub-modules whose parent
-        # isn't loaded; that's a real failure we should propagate.
-        return False
-    except Exception:  # noqa: BLE001
-        # Defensive: anything weird from a misbehaving package's
-        # __init_subclass__ machinery shouldn't crash detection.
-        pass
-    try:
-        importlib.import_module(module_name)
-        return True
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def detect_broken_venv() -> bool:
-    """Return ``True`` if the venv appears broken (missing critical deps).
-
-    "Broken" means any of the following:
-
-    * Running in a venv and the venv's ``site-packages`` doesn't exist
-      (the venv was partially deleted, e.g. ``rm -rf lib``).
-    * One of :data:`CRITICAL_PACKAGES` fails to import.
-    """
-    # Outside a venv, never claim the venv is broken — system Python
-    # is responsible for its own health.
-    if not is_in_venv():
-        return False
-
-    # Fresh marker means we already validated this environment.
-    if _read_marker() is not None:
-        return False
-
-    site = _site_packages_dir()
-    if site is None or not site.exists():
-        log("site-packages directory missing")
-        return True
-
-    missing: list[str] = []
-    for pkg in CRITICAL_PACKAGES:
-        if not _import_works(pkg):
-            missing.append(pkg)
-    if missing:
-        log(f"missing critical packages: {', '.join(missing)}")
-        return True
-    return False
-
-
-# ── repair ───────────────────────────────────────────────────────
-
-
-def _run_pip(*args: str, timeout: float = _PIP_TIMEOUT_SECONDS) -> bool:
-    """Run ``pip`` as a subprocess and return ``True`` on a clean exit.
-
-    Uses ``sys.executable -m pip`` so we always use the interpreter
-    the user actually launched, including its ``--user`` / PEP 517
-    settings. The check is deliberately on the exit code only —
-    "warnings" from pip should not block recovery.
-    """
-    cmd = [sys.executable, "-m", "pip", *args]
-    log(f"running: {' '.join(cmd)}")
-    try:
-        proc = subprocess.run(
-            cmd,
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout,
+        failed.append((original, quarantined))
+        name = os.path.basename(str(original))
+        stem = name[:-4] if name.lower().endswith(".exe") else name
+        print(
+            f"  ✖ FAILED to restore {name} "
+            f"({last_exc.__class__.__name__}) — it is still quarantined "
+            f"as {os.path.basename(str(quarantined))}.\n"
+            f"    `{stem}` will NOT be on PATH until it is put back. Run this, "
+            f"then re-run the update:\n"
+            f'      move "{quarantined}" "{original}"',
+            file=stream,
         )
-    except subprocess.TimeoutExpired:
-        log(f"pip {' '.join(args)} timed out after {timeout}s")
-        return False
-    except FileNotFoundError:
-        log("pip not available — interpreter missing or broken")
-        return False
-    except OSError as exc:
-        log(f"pip launch failed: {exc}")
-        return False
-
-    if proc.returncode == 0:
-        return True
-    err_tail = (proc.stderr or "").strip().splitlines()[-3:]
-    log(f"pip exited with {proc.returncode}: {' | '.join(err_tail)}")
-    return False
+    return failed
 
 
-def _find_project_root() -> Path | None:
-    """Locate the editable-install root (``pyproject.toml``).
+# Set only when this process successfully finishes a deferred core install for an ``update``
+# invocation. The CLI import that follows must not resolve external secret sources: a configured
+# source can map cryptography._rust and immediately recreate the self-lock marker this fresh
+# process just consumed. Process-local on purpose so children do not inherit the exception.
+_UPDATE_RETRY_RECOVERED = False
 
-    Walks up from this file until it finds a ``pyproject.toml`` with
-    a ``[project]`` or ``[tool.zeloo]`` section. Used by the
-    ``pip install -e .`` recovery step.
+
+def _should_skip_external_secret_sources() -> bool:
+    """Whether this updater already completed its deferred native install."""
+    return _UPDATE_RETRY_RECOVERED
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _load_pyproject_project(root: Path) -> dict | None:
+    """``[project]`` table of ``root/pyproject.toml``; ``None`` when missing/unreadable."""
+    pyproject = root / "pyproject.toml"
+    if not pyproject.is_file():
+        return None
+    try:
+        import tomllib
+
+        with open(pyproject, "rb") as f:
+            project = tomllib.load(f).get("project", {})
+    except Exception:
+        return None
+    return project if isinstance(project, dict) else None
+
+
+def _read_marker_attempts(marker_path: Path) -> int:
+    """Attempt counter from a marker's opportunistic JSON body; corrupt/missing → 0."""
+    try:
+        raw = marker_path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return 0
+    if not raw:
+        return 0
+    try:
+        import json
+
+        return int(json.loads(raw).get("attempts", 0))
+    except (ValueError, AttributeError):
+        return 0
+
+
+def _run_ensurepip(root: Path) -> None:
+    """Best-effort pip bootstrap — a killed install can leave the venv with no pip module at all."""
+    try:
+        subprocess.run([sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
+                       cwd=root, capture_output=True)
+    except Exception:
+        pass
+
+
+def _pid_is_running(pid: int) -> bool:
+    """Best-effort stdlib-only process liveness probe.
+
+    ``os.kill(pid, 0)`` is not a no-op on Windows, so use the Win32 process handle API there. An
+    access-denied result counts as live: racing an elevated updater is worse than postponing
+    recovery for one launch.
     """
-    here = Path(__file__).resolve().parent
-    for candidate in (here, *here.parents):
-        pyproject = candidate / "pyproject.toml"
-        if not pyproject.exists():
-            continue
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
         try:
-            content = pyproject.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        if "[project]" in content or "[tool.zeloo]" in content or "zeloo" in content:
-            return candidate
-    return None
+            import ctypes
 
-
-def repair_venv() -> bool:
-    """Attempt to repair the venv via pip.
-
-    Strategy
-    --------
-    1. ``pip install --force-reinstall`` for each missing critical
-       package — guarantees the binary wheel matches our interpreter.
-    2. ``pip install -e .`` from the repo root — repopulates the
-       editable install that the CLI imports from.
-
-    Returns ``True`` when both steps (when attempted) succeeded.
-    """
-    log("repair_venv: starting")
-
-    missing: list[str] = [
-        pkg for pkg in CRITICAL_PACKAGES if not _import_works(pkg)
-    ]
-    if not missing:
-        # No critical missing — re-run the force-reinstall anyway as
-        # a precaution when site-packages itself looks suspect (caller
-        # already established something is broken).
-        missing = list(CRITICAL_PACKAGES)
-
-    # Step 1 — critical packages.
-    install_ok = _run_pip("install", "--force-reinstall", "--no-deps", *missing)
-    if not install_ok:
-        # Fall back to letting pip resolve dependencies itself; this
-        # works around cases where ``--no-deps`` masked a conflict.
-        install_ok = _run_pip("install", "--force-reinstall", *missing)
-    if not install_ok:
-        log("repair_venv: critical pip install failed")
+            synchronize = 0x00100000
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+            kernel32.OpenProcess.restype = ctypes.c_void_p
+            kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+            kernel32.WaitForSingleObject.restype = ctypes.c_ulong
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.restype = ctypes.c_int
+            handle = kernel32.OpenProcess(synchronize, False, pid)
+            if not handle:
+                return ctypes.get_last_error() == 5  # ERROR_ACCESS_DENIED
+            try:
+                return kernel32.WaitForSingleObject(handle, 0) == 258
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return True
+    try:
+        os.kill(pid, 0)  # windows-footgun: ok — Windows returns above
+    except ProcessLookupError:
         return False
-
-    # Step 2 — editable install of the project (best-effort).
-    project_root = _find_project_root()
-    if project_root is not None:
-        ed_ok = _run_pip("install", "-e", str(project_root))
-        if not ed_ok:
-            log("repair_venv: editable install failed (continuing)")
-    else:
-        log("repair_venv: no project root found, skipping editable install")
-
-    # Verify before declaring victory.
-    still_missing = [pkg for pkg in CRITICAL_PACKAGES if not _import_works(pkg)]
-    if still_missing:
-        log(f"repair_venv: still missing after repair: {', '.join(still_missing)}")
+    except PermissionError:
+        return True
+    except OSError:
         return False
-
-    _write_marker(sys.executable, missing)
-    log("repair_venv: success")
     return True
 
 
-# ── public entry point ───────────────────────────────────────────
+def _marker_owner_is_live(marker: Path) -> bool:
+    """True when a legacy update marker names a process still running."""
+    try:
+        body = marker.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    for line in body.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == "pid":
+            try:
+                return _pid_is_running(int(value.strip()))
+            except ValueError:
+                return False
+    return False
 
 
-def recover_if_needed() -> bool:
-    """Try to detect and repair a broken venv.
+def _pinned_specs(packages: list[str], project_root: Path) -> list[str]:
+    """Map bare package names to their pinned specs from pyproject.toml.
 
-    Returns ``True`` when repair was *attempted* (regardless of
-    success), ``False`` when nothing needed to happen. Callers
-    typically treat ``True`` + post-repair import success as a green
-    light to continue the normal bootstrap.
+    Naive requirement-head parsing on purpose — ``packaging`` may itself be broken in the failure
+    state this module exists for. Unknown packages fall back to their bare name.
+    """
+    project = _load_pyproject_project(project_root)
+    if project is None:
+        return packages
+    name_to_spec: dict[str, str] = {}
+    for spec in project.get("dependencies", []) or []:
+        head = spec.split(";", 1)[0].strip()
+        bare = head
+        for op in ("==", ">=", "<=", "~=", ">", "<", "!="):
+            if op in bare:
+                bare = bare.split(op, 1)[0]
+                break
+        key = bare.strip().split("[", 1)[0].strip().lower()
+        if key:
+            name_to_spec[key] = head
+    return [name_to_spec.get(pkg.lower(), pkg) for pkg in packages]
 
-    The function never raises — recovery must be best-effort, and a
-    failure here should fall through to the regular ``ModuleNotFoundError``
-    path so the user sees the original error.
+
+def _certifi_bundle_broken() -> bool:
+    """True when certifi imports but its ``cacert.pem`` is missing/corrupt.
+
+    A brew Python upgrade or interrupted venv rebuild can leave certifi's metadata intact while
+    ``cacert.pem`` is gone or a dangling symlink; an attribute probe passes in that state and every
+    TLS connection then fails opaquely, so validate the bundle path itself.
     """
     try:
-        if not detect_broken_venv():
+        import certifi
+
+        bundle = Path(certifi.where())
+        # <1 KiB cannot hold a single PEM certificate — treat as corrupt.
+        return not bundle.is_file() or bundle.stat().st_size < 1024
+    except Exception:
+        # Import failure is caught by the regular probe table; failing to even stat is broken.
+        return True
+
+
+def _probe_broken_packages() -> list[str]:
+    """Import-probe the fragile core packages in THIS process.
+
+    Returns repair package names (deduped, probe order) for modules that fail to import or lack
+    their sentinel attribute. Failed imports leave nothing in ``sys.modules``, so a post-repair
+    retry in the same process works.
+    """
+    broken: list[str] = []
+    for mod_name, attr in LAZY_REFRESH_IMPORT_PROBES:
+        try:
+            mod = importlib.import_module(mod_name)
+            if not hasattr(mod, attr):
+                raise ImportError(f"{mod_name} missing {attr}")
+            if mod_name == "certifi" and _certifi_bundle_broken():
+                raise ImportError("certifi cacert.pem missing or corrupt")
+        except Exception:
+            pkg = LAZY_REFRESH_REPAIR_PACKAGES.get(mod_name)
+            if pkg and pkg not in broken:
+                broken.append(pkg)
+    return broken
+
+
+def _find_uv_binary() -> str | None:
+    """Locate a ``uv`` binary without importing third-party modules.
+
+    uv-managed base interpreters carry an ``EXTERNALLY-MANAGED`` marker, so the stdlib ``pip``
+    fallback refuses to touch them; the only sanctioned installer is then uv itself, which Zeloo
+    vendors (``~/.Zeloo/bin/uv.exe``) or the user has on PATH.
+    """
+    exe = "uv.exe" if sys.platform == "win32" else "uv"
+    for sub in ((".Zeloo", "bin"), (".local", "bin"), (".cargo", "bin")):
+        path = Path.home().joinpath(*sub, exe)
+        if path.is_file():
+            return str(path)
+    return shutil.which(exe)
+
+
+def _base_interpreter_is_externally_managed() -> bool:
+    """True when ``sys.executable`` is a uv/standalone-builds managed install.
+
+    Those ship an ``EXTERNALLY-MANAGED`` marker next to their stdlib (PEP 668), so
+    ``python -m pip install`` aborts with ``externally-managed-environment``; the early repair
+    must then go through uv (or explicitly override pip) or the venv stays broken.
+
+    See #83569.
+    """
+    try:
+        import sysconfig
+
+        stdlib = Path(sysconfig.get_path("stdlib"))
+        # uv 0.5+ moved the marker one level up next to a ``_uv_managed`` sentinel dir.
+        return ((stdlib / "EXTERNALLY-MANAGED").exists()
+                or (stdlib.parent / "EXTERNALLY-MANAGED").exists())
+    except Exception:
+        return False
+
+
+def _run_installer(tool: str, cmd: list[str], root: Path, env: dict | None = None) -> bool:
+    """Run one installer command; captured output is replayed to stderr only on failure."""
+    try:
+        result = subprocess.run(cmd, cwd=root, capture_output=True, text=True, encoding="utf-8",
+                                errors="replace", env=env)
+    except Exception as exc:
+        print(f"  ✗ Early venv repair could not run {tool}: {exc}", file=sys.stderr)
+        return False
+    if result.returncode == 0:
+        return True
+    tail = (result.stderr or result.stdout or "")[-2000:]
+    if tail:
+        print(tail, file=sys.stderr)
+    return False
+
+
+def _run_repair_install(specs: list[str], project_root: Path) -> bool:
+    """``uv pip`` (or stdlib ``pip``) force-reinstall of the given specs. Never raises.
+
+    Streams nothing to stdout (``Zeloo acp`` speaks JSON-RPC on stdout). uv is preferred when the
+    base interpreter is externally managed; without uv, pip runs with the PEP 668 override.
+    """
+    externally_managed = _base_interpreter_is_externally_managed()
+    if externally_managed:
+        uv = _find_uv_binary()
+        if uv:
+            env = {**os.environ, "VIRTUAL_ENV": str(project_root / "venv")}
+            env.pop("PYTHONHOME", None)
+            env.pop("PYTHONPATH", None)
+            return _run_installer("uv", [uv, "pip", "install", "--force-reinstall", *specs],
+                                  project_root, env)
+        print("  ⚠ Base interpreter is externally managed and no uv binary was "
+              "found; retrying repair via pip with PEP 668 override.", file=sys.stderr)
+    _run_ensurepip(project_root)
+    pip_cmd = [sys.executable, "-m", "pip", "install", "--force-reinstall"]
+    if externally_managed:
+        pip_cmd.append("--break-system-packages")
+    return _run_installer("pip", pip_cmd + specs, project_root)
+
+
+def _pytest_owns_live_checkout(root: Path) -> bool:
+    """True under pytest when ``root`` is this module's own checkout — the venv running the suite.
+
+    Lifecycle tests spawn real subprocesses that import ``zeloo_cli.main`` with recovery armed and
+    inherit ``PYTEST_CURRENT_TEST``; without this guard a broken dev venv would get a REAL
+    ensurepip + force-reinstall from inside a running suite. tmp_path roots are unaffected.
+    """
+    return "PYTEST_CURRENT_TEST" in os.environ and root == Path(__file__).resolve().parent.parent
+
+
+def recover_if_needed(project_root: Path | None = None, argv: list[str] | None = None) -> None:
+    """Repair wiped core packages so ``zeloo_cli.main`` can import at all.
+
+    Fast path (no marker present) is two ``lstat`` calls. Only acts when a recovery marker from a
+    prior ``Zeloo update`` exists AND an import probe confirms a core package is actually broken.
+    Never raises: on any failure the import of main.py proceeds and surfaces the real error.
+    """
+    global _UPDATE_RETRY_RECOVERED
+
+    try:
+        args = sys.argv[1:] if argv is None else argv
+        root = _project_root() if project_root is None else project_root
+        if _pytest_owns_live_checkout(root):
+            return
+        core_marker = root / ".update-incomplete"
+        lazy_marker = root / ".lazy-refresh-incomplete"
+        if not core_marker.exists() and not lazy_marker.exists():
+            return
+        # Managed/Docker/PyPI installs have no source tree here — the marker is not ours to act
+        # on; main.py's recovery clears it.
+        if not (root / "pyproject.toml").is_file():
+            return
+
+        # Pending core install: complete it NOW, before any native extension is imported, so the
+        # WHOLE dependency set is replaced while nothing pins venv .pyd files yet (deferring to
+        # main()'s post-import recovery re-locks it on Windows). A live marker owner is another
+        # updater inside the marker-to-install window — never race it. A dead owner MUST be
+        # recovered even when this launch is itself `Zeloo update`: CLI and Desktop retries keep
+        # that argv, and skipping solely on argv recreates the self-lock loop.
+        # Bounded retries: a persistently failing install must not hammer every launch, so attempts past the
+        # ceiling are left for main.py's post-import recovery path (which can safely probe-import after this
+        # process already holds whatever extensions it needs). See #83569.
+        if core_marker.exists():
+            if _marker_owner_is_live(core_marker):
+                return
+            if _complete_pending_core_install(root, core_marker) and "update" in args:
+                _UPDATE_RETRY_RECOVERED = True
+            return
+
+        # The lazy-refresh marker keeps the update-argv exclusion: it is not a deferred native
+        # install, and the active update flow owns its probe/repair lifecycle.
+        if "update" in args:
+            return
+
+        broken = _probe_broken_packages()
+        if not broken:
+            return  # main.py will load and run full recovery.
+
+        # Single-flight: share main.py's recovery lock so an early repair never races a
+        # concurrent full recovery into the same shared venv.
+        if not _claim_recovery_lock(root):
+            return
+        try:
+            specs = _pinned_specs(broken, root)
+            print("⚠ Core package(s) broken by an interrupted update — "
+                  f"repairing before launch: {', '.join(broken)}", file=sys.stderr)
+            if _run_repair_install(specs, root) and not _probe_broken_packages():
+                print("  ✓ Core packages repaired.", file=sys.stderr)
+            else:
+                print("  ✗ Automatic repair incomplete. Recover manually with:", file=sys.stderr)
+                print(f"    {sys.executable} -m pip install --force-reinstall " + " ".join(specs),
+                      file=sys.stderr)
+        finally:
+            _release_recovery_lock(root)
+    except Exception:
+        pass  # Never block launch — the import of main.py will surface the truth.
+
+
+# Cap on automatic early-pass install retries: a persistently failing install (network down) must
+# not reinstall-hammer every launch. Past this the marker is left to main.py's post-import recovery,
+# which presents the manual command. The counter lives in the marker's JSON body.
+_EARLY_CORE_INSTALL_MAX_ATTEMPTS = 3
+
+
+def _claim_recovery_lock(root: Path) -> bool:
+    """Single-flight claim on the shared recovery lock.  Never raises."""
+    lock_path = root / ".update-incomplete.lock"
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, f"{os.getpid()}\n".encode())
+        os.close(fd)
+        return True
+    except FileExistsError:
+        try:
+            if time.time() - lock_path.stat().st_mtime > 3600:
+                lock_path.unlink()
+        except OSError:
+            pass
+        return False
+    except OSError:
+        # Read-only fs / perms — proceed unlocked; the install itself surfaces the real problem.
+        return True
+
+
+def _release_recovery_lock(root: Path) -> None:
+    """Best-effort release of the shared recovery lock."""
+    try:
+        (root / ".update-incomplete.lock").unlink()
+    except OSError:
+        pass
+
+
+def _complete_pending_core_install(root: Path, core_marker: Path) -> bool:
+    """Run the pending core install BEFORE main.py can import native modules.
+
+    Never raises: any failure leaves the marker for the post-import path and returns ``False``.
+    Returns ``True`` only after the install succeeds.
+
+    ``recover_if_needed`` invokes this when ``.update-incomplete`` exists — a prior ``Zeloo update`` (or
+    the self-lock preflight, #83569) left the dependency sync deliberately unfinished. Completing it here
+    matters on Windows: the deferral exists precisely because the process that wrote the marker had a native
+    venv extension mapped; this process, running before ``zeloo_cli.main``'s third-party imports, maps
+    nothing yet, so the installer can replace ``.pyd`` files without hitting the lock.
+    """
+    try:
+        from zeloo_cli import _install_repair as ir
+
+        # Read attempts before claiming the lock so a persistently-failing install stops early.
+        attempts = _read_marker_attempts(core_marker)
+        if attempts >= _EARLY_CORE_INSTALL_MAX_ATTEMPTS:
+            print("⚠ Pending interrupted-update install has already failed "
+                  f"{attempts} times in the early pass — leaving it for the "
+                  "post-import recovery path.", file=sys.stderr)
             return False
-    except Exception as exc:  # noqa: BLE001
-        log(f"detect_broken_venv raised: {exc}")
-        return False
+        if not _claim_recovery_lock(root):
+            return False
+        try:
+            print("⚠ A previous `Zeloo update` was interrupted mid-install — "
+                  "finishing dependency installation now (before any native "
+                  "extensions load)...", file=sys.stderr)
+            ir.run_core_install(root)
+        except Exception as exc:
+            new_attempts = ir.bump_marker_attempts(core_marker)
+            print(f"  ✗ Early interrupted-install completion failed (attempt "
+                  f"{new_attempts}/{_EARLY_CORE_INSTALL_MAX_ATTEMPTS}): {exc}", file=sys.stderr)
+            print("  The next launch will retry; Zeloo will keep working from "
+                  "the current venv in the meantime.", file=sys.stderr)
+            return False
+        finally:
+            _release_recovery_lock(root)
 
-    log("venv appears broken — attempting recovery")
-    try:
-        return repair_venv()
-    except Exception as exc:  # noqa: BLE001
-        log(f"repair_venv raised: {exc}")
-        return False
-
-
-def recovery_status() -> dict[str, object]:
-    """Return a snapshot of the recovery state for ``zeloo doctor``.
-
-    Pure read-only helper — does *not* trigger recovery. Useful for
-    tests and the doctor command which need to report recovery state
-    without modifying the venv.
-    """
-    marker = _read_marker()
-    site = _site_packages_dir()
-    return {
-        "in_venv": is_in_venv(),
-        "site_packages": str(site) if site else None,
-        "recovery_marker": marker,
-        "critical_packages": {
-            pkg: _import_works(pkg) for pkg in CRITICAL_PACKAGES
-        },
-    }
+        try:
+            core_marker.unlink()
+        except OSError:
+            pass
+        print("  ✓ Dependency installation completed in the early pass.", file=sys.stderr)
+        return True
+    except Exception:
+        return False  # Never block launch — the marker stays for the post-import path.

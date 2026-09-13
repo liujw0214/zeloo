@@ -1,139 +1,69 @@
-"""Zeloo update subcommand — self-upgrade and dependency update."""
+"""``Zeloo update`` subcommand parser."""
 
 from __future__ import annotations
 
-import argparse
-import subprocess
-import sys
-
-from zeloo_cli.subcommands import Subcommand, subcommand
-from zeloo_cli.update_checker import (
-    UpdateChannel,
-    check_latest_version,
-    get_update_command,
-    get_version_info,
-)
+from typing import Callable
 
 
-def cmd_update_check(channel: UpdateChannel | None = None) -> int:
-    """Check for newer versions without installing.
-
-    Prints a friendly single-line message and always returns ``0`` so
-    the background ``cli._background_version_check`` subprocess can rely
-    on a non-zero exit code meaning "something went wrong", not "you're
-    out of date".
-    """
-    current, latest, used_channel = check_latest_version(channel)
-    channel_label = f" [{used_channel} channel]" if used_channel != "stable" else ""
-
-    if latest is None:
-        print(f"Already up to date ({current}){channel_label} [check skipped: no network]")
-        return 0
-
-    if latest != current:
-        version_info = get_version_info(latest, used_channel)
-        print(f"New version available: {latest} (current: {current}){channel_label}")
-        if version_info and version_info.release_date:
-            print(f"  Released: {version_info.release_date[:10]}")
-        cmd = get_update_command(latest)
-        print(f"  To update: {cmd}")
-        return 0
-
-    print(f"Already up to date ({current}){channel_label}")
-    return 0
-
-
-@subcommand("update")
-class UpdateCmd(Subcommand):
-    name = "update"
-    help = "Check for and install updates to Zeloo"
-
-    @classmethod
-    def configure_parser(cls, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
-            "--check", action="store_true",
-            help="Only check for updates, do not install",
-        )
-        parser.add_argument(
-            "--pip", action="store_true",
-            help="Also update pip and core dependencies",
-        )
-        parser.add_argument(
-            "--channel",
-            choices=["stable", "beta"],
-            default=None,
-            help="Release channel (default: from ZELOO_UPDATE_CHANNEL env, or stable)",
-        )
-        parser.add_argument(
-            "--json", action="store_true",
-            help="Output as JSON (--check only)",
-        )
-
-    def run(self, args: argparse.Namespace) -> int:
-        channel: UpdateChannel | None = getattr(args, "channel", None)
-
-        if args.check:
-            if args.json:
-                import json as _json
-                current, latest, used_channel = check_latest_version(channel)
-                version_info = get_version_info(latest, used_channel) if latest else None
-                output = {
-                    "current_version": current,
-                    "latest_version": latest,
-                    "channel": used_channel,
-                    "update_available": latest is not None and latest != current,
-                    "release_date": version_info.release_date[:10] if version_info and version_info.release_date else None,
-                    "is_prerelease": version_info.is_prerelease if version_info else False,
-                    "update_command": get_update_command(latest) if latest else None,
-                }
-                print(_json.dumps(output, indent=2))
-                return 0
-            return cmd_update_check(channel)
-
-        print("Checking for updates...")
-
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "pip", "index", "versions", "Zeloo",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0 and "Unable to find" in result.stdout:
-            print("Zeloo is installed from a local package (not PyPI).")
-            print("To update: git pull && pip install -e .")
-            return 0
-
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "pip", "install", "--dry-run",
-                "--upgrade", "Zeloo",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if "Would upgrade" in result.stdout or "Would not" not in result.stdout:
-            lines = [
-                line.strip()
-                for line in result.stdout.splitlines()
-                if "Zeloo" in line.lower()
-            ]
-            if lines:
-                print(f"Update available: {lines[0]}")
-            else:
-                print(result.stdout[:200])
-        else:
-            print("Zeloo is already up to date.")
-
-        if args.check:
-            return 0
-
-        print("\nInstalling update...")
-        res = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "Zeloo"],
-        )
-        if res.returncode == 0:
-            print("Update complete!")
-            return 0
-        print("Update failed. Try manually: pip install --upgrade Zeloo")
-        return 1
+def build_update_parser(subparsers, *, cmd_update: Callable) -> None:
+    """Attach the ``update`` subcommand to ``subparsers``."""
+    update_parser = subparsers.add_parser(
+        "update", help="Update Zeloo Agent to the latest version",
+        description="Pull the latest changes from git and reinstall dependencies")
+    update_parser.add_argument(
+        "--gateway", action="store_true", default=False,
+        help="Gateway mode: use file-based IPC for prompts instead of stdin (used internally by /update)",
+    )
+    update_parser.add_argument(
+        "--check", action="store_true", default=False,
+        help="Check whether an update is available without installing anything")
+    update_parser.add_argument(
+        "--plan", action="store_true", default=False,
+        help="Show the update plan and exit without changing anything: install "
+            "kind (git/docker/nix), every running Zeloo service across all "
+            "profiles with its supervisor and running code version, and how "
+            "each will be restarted. Read-only; safe on a live fleet.")
+    update_parser.add_argument(
+        "--no-backup", action="store_true", default=False,
+        help="Skip ALL pre-update backups for this run (both the quick state snapshot and the full zip; overrides updates.pre_update_backup)",
+    )
+    update_parser.add_argument(
+        "--backup", action="store_true", default=False,
+        help="Force a FULL pre-update backup (quick state snapshot + ZELOO_HOME zip) for this run, regardless of updates.pre_update_backup",
+    )
+    update_parser.add_argument(
+        "--yes", "-y", action="store_true", default=False,
+        help="Run without blocking on prompts: accepts the config-migration and stash-restore prompts, skips the fork-upstream prompt without adding a remote. API-key entry is skipped; run 'Zeloo config migrate' separately for those.",
+    )
+    update_parser.add_argument(
+        "--keep-stash", action="store_true", default=False,
+        help="Do NOT re-apply local changes after the update. Uncommitted "
+            "changes are still stashed so the update can proceed, but they "
+            "stay parked in git stash instead of being restored onto the "
+            "updated code. Used by the desktop updater so local source edits "
+            "never silently ride along across updates.")
+    update_parser.add_argument(
+        "--branch", default=None, metavar="NAME",
+        help="Update against this branch instead of the default (main). "
+            "If the local checkout is on a different branch, Zeloo will "
+            "switch to the requested branch first (auto-stashing any "
+            "uncommitted changes).")
+    update_parser.add_argument(
+        "--switch-branch", action="store_true", default=False,
+        help="With updates.parked_branch_strategy: update_in_place configured, "
+            "override it for this run: switch to the update target and update "
+            "THERE instead of merging the target into the checked-out branch. "
+            "The branch is left exactly as it was — no merge commit is written "
+            "into its history. Use on long-lived feature branches where an "
+            "update-driven merge commit would pollute the branch. No effect "
+            "under the default strategy (switch), which already switches. "
+            "Still refuses to touch a dirty tree.")
+    update_parser.add_argument(
+        "--force", action="store_true", default=False,
+        help="Windows: proceed with the update even when another Zeloo.exe is detected. The concurrent process will likely cause WinError 32 warnings. Does NOT bypass the venv-process guard (see --force-venv).",
+    )
+    update_parser.add_argument(
+        "--force-venv", action="store_true", default=False,
+        help="Windows: mutate the venv even while other processes are running from its interpreter (desktop backend, gateway, terminals). Those processes keep native .pyd files locked, so the dependency sync will likely fail partway and strand the install half-updated. Use only if you know the detected holders are false positives.",
+    )
+    update_parser.set_defaults(func=cmd_update)

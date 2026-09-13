@@ -1,185 +1,130 @@
-"""Zeloo ``profile`` subcommand — multi-profile management."""
+"""``Zeloo profile`` subcommand parser."""
 
 from __future__ import annotations
 
-import argparse
-import os
-import sys
-from pathlib import Path
-
-from zeloo_cli.subcommands import Subcommand, subcommand
+from typing import Callable
 
 
-@subcommand("profile")
-class ProfileCmd(Subcommand):
-    name = "profile"
-    help = "Manage Zeloo profiles"
+def build_profile_parser(subparsers, *, cmd_profile: Callable) -> None:
+    """Attach the ``profile`` subcommand to ``subparsers``."""
+    profile_parser = subparsers.add_parser(
+        "profile", help="Manage profiles — multiple isolated Zeloo instances")
+    profile_subparsers = profile_parser.add_subparsers(dest="profile_action")
 
-    @classmethod
-    def configure_parser(cls, parser: argparse.ArgumentParser) -> None:
-        sub = parser.add_subparsers(dest="profile_action", help="Profile action")
+    profile_subparsers.add_parser("list", help="List all profiles")
+    profile_use = profile_subparsers.add_parser("use", help="Set sticky default profile")
+    profile_use.add_argument("profile_name", help="Profile name (or 'default')")
 
-        sub.add_parser("list", help="List all profiles")
-        sub.add_parser("show", help="Show active profile details")
+    profile_create = profile_subparsers.add_parser("create", help="Create a new profile")
+    profile_create.add_argument("profile_name", help="Profile name (lowercase, alphanumeric)")
+    profile_create.add_argument(
+        "--clone", action="store_true",
+        help="Copy config.yaml, .env, SOUL.md, and skills from active profile")
+    profile_create.add_argument(
+        "--clone-all", action="store_true",
+        help="Full copy of active profile (all state, excluding per-profile history)")
+    profile_create.add_argument(
+        "--clone-from", metavar="SOURCE",
+        help="Source profile to clone from; implies --clone unless --clone-all is set")
+    profile_create.add_argument(
+        "--no-alias", action="store_true", help="Skip wrapper script creation")
+    profile_create.add_argument(
+        "--no-skills", action="store_true",
+        help="Create an empty profile with no bundled skills (opts out of `Zeloo update` skill sync)",
+    )
+    profile_create.add_argument(
+        "--description", default=None,
+        help="One- or two-sentence description of what this profile is good at. "
+             "Used by the kanban decomposer to route tasks based on role instead "
+             "of profile name alone. Skip and add later via `Zeloo profile describe`.")
 
-        use_p = sub.add_parser("use", help="Activate a profile")
-        use_p.add_argument("profile_name", help="Profile name to activate")
+    profile_delete = profile_subparsers.add_parser("delete", help="Delete a profile")
+    profile_delete.add_argument("profile_name", help="Profile to delete")
+    profile_delete.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
 
-        create_p = sub.add_parser("create", help="Create a new profile")
-        create_p.add_argument("profile_name", help="New profile name")
-        create_p.add_argument("--copy-from", dest="copy_from", default=None, help="Copy config from existing profile")
+    profile_describe = profile_subparsers.add_parser(
+        "describe", help="Read or set a profile's description (used by the kanban orchestrator)")
+    profile_describe.add_argument(
+        "profile_name", nargs="?", default=None,
+        help="Profile to describe (omit + use --all --auto to sweep)")
+    profile_describe.add_argument(
+        "--text", default=None,
+        help="Set description to this exact text (overwrites any existing description)")
+    profile_describe.add_argument(
+        "--auto", action="store_true",
+        help="Auto-generate description via the auxiliary LLM "
+             "(uses auxiliary.profile_describer)")
+    profile_describe.add_argument(
+        "--overwrite", action="store_true",
+        help="With --auto, replace user-authored descriptions too (default: only "
+             "fill in missing or previously-auto descriptions)")
+    profile_describe.add_argument(
+        "--all", dest="all_missing", action="store_true",
+        help="With --auto, run on every profile missing a description")
 
-        delete_p = sub.add_parser("delete", help="Delete a profile")
-        delete_p.add_argument("profile_name", help="Profile name to delete")
-        delete_p.add_argument("--force", action="store_true", help="Skip confirmation prompt")
+    profile_show = profile_subparsers.add_parser("show", help="Show profile details")
+    profile_show.add_argument("profile_name", help="Profile to show")
 
-    def run(self, args: argparse.Namespace) -> int:
-        action = getattr(args, "profile_action", None)
-        if action == "list":
-            return self._list()
-        if action == "show":
-            return self._show()
-        if action == "use":
-            return self._use(args)
-        if action == "create":
-            return self._create(args)
-        if action == "delete":
-            return self._delete(args)
-        print("Usage: zeloo profile [list|show|use|create|delete]")
-        return 1
+    profile_alias = profile_subparsers.add_parser("alias", help="Manage wrapper scripts")
+    profile_alias.add_argument("profile_name", help="Profile name")
+    profile_alias.add_argument("--remove", action="store_true", help="Remove the wrapper script")
+    profile_alias.add_argument(
+        "--name", dest="alias_name", metavar="NAME",
+        help="Custom alias name (default: profile name)")
 
-    def _get_zeloo_home(self) -> Path:
-        val = os.environ.get("ZELOO_HOME", "").strip()
-        if val:
-            return Path(val)
-        if sys.platform == "win32":
-            local = os.environ.get("LOCALAPPDATA", "").strip()
-            base = Path(local) if local else Path.home() / "AppData" / "Local"
-            return base / "Zeloo"
-        return Path.home() / ".Zeloo"
+    profile_rename = profile_subparsers.add_parser(
+        "rename", help="Rename a profile ('default': sets a display name; id unchanged)")
+    profile_rename.add_argument("old_name", help="Current profile name")
+    profile_rename.add_argument(
+        "new_name",
+        help="New profile name (for 'default': a display name — the canonical id stays 'default')")
 
-    def _list(self) -> int:
-        from zeloo_cli.profiles import get_active_profile_name, list_profiles
+    profile_export = profile_subparsers.add_parser("export", help="Export a profile to archive")
+    profile_export.add_argument("profile_name", help="Profile to export")
+    profile_export.add_argument(
+        "-o", "--output", default=None,
+        help="Output file (default: a managed profile-exports/<name>-<timestamp>.tar.gz "
+             "under the default Zeloo home)")
 
-        profiles = list_profiles()
-        active = get_active_profile_name()
+    profile_import = profile_subparsers.add_parser("import", help="Import a profile from archive")
+    profile_import.add_argument("archive", help="Path to .tar.gz archive")
+    profile_import.add_argument(
+        "--name", dest="import_name", metavar="NAME",
+        help="Profile name (default: inferred from archive)")
 
-        print("Available profiles:")
-        for p in profiles:
-            marker = " [active]" if p == active else ""
-            print(f"  - {p}{marker}")
-        return 0
+    # ---------- Distribution subcommands (issue #20456) ----------
+    profile_install = profile_subparsers.add_parser(
+        "install", help="Install a profile distribution from a git URL or local directory",
+        description="Install a Zeloo profile distribution. SOURCE can be a git URL "
+            "(github.com/user/repo, https://..., git@...) or a local "
+            "directory containing distribution.yaml at its root.")
+    profile_install.add_argument("source", help="Distribution source (git URL or local directory)")
+    profile_install.add_argument(
+        "--name", dest="install_name", metavar="NAME",
+        help="Override profile name (default: read from manifest)")
+    profile_install.add_argument(
+        "--alias", action="store_true",
+        help="Create a shell wrapper alias for the installed profile")
+    profile_install.add_argument(
+        "--force", action="store_true",
+        help="Overwrite an existing profile of the same name (user data preserved)")
+    profile_install.add_argument(
+        "-y", "--yes", action="store_true", help="Skip manifest preview confirmation")
 
-    def _show(self) -> int:
-        from zeloo_cli.profiles import get_active_profile_name, get_profile_dir, list_profiles
+    profile_update = profile_subparsers.add_parser(
+        "update", help="Re-pull a distribution and apply updates (user data preserved)",
+        description="Fetch the distribution from its recorded source and overwrite "
+            "distribution-owned files (SOUL.md, skills/, cron/, mcp.json). "
+            "User data (memories, sessions, auth, .env) is never touched. "
+            "config.yaml is preserved unless --force-config is passed.")
+    profile_update.add_argument("profile_name", help="Profile to update")
+    profile_update.add_argument(
+        "--force-config", action="store_true",
+        help="Also overwrite config.yaml (normally preserved to keep user overrides)")
+    profile_update.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
 
-        profiles = list_profiles()
-        active = get_active_profile_name()
-        active_dir = get_profile_dir(active)
+    profile_info = profile_subparsers.add_parser(
+        "info", help="Show a profile's distribution manifest (version, requirements, source)")
+    profile_info.add_argument("profile_name", help="Profile to inspect")
 
-        print(f"Active profile: {active}")
-        print(f"Profile path:   {active_dir}")
-
-        print("\nProfile contents:")
-        if active_dir.exists() and active_dir.is_dir():
-            for item in sorted(active_dir.iterdir()):
-                print(f"  {item.name}/" if item.is_dir() else f"  {item.name}")
-        else:
-            print("  (profile directory not found)")
-
-        print("\nAll profiles:")
-        for p in profiles:
-            marker = " [active]" if p == active else ""
-            print(f"  - {p}{marker}")
-
-        return 0
-
-    def _use(self, args: argparse.Namespace) -> int:
-        from zeloo_cli.profiles import activate_profile, get_active_profile_name, get_profile_dir
-
-        name = getattr(args, "profile_name", None)
-        if not name:
-            print("Error: profile name required")
-            return 1
-
-        try:
-            activate_profile(name)
-            print(f"Activated profile: {name}")
-            print(f"Profile path: {get_profile_dir(name)}")
-            print(f"\nNote: Use 'export ZELOO_HOME=\"{get_profile_dir(name)}\"' in your shell")
-            print(f"      for persistent activation across sessions.")
-        except FileNotFoundError:
-            print(f"Error: Profile '{name}' not found")
-            return 1
-        except Exception as exc:
-            print(f"Error activating profile: {exc}")
-            return 1
-
-        return 0
-
-    def _create(self, args: argparse.Namespace) -> int:
-        from zeloo_cli.profiles import create_profile, get_profile_dir, list_profiles
-
-        name = getattr(args, "profile_name", None)
-        if not name:
-            print("Error: profile name required")
-            return 1
-
-        copy_from = getattr(args, "copy_from", None)
-        if copy_from and copy_from not in list_profiles():
-            print(f"Error: source profile '{copy_from}' not found")
-            return 1
-
-        try:
-            path = create_profile(name, copy_from=copy_from)
-            print(f"Created profile: {name}")
-            print(f"Profile path: {path}")
-        except ValueError as exc:
-            print(f"Error: {exc}")
-            return 1
-        except FileExistsError:
-            print(f"Error: Profile '{name}' already exists")
-            return 1
-        except Exception as exc:
-            print(f"Error creating profile: {exc}")
-            return 1
-
-        return 0
-
-    def _delete(self, args: argparse.Namespace) -> int:
-        from zeloo_cli.profiles import delete_profile, get_active_profile_name, list_profiles
-
-        name = getattr(args, "profile_name", None)
-        if not name:
-            print("Error: profile name required")
-            return 1
-
-        if name == "default":
-            print("Error: Cannot delete the 'default' profile")
-            return 1
-
-        if name not in list_profiles():
-            print(f"Error: Profile '{name}' not found")
-            return 1
-
-        active = get_active_profile_name()
-        if name == active:
-            print(f"Error: Cannot delete the active profile '{name}'")
-            print("Switch to another profile first with 'zeloo profile use <name>'")
-            return 1
-
-        force = getattr(args, "force", False)
-        if not force:
-            confirm = input(f"Delete profile '{name}'? This cannot be undone. [y/N] ")
-            if confirm.lower() != "y":
-                print("Cancelled.")
-                return 0
-
-        try:
-            delete_profile(name)
-            print(f"Deleted profile: {name}")
-        except Exception as exc:
-            print(f"Error deleting profile: {exc}")
-            return 1
-
-        return 0
+    profile_parser.set_defaults(func=cmd_profile)
