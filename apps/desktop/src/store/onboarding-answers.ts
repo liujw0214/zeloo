@@ -11,7 +11,7 @@ export interface OnboardingAnswers {
 }
 
 // Keep existing fork users' answers when they move to upstream.
-export const ANSWERS_KEY = 'hermes-onboarding-wizard-answers-v1'
+export const ANSWERS_KEY = 'Zeloo-onboarding-wizard-answers-v1'
 
 export const DEFAULT_ANSWERS: OnboardingAnswers = {
   accent: null,

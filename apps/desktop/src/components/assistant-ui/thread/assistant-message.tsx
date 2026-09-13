@@ -512,7 +512,7 @@ const ErrorRecoveryActions: FC = () => {
   const model = useStore($currentModel)
   const connection = useStore($connection)
 
-  // Open Logs reveals the LOCAL Electron profile's HERMES_HOME/logs. On a
+  // Open Logs reveals the LOCAL Electron profile's ZELOO_HOME/logs. On a
   // remote/cloud connection the failed turn's gateway+agent logs live on the
   // remote box — the local folder only holds Desktop-side transport logs, so
   // the label says "Open Desktop logs" there instead of implying it opens the
@@ -554,7 +554,7 @@ const ErrorRecoveryActions: FC = () => {
 
   const openLogs = useCallback(async () => {
     try {
-      const root = await window.hermesDesktop?.logsRoot?.()
+      const root = await window.ZELOODesktop?.logsRoot?.()
 
       if (!root) {
         notifyError(new Error('logs root unavailable'), copy.errorOpenLogsFailed)
@@ -562,7 +562,7 @@ const ErrorRecoveryActions: FC = () => {
         return
       }
 
-      const result = await window.hermesDesktop?.openDir?.(root)
+      const result = await window.ZELOODesktop?.openDir?.(root)
 
       if (result && !result.ok) {
         notifyError(new Error(result.error || 'open failed'), copy.errorOpenLogsFailed)
@@ -609,7 +609,7 @@ const ErrorRecoveryActions: FC = () => {
         </ActionBarPrimitive.Reload>
       )}
       {showSwitchProvider && inRouter && <SwitchProviderAction label={copy.errorSwitchProvider} />}
-      {window.hermesDesktop?.logsRoot && (
+      {window.ZELOODesktop?.logsRoot && (
         <button className="aui-error-action" onClick={() => void openLogs()} type="button">
           {remoteConnection ? copy.errorOpenDesktopLogs : copy.errorOpenLogs}
         </button>

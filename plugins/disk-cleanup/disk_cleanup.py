@@ -1,9 +1,9 @@
 """disk_cleanup — ephemeral file cleanup library behind the disk-cleanup plugin.
 
 Rules: test files delete at task end (age >= 0); temp after 7 days; cron-output
-after 14 days; empty dirs under HERMES_HOME always. Prompt-only: research
+after 14 days; empty dirs under ZELOO_HOME always. Prompt-only: research
 (keep 10 newest, > 30 days), chrome-profile > 14 days, any file > 500 MB.
-Scope: strictly HERMES_HOME and /tmp/hermes-*; never ~/.hermes/logs/ or system dirs.
+Scope: strictly ZELOO_HOME and /tmp/Zeloo-*; never ~/.Zeloo/logs/ or system dirs.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from hermes_constants import get_hermes_home
+from zeloo_constants import get_zeloo_home
 
 logger = logging.getLogger(__name__)
 
@@ -25,17 +25,17 @@ _LARGE_FILE_BYTES = 500 * 1024 * 1024
 
 
 def _state_file(name: str) -> Path:
-    """``$HERMES_HOME/disk-cleanup/<name>`` — deliberately outside ``$HERMES_HOME/logs/``."""
-    return get_hermes_home() / "disk-cleanup" / name
+    """``$ZELOO_HOME/disk-cleanup/<name>`` — deliberately outside ``$ZELOO_HOME/logs/``."""
+    return get_zeloo_home() / "disk-cleanup" / name
 
 
 def is_safe_path(path: Path) -> bool:
-    """Accept only paths under HERMES_HOME or ``/tmp/hermes-*`` (rejects /mnt/c etc.)."""
+    """Accept only paths under ZELOO_HOME or ``/tmp/Zeloo-*`` (rejects /mnt/c etc.)."""
     with contextlib.suppress(ValueError, OSError):
-        path.resolve().relative_to(get_hermes_home())
+        path.resolve().relative_to(get_zeloo_home())
         return True
     parts = path.parts
-    return len(parts) >= 3 and parts[1] == "tmp" and parts[2].startswith("hermes-")
+    return len(parts) >= 3 and parts[1] == "tmp" and parts[2].startswith("Zeloo-")
 
 
 def _log(message: str) -> None:
@@ -80,39 +80,39 @@ def save_tracked(tracked: List[Dict[str, Any]]) -> None:
 ALLOWED_CATEGORIES = {
     "temp", "test", "research", "download", "chrome-profile", "cron-output", "other"}
 
-# Top-level HERMES_HOME dirs whose empty subdirs are never swept (last row: user project trees).
+# Top-level ZELOO_HOME dirs whose empty subdirs are never swept (last row: user project trees).
 _EMPTY_DIR_PROTECTED_TOP_LEVEL = frozenset({
     "logs", "memories", "sessions", "cron", "cronjobs",
     "cache", "skills", "plugins", "disk-cleanup", "optional-skills",
-    "hermes-agent", "backups", "profiles", ".worktrees",
+    "Zeloo-agent", "backups", "profiles", ".worktrees",
     "patches", "projects", "skins", "themes", "contributors"})
 
 _EMPTY_DIR_SWEEP_PRUNE_DIRS = frozenset({
     ".git", "node_modules", "venv", ".venv", "site-packages", "__pycache__"})
 
-# Top-level HERMES_HOME entries guess_category() never auto-tracks: state, logs, memory,
+# Top-level ZELOO_HOME entries guess_category() never auto-tracks: state, logs, memory,
 # sessions, config/secrets, and user project trees (test_* inside projects/ is not disposable).
 _NEVER_TRACK_TOP_LEVEL = frozenset({
     "disk-cleanup", "logs", "memories", "sessions", "config.yaml",
     "skills", "plugins", ".env", "USER.md", "MEMORY.md", "SOUL.md",
-    "auth.json", "hermes-agent",
+    "auth.json", "Zeloo-agent",
     # User-authored project trees — never sweep empty directories inside these (#75403).
     # User-authored and project trees — never auto-delete files inside these just because they happen to be
     # named test_* or tmp_* (#75403, also #32164, #37721).
     "patches", "projects", "skins", "themes", "contributors",
     "profiles", "backups", "optional-skills"})
 
-@functools.lru_cache(maxsize=1)  # built lazily so HERMES_HOME resolves once
+@functools.lru_cache(maxsize=1)  # built lazily so ZELOO_HOME resolves once
 def _protected_cron_paths() -> frozenset:
     """Defense-in-depth for quick(): EXACT cron control-plane paths (``cron/``, ``output/`` root,
     ``jobs.json``, ``.tick.lock``) never deleted regardless of stored category (stale tracked.json).
     Never widen to everything under ``cron/output/``: run artifacts there are disposable; only
     wholesale deletion of ``output/`` is fatal."""
-    return frozenset(str(x) for parent in ("cron", "cronjobs") for base in (get_hermes_home() / parent,)
+    return frozenset(str(x) for parent in ("cron", "cronjobs") for base in (get_zeloo_home() / parent,)
                      for x in (base, base / "output", base / "jobs.json", base / ".tick.lock"))
 
 
-# Paths under $HERMES_HOME that must NEVER be deleted by quick(), regardless of what the stored category
+# Paths under $ZELOO_HOME that must NEVER be deleted by quick(), regardless of what the stored category
 # says. This is a defense-in-depth guard against stale tracked.json entries from before #34840.
 def _is_protected_cron_path(p: Path) -> bool:
     return str(p.resolve()) in _protected_cron_paths()
@@ -136,7 +136,7 @@ def track(path_str: str, category: str, silent: bool = False) -> bool:
         _log(f"SKIP: {path} (does not exist)")
         return False
     if not is_safe_path(path):
-        _log(f"REJECT: {path} (outside HERMES_HOME)")
+        _log(f"REJECT: {path} (outside ZELOO_HOME)")
         return False
     size = path.stat().st_size if path.is_file() else 0
     tracked = load_tracked()
@@ -247,7 +247,7 @@ def quick() -> Dict[str, Any]:
         else:
             errors.append(err)
             new_tracked.append(item)
-    empty_removed = _sweep_empty_dirs(get_hermes_home())
+    empty_removed = _sweep_empty_dirs(get_zeloo_home())
     save_tracked(new_tracked)
     _log(f"QUICK_SUMMARY: {deleted} files, {empty_removed} dirs, {fmt_size(freed)}")
     return {"deleted": deleted, "empty_dirs": empty_removed, "freed": freed, "errors": errors}
@@ -260,13 +260,13 @@ def _subdirs(dirpath: Path, exclude: frozenset) -> List[Path]:
         return []
 
 
-def _sweep_empty_dirs(hermes_home: Path) -> int:
-    """Remove empty dirs under HERMES_HOME without recursing into durable/heavy trees (a full
-    rglob over a checkout+venv under HERMES_HOME can stall the gateway loop for minutes).
+def _sweep_empty_dirs(zeloo_home: Path) -> int:
+    """Remove empty dirs under ZELOO_HOME without recursing into durable/heavy trees (a full
+    rglob over a checkout+venv under ZELOO_HOME can stall the gateway loop for minutes).
     Iterative post-order so parents emptied by child removal are caught."""
     removed = 0
     stack: List[Tuple[Path, bool]] = [
-        (top, False) for top in _subdirs(hermes_home, _EMPTY_DIR_PROTECTED_TOP_LEVEL | _EMPTY_DIR_SWEEP_PRUNE_DIRS)]
+        (top, False) for top in _subdirs(zeloo_home, _EMPTY_DIR_PROTECTED_TOP_LEVEL | _EMPTY_DIR_SWEEP_PRUNE_DIRS)]
     while stack:
         dirpath, visited = stack.pop()
         if visited:
@@ -318,8 +318,8 @@ def guess_category(path: Path) -> Optional[str]:
     """Category label for *path*, or None if we shouldn't track it (``post_tool_call`` hook)."""
     if not is_safe_path(path):
         return None
-    with contextlib.suppress(ValueError):  # not under HERMES_HOME (/tmp/hermes-*) — name rules only
-        rel = path.resolve().relative_to(get_hermes_home())
+    with contextlib.suppress(ValueError):  # not under ZELOO_HOME (/tmp/Zeloo-*) — name rules only
+        rel = path.resolve().relative_to(get_zeloo_home())
         top = rel.parts[0] if rel.parts else ""
         if top in _NEVER_TRACK_TOP_LEVEL:
             return None

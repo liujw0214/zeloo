@@ -1,7 +1,7 @@
 """Tool result persistence -- preserves large outputs instead of truncating. Layers against
 context overflow: (1) per-tool caps inside each tool; (2) ``maybe_persist_tool_result`` —
 output over the tool's threshold is persisted and replaced by a preview + path; canonical home
-is ALWAYS host-side ``$HERMES_HOME/cache/spillover/{id}.txt`` (works for sessions that never
+is ALWAYS host-side ``$ZELOO_HOME/cache/spillover/{id}.txt`` (works for sessions that never
 ran a terminal), remote backends get the translated in-sandbox path (probed for readability)
 else a copy in the sandbox temp dir; (3) ``enforce_turn_budget``."""
 
@@ -18,7 +18,7 @@ from tools.budget_config import DEFAULT_PREVIEW_SIZE_CHARS, BudgetConfig, DEFAUL
 logger = logging.getLogger(__name__)
 PERSISTED_OUTPUT_TAG = "<persisted-output>"
 PERSISTED_OUTPUT_CLOSING_TAG = "</persisted-output>"
-STORAGE_DIR = "/tmp/hermes-results"
+STORAGE_DIR = "/tmp/Zeloo-results"
 SPILLOVER_SUBDIR = "cache/spillover"
 SPILLOVER_MAX_AGE_HOURS = 24
 _BUDGET_TOOL_NAME = "__budget_enforcement__"
@@ -30,9 +30,9 @@ _spillover_pruned_once = False
 
 
 def get_spillover_dir():
-    """Return $HERMES_HOME/cache/spillover as a Path (not created)."""
-    from hermes_constants import get_hermes_home
-    return get_hermes_home() / SPILLOVER_SUBDIR
+    """Return $ZELOO_HOME/cache/spillover as a Path (not created)."""
+    from zeloo_constants import get_zeloo_home
+    return get_zeloo_home() / SPILLOVER_SUBDIR
 
 
 def cleanup_spillover_cache(max_age_hours: int = SPILLOVER_MAX_AGE_HOURS) -> int:
@@ -81,7 +81,7 @@ def _is_host_side_env(env) -> bool:
 
 
 def _write_to_spillover(content: str, filename: str):
-    """Write host-side to $HERMES_HOME/cache/spillover; returns path str or None."""
+    """Write host-side to $ZELOO_HOME/cache/spillover; returns path str or None."""
     try:
         spill_dir = get_spillover_dir()
         spill_dir.mkdir(parents=True, exist_ok=True)
@@ -127,7 +127,7 @@ def _resolve_storage_dir(env) -> str:
             temp_dir = get_temp_dir()
         except Exception as exc:
             logger.debug("Could not resolve env temp dir: %s", exc)
-    return f"{temp_dir.rstrip('/') or '/'}/hermes-results" if temp_dir else STORAGE_DIR
+    return f"{temp_dir.rstrip('/') or '/'}/Zeloo-results" if temp_dir else STORAGE_DIR
 
 
 def _safe_result_filename(tool_use_id: str) -> str:
@@ -262,5 +262,5 @@ def enforce_turn_budget(tool_messages: list[dict], env=None,
 # The whole block is removed by reverting the commit that added it.
 import uuid  # noqa: F401,E402
 
-HEREDOC_MARKER = "HERMES_PERSIST_EOF"
+HEREDOC_MARKER = "ZELOO_PERSIST_EOF"
 # ---- END PLUGIN-COMPAT ----

@@ -1,10 +1,10 @@
 // The Nous free tier is gated by ONE launch-time decision. The Python backend
-// reads HERMES_GUEST_ONBOARDING and treats exactly "1" as on; the desktop
+// reads ZELOO_GUEST_ONBOARDING and treats exactly "1" as on; the desktop
 // decides once at launch (env or `--guest-onboarding` argv) and stamps that
 // answer onto every backend it spawns, so the app and its backends can never
 // disagree about whether the free tier is live.
 
-export const GUEST_ONBOARDING_ENV = 'HERMES_GUEST_ONBOARDING'
+export const GUEST_ONBOARDING_ENV = 'ZELOO_GUEST_ONBOARDING'
 export const GUEST_ONBOARDING_FLAG = '--guest-onboarding'
 
 export function guestOnboardingEnabled(

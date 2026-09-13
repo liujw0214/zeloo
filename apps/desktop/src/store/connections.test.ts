@@ -139,7 +139,7 @@ beforeEach(() => {
   $gatewaySwitching.set(false)
   list.mockClear()
   setLastUsed.mockClear()
-  vi.stubGlobal('window', { hermesDesktop: { connections: { list, setLastUsed } }, localStorage })
+  vi.stubGlobal('window', { ZELOODesktop: { connections: { list, setLastUsed } }, localStorage })
 })
 
 afterEach(() => vi.unstubAllGlobals())

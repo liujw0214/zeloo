@@ -16,19 +16,19 @@ import time
 from collections.abc import Mapping
 from pathlib import Path
 
-from hermes_constants import get_process_hermes_home
+from zeloo_constants import get_process_zeloo_home
 from tools.environments.base import BaseEnvironment
 from tools.environments.base_output import _pipe_stdin
-from hermes_cli._subprocess_compat import windows_hide_flags
+from zeloo_cli._subprocess_compat import windows_hide_flags
 from tools.environments.local_env_policy import (
-    _ALWAYS_STRIP_KEYS, _HERMES_PROVIDER_ENV_BLOCKLIST, _HERMES_PROVIDER_ENV_FORCE_PREFIX,
-    _is_hermes_internal_secret, _is_terminal_first_party_env,
+    _ALWAYS_STRIP_KEYS, _ZELOO_PROVIDER_ENV_BLOCKLIST, _ZELOO_PROVIDER_ENV_FORCE_PREFIX,
+    _is_zeloo_internal_secret, _is_terminal_first_party_env,
     _matches_terminal_first_party_prefix, _plugin_terminal_env_strip_keys)
 from tools.environments.local_gitbash_probe import (
     _bash_probe_details_cache, _bash_starts, _git_bash_aslr_help,
     _looks_like_msys_spawn_failure, _mandatory_aslr_enabled)
 from tools.environments.local_pythonpath import (
-    _build_hermes_repo_root_aliases, _strip_hermes_owned_pythonpath_and_runtime_markers)
+    _build_zeloo_repo_root_aliases, _strip_zeloo_owned_pythonpath_and_runtime_markers)
 
 
 _IS_WINDOWS = platform.system() == "Windows"
@@ -36,23 +36,23 @@ _IS_WINDOWS = platform.system() == "Windows"
 logger = logging.getLogger(__name__)
 
 # --- Terminal temp-cache pruning ---
-# get_temp_dir() defaults to HERMES_HOME/cache/terminal (real storage, not tmpfs), so
+# get_temp_dir() defaults to ZELOO_HOME/cache/terminal (real storage, not tmpfs), so
 # stale artifacts don't vanish on reboot: the gateway housekeeping loop prunes hourly
 # and a once-per-process sweep covers CLI-only installs.
 TERMINAL_TEMP_MAX_AGE_HOURS = 72
 _terminal_temp_prune_lock = threading.Lock()
 _terminal_temp_pruned_once = False
-# Background artifacts come in triplets (hermes_bg_<id>.log/.pid/.exit). A live
+# Background artifacts come in triplets (zeloo_bg_<id>.log/.pid/.exit). A live
 # server's .pid never changes mtime while its .log does, so age is judged per
 # GROUP (newest mtime sharing a stem) to keep pid/exit files of live sessions.
-_BG_GROUP_RE = re.compile(r"^(hermes_bg_[A-Za-z0-9_-]+)\.(log|pid|exit)$")
+_BG_GROUP_RE = re.compile(r"^(zeloo_bg_[A-Za-z0-9_-]+)\.(log|pid|exit)$")
 
 
 def _default_terminal_temp_dir() -> "Path | None":
-    """Return HERMES_HOME/cache/terminal, or None if unresolvable."""
+    """Return ZELOO_HOME/cache/terminal, or None if unresolvable."""
     try:
-        from hermes_constants import get_hermes_home
-        return get_hermes_home() / "cache" / "terminal"
+        from zeloo_constants import get_zeloo_home
+        return get_zeloo_home() / "cache" / "terminal"
     except Exception:
         return None
 
@@ -203,18 +203,18 @@ def _resolve_safe_cwd(cwd: str) -> str:
 
 # --- Child-process environment construction ---
 def _apply_profile_home(env: dict) -> None:
-    """Bridge the context-local HERMES_HOME override, then the subprocess HOME contract."""
-    from hermes_constants import apply_subprocess_home_env, get_hermes_home_override
+    """Bridge the context-local ZELOO_HOME override, then the subprocess HOME contract."""
+    from zeloo_constants import apply_subprocess_home_env, get_zeloo_home_override
     try:
-        if value := get_hermes_home_override():
-            env["HERMES_HOME"] = value
+        if value := get_zeloo_home_override():
+            env["ZELOO_HOME"] = value
     except Exception:
         pass
     apply_subprocess_home_env(env)
 
 
 def _inject_session_context_env(env: dict) -> None:
-    """Bridge gateway session ContextVars (HERMES_SESSION_*) into a child env.
+    """Bridge gateway session ContextVars (ZELOO_SESSION_*) into a child env.
     Cross-session leak guard: the vars' last-writer-wins ``os.environ`` mirror may
     belong to another turn on a concurrent multi-session host, so once the session
     context is engaged ContextVars are authoritative — a bound value (incl. "") wins
@@ -235,7 +235,7 @@ def _inject_session_context_env(env: dict) -> None:
 def _filter_secret_env(
     items: Mapping[str, str], out: dict, *, unwrap_force: bool,
     plugin_strip: frozenset = frozenset()) -> None:
-    """Copy *items* into *out*, dropping Hermes-managed secrets. ``_HERMES_FORCE_<NAME>``
+    """Copy *items* into *out*, dropping Zeloo-managed secrets. ``_ZELOO_FORCE_<NAME>``
     unwraps to ``NAME`` when ``unwrap_force`` (caller extras / terminal env), else is
     dropped. Blocklisted names survive only via env_passthrough registration or as
     context-entitled first-party ``BUZZ_*`` vars; the latter are used directly, never
@@ -245,18 +245,18 @@ def _filter_secret_env(
     except Exception:
         is_env_passthrough, resolve_passthrough_value = (lambda _: False), (lambda _n, fb: fb)
     for key, value in items.items():
-        if key.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
+        if key.startswith(_ZELOO_PROVIDER_ENV_FORCE_PREFIX):
             if not unwrap_force:
                 continue
-            key = key[len(_HERMES_PROVIDER_ENV_FORCE_PREFIX):]
-            if not _is_hermes_internal_secret(key):
+            key = key[len(_ZELOO_PROVIDER_ENV_FORCE_PREFIX):]
+            if not _is_zeloo_internal_secret(key):
                 out[key] = value
             continue
-        if _is_hermes_internal_secret(key) or key in plugin_strip:
+        if _is_zeloo_internal_secret(key) or key in plugin_strip:
             continue
         first_party = _is_terminal_first_party_env(key)
         passthrough = is_env_passthrough(key)
-        if key in _HERMES_PROVIDER_ENV_BLOCKLIST and not (passthrough or first_party):
+        if key in _ZELOO_PROVIDER_ENV_BLOCKLIST and not (passthrough or first_party):
             continue
         if passthrough and not first_party:
             value = resolve_passthrough_value(key, value)
@@ -266,11 +266,11 @@ def _filter_secret_env(
 
 def _finalize_child_env(env: dict) -> dict:
     """Guards shared by every spawn surface: profile-home propagation, session-context
-    bridging, Hermes-owned PYTHONPATH + venv-marker strip, MSYS defaults, delegate_task
+    bridging, Zeloo-owned PYTHONPATH + venv-marker strip, MSYS defaults, delegate_task
     Kanban scrub. Returns the (possibly new) dict."""
     _apply_profile_home(env)
     _inject_session_context_env(env)
-    _strip_hermes_owned_pythonpath_and_runtime_markers(env)
+    _strip_zeloo_owned_pythonpath_and_runtime_markers(env)
     _apply_windows_msys_bash_env_defaults(env)
     from agent.delegation_context import delegated_child_subprocess_env
     return delegated_child_subprocess_env(env)
@@ -278,28 +278,28 @@ def _finalize_child_env(env: dict) -> dict:
 
 def _scrubbed_env(parts, plugin_strip: frozenset, fix_path) -> dict:
     """Filter each ``(items, unwrap_force)`` in *parts* into one env, rewrite PATH via
-    *fix_path* (always prepending the hermes install dir so bare ``hermes`` resolves
+    *fix_path* (always prepending the Zeloo install dir so bare ``Zeloo`` resolves
     for children of a systemd/cron-launched gateway), then apply the shared guards."""
     out: dict[str, str] = {}
     for items, unwrap_force in parts:
         _filter_secret_env(items, out, unwrap_force=unwrap_force, plugin_strip=plugin_strip)
     path_key = _path_env_key(out)
-    # Keep bare ``hermes`` invocations available to child jobs even when the gateway was launched by a
+    # Keep bare ``Zeloo`` invocations available to child jobs even when the gateway was launched by a
     # service manager or cron without the console script's directory on PATH. The terminal environment
     # already applies this invariant; Cron scripts use this sanitizer directly (#92998).
     if path_key is not None:
-        out[path_key] = _prepend_hermes_bin_dir(fix_path(out.get(path_key, "")))
+        out[path_key] = _prepend_zeloo_bin_dir(fix_path(out.get(path_key, "")))
     return _finalize_child_env(out)
 
 
 def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = None) -> dict:
-    """Filter Hermes-managed secrets from a subprocess environment (background/PTY
+    """Filter Zeloo-managed secrets from a subprocess environment (background/PTY
     spawn path, search workers, computer-use driver, user-script runners)."""
     return _scrubbed_env([(base_env or {}, False), (extra_env or {}, True)],
                          _plugin_terminal_env_strip_keys(), lambda p: p)
 
 
-def hermes_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str]:
+def zeloo_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str]:
     """Sanitized env for the **non-terminal** spawn surface (browser, ACP/CLI executors,
     computer-use driver, TUI Node host). Tier 1 (``_ALWAYS_STRIP_KEYS``, plugin keys,
     force-prefixed hints, dynamic internal secrets) is always removed; Tier 2 (the
@@ -309,10 +309,10 @@ def hermes_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str
     env = os.environ.copy()
     strip = _ALWAYS_STRIP_KEYS | _plugin_terminal_env_strip_keys()
     if not inherit_credentials:
-        strip |= _HERMES_PROVIDER_ENV_BLOCKLIST
+        strip |= _ZELOO_PROVIDER_ENV_BLOCKLIST
     for key in list(env):
-        if (key in strip or key.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX)
-                or _is_hermes_internal_secret(key)):
+        if (key in strip or key.startswith(_ZELOO_PROVIDER_ENV_FORCE_PREFIX)
+                or _is_zeloo_internal_secret(key)):
             del env[key]
     env.setdefault("PYTHONUTF8", "1")  # Windows UTF-8 safety for spawned processes
     return _finalize_child_env(env)
@@ -325,7 +325,7 @@ def build_subprocess_env(
     ``scrub_secrets=True`` -> :func:`_sanitize_subprocess_env` (profile home inherent,
     ``inherit_profile_home`` ignored). ``scrub_secrets=False`` keeps the base
     byte-for-byte (git credential flows, ``bws``/``op``); ``inherit_profile_home``
-    bridges HERMES_HOME + HOME and ``extra`` is applied last so caller overrides win."""
+    bridges ZELOO_HOME + HOME and ``extra`` is applied last so caller overrides win."""
     env: dict[str, str] = dict(base) if base is not None else os.environ.copy()
     if scrub_secrets:
         return _sanitize_subprocess_env(env, dict(extra) if extra else None)
@@ -339,15 +339,15 @@ def build_subprocess_env(
 
 # --- Shell discovery ---
 def _windows_bash_candidates(custom: "str | None") -> list[str]:
-    """Ordered bash.exe candidates on Windows: HERMES_GIT_BASH_PATH, our portable Git
-    under %LOCALAPPDATA%\\hermes\\git (PortableGit ``bin`` and MinGit ``usr\\bin``),
+    """Ordered bash.exe candidates on Windows: ZELOO_GIT_BASH_PATH, our portable Git
+    under %LOCALAPPDATA%\\Zeloo\\git (PortableGit ``bin`` and MinGit ``usr\\bin``),
     known Git-for-Windows dirs, then PATH last — ``shutil.which`` may return WSL's
     bash, which fails silently on Windows paths."""
     getenv = os.environ.get
     lad = getenv("LOCALAPPDATA", "")
     roots = [
-        lad and os.path.join(lad, "hermes", "git", "bin"),
-        lad and os.path.join(lad, "hermes", "git", "usr", "bin"),
+        lad and os.path.join(lad, "Zeloo", "git", "bin"),
+        lad and os.path.join(lad, "Zeloo", "git", "usr", "bin"),
         os.path.join(getenv("ProgramFiles", r"C:\Program Files"), "Git", "bin"),
         os.path.join(getenv("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Git", "bin"),
         lad and os.path.join(lad, "Programs", "Git", "bin"),
@@ -366,15 +366,15 @@ def _find_bash() -> str:
         return (shutil.which("bash")
                 or next((p for p in ("/usr/bin/bash", "/bin/bash") if os.path.isfile(p)), None)
                 or os.environ.get("SHELL") or "/bin/sh")
-    custom = os.environ.get("HERMES_GIT_BASH_PATH")
+    custom = os.environ.get("ZELOO_GIT_BASH_PATH")
     candidates = _windows_bash_candidates(custom)
-    # First candidate that can actually start wins: a stale HERMES_GIT_BASH_PATH
+    # First candidate that can actually start wins: a stale ZELOO_GIT_BASH_PATH
     # pointing at a broken install must not beat a healthy portable Git.
     for candidate in candidates:
         if _bash_starts(candidate):
             if candidate != custom and custom and os.path.isfile(custom):
                 logger.warning(
-                    "HERMES_GIT_BASH_PATH=%s fails to start; using %s instead", custom, candidate)
+                    "ZELOO_GIT_BASH_PATH=%s fails to start; using %s instead", custom, candidate)
             return candidate
     if candidates:
         probe_details = "\n".join(
@@ -385,9 +385,9 @@ def _find_bash() -> str:
         # real bash error instead of a less useful "not found".
         return candidates[0]
     raise RuntimeError(
-        "Git Bash not found. Hermes Agent requires Git for Windows on Windows.\n"
+        "Git Bash not found. Zeloo Agent requires Git for Windows on Windows.\n"
         "Install it from: https://git-scm.com/download/win\n"
-        "Or set HERMES_GIT_BASH_PATH to your bash.exe location.")
+        "Or set ZELOO_GIT_BASH_PATH to your bash.exe location.")
 
 
 _git_bash_bin_dirs_cache: "list[str] | None" = None
@@ -455,49 +455,49 @@ def _find_shell() -> str:
 _SANE_PATH = ("/opt/homebrew/bin:/opt/homebrew/sbin:"
               "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
-# Cached directory containing the ``hermes`` console-script.
+# Cached directory containing the ``Zeloo`` console-script.
 # ``_SENTINEL`` distinguishes "not resolved yet" from a resolved ``None``.
 _SENTINEL = object()
-_HERMES_BIN_DIR: "str | None | object" = _SENTINEL
+_ZELOO_BIN_DIR: "str | None | object" = _SENTINEL
 
 
-def _resolve_hermes_bin_dir() -> str | None:
-    """Directory holding the ``hermes`` console-script, or None (cached). A gateway
+def _resolve_zeloo_bin_dir() -> str | None:
+    """Directory holding the ``Zeloo`` console-script, or None (cached). A gateway
     launched by systemd/cron/a desktop launcher lacks the install dir on PATH and bare
-    ``hermes`` exits 127. Order: ``which``; absolute ``sys.argv[0]`` naming a real
-    hermes executable; ``sys.executable``'s dir if it holds the shim."""
-    global _HERMES_BIN_DIR
-    if _HERMES_BIN_DIR is not _SENTINEL:
-        return _HERMES_BIN_DIR  # type: ignore[return-value]
-    which = shutil.which("hermes")
+    ``Zeloo`` exits 127. Order: ``which``; absolute ``sys.argv[0]`` naming a real
+    Zeloo executable; ``sys.executable``'s dir if it holds the shim."""
+    global _ZELOO_BIN_DIR
+    if _ZELOO_BIN_DIR is not _SENTINEL:
+        return _ZELOO_BIN_DIR  # type: ignore[return-value]
+    which = shutil.which("Zeloo")
     argv0 = sys.argv[0] if sys.argv else ""
     base = os.path.basename(argv0).lower()
     exe_dir = os.path.dirname(sys.executable) if sys.executable else ""
-    shim = "hermes.exe" if _IS_WINDOWS else "hermes"
+    shim = "Zeloo.exe" if _IS_WINDOWS else "Zeloo"
     if which:
         candidate = os.path.dirname(which)
-    elif (os.path.isabs(argv0) and (base == "hermes" or base.startswith("hermes."))
+    elif (os.path.isabs(argv0) and (base == "Zeloo" or base.startswith("Zeloo."))
             and os.path.isfile(argv0)):
         candidate = os.path.dirname(argv0)
     else:
         candidate = exe_dir if exe_dir and os.path.isfile(os.path.join(exe_dir, shim)) else None
-    _HERMES_BIN_DIR = candidate if candidate and os.path.isdir(candidate) else None
-    return _HERMES_BIN_DIR
+    _ZELOO_BIN_DIR = candidate if candidate and os.path.isdir(candidate) else None
+    return _ZELOO_BIN_DIR
 
 
-def _prepend_hermes_bin_dir(existing_path: str) -> str:
-    """Prepend the hermes install dir to ``existing_path`` if missing."""
-    bin_dir = _resolve_hermes_bin_dir()
+def _prepend_zeloo_bin_dir(existing_path: str) -> str:
+    """Prepend the Zeloo install dir to ``existing_path`` if missing."""
+    bin_dir = _resolve_zeloo_bin_dir()
     return _prepend_missing_path_entries(existing_path, [bin_dir] if bin_dir else [])
 
 
 def _managed_runtime_path_entries() -> list[str]:
-    """Existing Hermes-managed runtime dirs: ``$HERMES_HOME/node`` (+``/bin``) and
-    ``$HERMES_HOME/bin`` (managed ``uv``). Per call, not cached: home is
+    """Existing Zeloo-managed runtime dirs: ``$ZELOO_HOME/node`` (+``/bin``) and
+    ``$ZELOO_HOME/bin`` (managed ``uv``). Per call, not cached: home is
     profile-scoped and a managed tree can appear mid-process."""
     try:
-        from hermes_constants import get_hermes_home, iter_hermes_node_dirs
-        return [str(d) for d in (*iter_hermes_node_dirs(), get_hermes_home() / "bin") if d.is_dir()]
+        from zeloo_constants import get_zeloo_home, iter_zeloo_node_dirs
+        return [str(d) for d in (*iter_zeloo_node_dirs(), get_zeloo_home() / "bin") if d.is_dir()]
     except Exception:
         return []
 
@@ -522,7 +522,7 @@ def _apply_windows_msys_bash_env_defaults(env: dict) -> None:
 
     Git Bash rewrites arguments that look like Unix paths (``/FO``, ``/TN``, ``/Create``) into
     ``C:/.../git/FO``-style paths, which breaks native Windows commands such as ``tasklist``, ``schtasks``,
-    and ``wmic``. Hermes runs terminal commands through bash on Windows, so set the standard MSYS opt-out by
+    and ``wmic``. Zeloo runs terminal commands through bash on Windows, so set the standard MSYS opt-out by
     default. Refs #56700.
     MSYS2-proper and Cygwin bash (which ``_find_bash`` can still return via the final ``shutil.which``
     fallback) ignore it and honor ``MSYS2_ARG_CONV_EXCL`` instead, so set both. ``*`` disables all argv
@@ -545,18 +545,18 @@ def _make_run_env(env: dict) -> dict:
                          lambda p: _prepend_git_bash_dirs(_append_missing_sane_path_entries(p)))
 
 
-# --- Hermes venv / repo-root detection (module-level, computed once) ---
+# --- Zeloo venv / repo-root detection (module-level, computed once) ---
 # Owned here; read lazily by tools.environments.local_pythonpath (tests patch here).
 # The Electron app prepends the repo root to PYTHONPATH so the backend can ``import
 # tools``; other subprocesses must not inherit it. Aliases: launchers may emit other
-# spellings — the Windows gateway launcher renders Hermes-owned paths under the
-# configured HERMES_HOME spelling (possibly a junction to another drive).
-_hermes_repo_root: Path = Path(__file__).resolve().parents[2]
-_hermes_repo_root_aliases: tuple[Path, ...] = _build_hermes_repo_root_aliases(
-    _hermes_repo_root, Path(__file__).absolute().parents[2], get_process_hermes_home())
+# spellings — the Windows gateway launcher renders Zeloo-owned paths under the
+# configured ZELOO_HOME spelling (possibly a junction to another drive).
+_zeloo_repo_root: Path = Path(__file__).resolve().parents[2]
+_zeloo_repo_root_aliases: tuple[Path, ...] = _build_zeloo_repo_root_aliases(
+    _zeloo_repo_root, Path(__file__).absolute().parents[2], get_process_zeloo_home())
 _in_venv: bool = (getattr(sys, "base_prefix", sys.prefix) != sys.prefix
                   or hasattr(sys, "real_prefix"))  # real_prefix: virtualenv<20
-_hermes_site_packages: list[Path] | None = None  # lazily cached by local_pythonpath
+_zeloo_site_packages: list[Path] | None = None  # lazily cached by local_pythonpath
 
 
 # --- Login-shell init files ---
@@ -564,7 +564,7 @@ def _read_terminal_shell_init_config() -> tuple[list[str], bool]:
     """(shell_init_files, auto_source_bashrc) from config.yaml; defaults on any
     failure so terminal execution never breaks."""
     try:
-        from hermes_cli.config import load_config
+        from zeloo_cli.config import load_config
         terminal_cfg = (load_config() or {}).get("terminal") or {}
         files = terminal_cfg.get("shell_init_files") or []
         if not isinstance(files, list):
@@ -652,7 +652,7 @@ def _kill_process_group_posix(proc) -> None:
     try:
         pgid = os.getpgid(proc.pid)
     except ProcessLookupError:
-        if (pgid := getattr(proc, "_hermes_pgid", None)) is None:
+        if (pgid := getattr(proc, "_zeloo_pgid", None)) is None:
             raise
     try:  # psutil children snapshot; empty on any failure (must never break the kill)
         import psutil
@@ -689,7 +689,7 @@ class LocalEnvironment(BaseEnvironment):
 
     _sudo_nopasswd_probe_supported = True
     _profile_scoped_passthrough = True
-    # Commands run on the Hermes host itself — controller-side platform behavior
+    # Commands run on the Zeloo host itself — controller-side platform behavior
     # (macOS TCC pruning, etc.) legitimately applies here.
     is_local = True
 
@@ -710,14 +710,14 @@ class LocalEnvironment(BaseEnvironment):
 
     def get_temp_dir(self) -> str:
         """Shell-safe writable temp dir. Precedence: ``TERMINAL_TEMP_DIR``, TMPDIR/TMP/TEMP
-        (Termux has no /tmp), ``HERMES_HOME/cache/terminal`` (real storage: tmpfs /tmp
-        fills under Hermes load; pruned by ``cleanup_terminal_temp_cache``), /tmp,
+        (Termux has no /tmp), ``ZELOO_HOME/cache/terminal`` (real storage: tmpfs /tmp
+        fills under Zeloo load; pruned by ``cleanup_terminal_temp_cache``), /tmp,
         ``tempfile.gettempdir()``; backend env before process env so terminal.env
         overrides work. Windows: ``%TEMP%`` often has spaces that break unquoted bash,
-        so always the HERMES_HOME cache dir with forward slashes (bash- and Python-valid)."""
+        so always the ZELOO_HOME cache dir with forward slashes (bash- and Python-valid)."""
         if _IS_WINDOWS:
             cache_dir = (_default_terminal_temp_dir()
-                         or Path(tempfile.gettempdir()) / "hermes_terminal")
+                         or Path(tempfile.gettempdir()) / "zeloo_terminal")
             cache_dir.mkdir(parents=True, exist_ok=True)
             _prune_terminal_temp_once()
             return str(cache_dir).replace("\\", "/")
@@ -788,7 +788,7 @@ class LocalEnvironment(BaseEnvironment):
             **({"creationflags": windows_hide_flags()} if _IS_WINDOWS else {}))
         if not _IS_WINDOWS:
             with contextlib.suppress(ProcessLookupError):
-                proc._hermes_pgid = os.getpgid(proc.pid)
+                proc._zeloo_pgid = os.getpgid(proc.pid)
         if stdin_data is not None:
             _pipe_stdin(proc, stdin_data)
         return proc

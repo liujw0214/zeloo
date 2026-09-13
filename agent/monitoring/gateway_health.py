@@ -176,7 +176,7 @@ def build_gateway_health_snapshot(
     base = {
         "service.instance.id": _safe_instance_id(install_id),
         "service.version": _safe_metric_value(version, limit=64),
-        "hermes.supervision_mode": mode if mode in _SUPERVISION_MODES else "unknown",
+        "Zeloo.supervision_mode": mode if mode in _SUPERVISION_MODES else "unknown",
     }
 
     def metric(name: str, value: int | float, **extra: str) -> GatewayMetric:
@@ -187,12 +187,12 @@ def build_gateway_health_snapshot(
         return GatewayMetric(name=name, value=value, attributes=attrs)
 
     metrics: list[GatewayMetric] = [
-        metric("hermes.gateway.up", int(bool(gateway_running))),
-        metric("hermes.gateway.active_agents", active_agents),
-        metric("hermes.gateway.busy", int(bool(busy))),
-        metric("hermes.gateway.drainable", int(bool(drainable))),
-        metric("hermes.gateway.restart_requested", int(bool(runtime.get("restart_requested")))),
-        metric("hermes.gateway.state", 1, **{"hermes.gateway.state": gateway_state}),
+        metric("Zeloo.gateway.up", int(bool(gateway_running))),
+        metric("Zeloo.gateway.active_agents", active_agents),
+        metric("Zeloo.gateway.busy", int(bool(busy))),
+        metric("Zeloo.gateway.drainable", int(bool(drainable))),
+        metric("Zeloo.gateway.restart_requested", int(bool(runtime.get("restart_requested")))),
+        metric("Zeloo.gateway.state", 1, **{"Zeloo.gateway.state": gateway_state}),
     ]
     fatal_count = 0
     events: list[GatewayHealthEvent | GatewayDiagnosticEvent] = []
@@ -203,9 +203,9 @@ def build_gateway_health_snapshot(
         error_code = classify_gateway_error(pdata.get("error_code") or pdata.get("error_message"))
         is_degraded = state in _FATAL_PLATFORM_STATES
         fatal_count += is_degraded
-        pattrs = {"hermes.platform": str(platform), "hermes.platform.state": state}
-        metrics.append(metric("hermes.platform.up", int(state in _RUNNING_PLATFORM_STATES), **pattrs))
-        metrics.append(metric("hermes.platform.degraded", int(is_degraded), **pattrs, **{"hermes.error_code": error_code}))
+        pattrs = {"Zeloo.platform": str(platform), "Zeloo.platform.state": state}
+        metrics.append(metric("Zeloo.platform.up", int(state in _RUNNING_PLATFORM_STATES), **pattrs))
+        metrics.append(metric("Zeloo.platform.degraded", int(is_degraded), **pattrs, **{"Zeloo.error_code": error_code}))
         if is_degraded:
             events.append(GatewayDiagnosticEvent(
                 name="platform.fatal", subsystem=f"platform.{platform}", platform=str(platform),
@@ -222,7 +222,7 @@ def build_gateway_health_snapshot(
 
 def _safe_profile() -> str:
     try:
-        from hermes_cli.profiles import get_active_profile_name
+        from zeloo_cli.profiles import get_active_profile_name
         return str(get_active_profile_name() or "default")
     except Exception:
         return "default"
@@ -230,7 +230,7 @@ def _safe_profile() -> str:
 
 def _safe_version() -> str:
     try:
-        from hermes_cli import __version__
+        from zeloo_cli import __version__
         return str(__version__)
     except Exception:
         return "unknown"

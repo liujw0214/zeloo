@@ -1,22 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { HermesReadDirResult } from '@/global'
-import type * as HermesModule from '@/hermes'
+import type { ZELOOReadDirResult } from '@/global'
+import type * as ZELOOModule from '@/Zeloo'
 
 import { $pluginRecords, publishPlugin, setPluginEnabled } from './plugins-store'
 import { discoverRuntimePlugins, loadRuntimePlugin, watchRuntimePlugins } from './runtime-loader'
 
-// getStatus would supply the connected backend's hermes_home — a REMOTE path in
+// getStatus would supply the connected backend's zeloo_home — a REMOTE path in
 // remote mode. The disk scanner must NOT derive the plugin root from it (#66899).
-const getStatus = vi.fn(async () => ({ hermes_home: '/remote/box/.hermes' }))
+const getStatus = vi.fn(async () => ({ zeloo_home: '/remote/box/.Zeloo' }))
 
-vi.mock('@/hermes', async importActual => ({
-  ...(await importActual<typeof HermesModule>()),
+vi.mock('@/Zeloo', async importActual => ({
+  ...(await importActual<typeof ZELOOModule>()),
   getStatus: () => getStatus()
 }))
 
 const desktopPluginsRoot = vi.fn<() => Promise<string>>()
-const readDir = vi.fn<(path: string) => Promise<HermesReadDirResult>>()
+const readDir = vi.fn<(path: string) => Promise<ZELOOReadDirResult>>()
 const readFileText = vi.fn<(path: string) => Promise<{ text: string; truncated?: boolean }>>()
 const readPluginSource = vi.fn<(path: string) => Promise<{ text: string; truncated?: boolean }>>()
 const watchDirectory = vi.fn<(path: string) => Promise<{ id: string }>>()
@@ -35,7 +35,7 @@ beforeEach(() => {
   stopPreviewFileWatch.mockResolvedValue(true)
   onPreviewFileChanged.mockReset()
   getStatus.mockClear()
-  ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+  ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = {
     desktopPluginsRoot,
     onPreviewFileChanged,
     readDir,
@@ -47,24 +47,24 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
+  delete (window as unknown as { ZELOODesktop?: unknown }).ZELOODesktop
 })
 
 describe('scanDiskPlugins (#66899)', () => {
-  it('scans the Electron-resolved local roots, never the backend hermes_home', async () => {
-    desktopPluginsRoot.mockResolvedValue('/local/.hermes/desktop-plugins')
+  it('scans the Electron-resolved local roots, never the backend zeloo_home', async () => {
+    desktopPluginsRoot.mockResolvedValue('/local/.Zeloo/desktop-plugins')
     readDir.mockResolvedValue({ entries: [] })
 
     await discoverRuntimePlugins()
 
     expect(desktopPluginsRoot).toHaveBeenCalled()
-    expect(readDir).toHaveBeenCalledWith('/local/.hermes/desktop-plugins')
+    expect(readDir).toHaveBeenCalledWith('/local/.Zeloo/desktop-plugins')
     // Unified halves are COPIED into the app root by Electron; the renderer
     // never scans the (profile-shaped) agent-plugins root itself.
-    expect(readDir).not.toHaveBeenCalledWith('/local/.hermes/plugins')
-    // The remote backend's hermes_home must never feed the local plugin scan.
+    expect(readDir).not.toHaveBeenCalledWith('/local/.Zeloo/plugins')
+    // The remote backend's zeloo_home must never feed the local plugin scan.
     expect(getStatus).not.toHaveBeenCalled()
-    expect(readDir).not.toHaveBeenCalledWith('/remote/box/.hermes/desktop-plugins')
+    expect(readDir).not.toHaveBeenCalledWith('/remote/box/.Zeloo/desktop-plugins')
   })
 
   it('no-ops when the resolvers yield no local root', async () => {
@@ -76,18 +76,18 @@ describe('scanDiskPlugins (#66899)', () => {
   })
 
   it('treats a folder without plugin.js as metadata, not a throwing file read', async () => {
-    desktopPluginsRoot.mockResolvedValue('/local/.hermes/desktop-plugins')
+    desktopPluginsRoot.mockResolvedValue('/local/.Zeloo/desktop-plugins')
     readDir.mockImplementation(async dir => {
-      if (dir === '/local/.hermes/desktop-plugins') {
+      if (dir === '/local/.Zeloo/desktop-plugins') {
         return {
-          entries: [{ isDirectory: true, name: 'my-feature', path: '/local/.hermes/desktop-plugins/my-feature' }]
+          entries: [{ isDirectory: true, name: 'my-feature', path: '/local/.Zeloo/desktop-plugins/my-feature' }]
         }
       }
 
-      if (dir === '/local/.hermes/desktop-plugins/my-feature') {
+      if (dir === '/local/.Zeloo/desktop-plugins/my-feature') {
         return {
           entries: [
-            { isDirectory: false, name: 'README.md', path: '/local/.hermes/desktop-plugins/my-feature/README.md' }
+            { isDirectory: false, name: 'README.md', path: '/local/.Zeloo/desktop-plugins/my-feature/README.md' }
           ]
         }
       }
@@ -97,21 +97,21 @@ describe('scanDiskPlugins (#66899)', () => {
 
     await discoverRuntimePlugins()
 
-    expect(readDir).toHaveBeenCalledWith('/local/.hermes/desktop-plugins/my-feature')
+    expect(readDir).toHaveBeenCalledWith('/local/.Zeloo/desktop-plugins/my-feature')
     expect(readFileText).not.toHaveBeenCalled()
   })
 
   it('a DIRECTORY named plugin.js is not a plugin entry (metadata walk rejects it)', async () => {
-    desktopPluginsRoot.mockResolvedValue('/local/.hermes/desktop-plugins')
+    desktopPluginsRoot.mockResolvedValue('/local/.Zeloo/desktop-plugins')
     readDir.mockImplementation(async dir => {
-      if (dir === '/local/.hermes/desktop-plugins') {
-        return { entries: [{ isDirectory: true, name: 'odd', path: '/local/.hermes/desktop-plugins/odd' }] }
+      if (dir === '/local/.Zeloo/desktop-plugins') {
+        return { entries: [{ isDirectory: true, name: 'odd', path: '/local/.Zeloo/desktop-plugins/odd' }] }
       }
 
-      if (dir === '/local/.hermes/desktop-plugins/odd') {
+      if (dir === '/local/.Zeloo/desktop-plugins/odd') {
         // A folder literally named plugin.js — must resolve to "no entry".
         return {
-          entries: [{ isDirectory: true, name: 'plugin.js', path: '/local/.hermes/desktop-plugins/odd/plugin.js' }]
+          entries: [{ isDirectory: true, name: 'plugin.js', path: '/local/.Zeloo/desktop-plugins/odd/plugin.js' }]
         }
       }
 
@@ -125,9 +125,9 @@ describe('scanDiskPlugins (#66899)', () => {
   })
 
   it('loads a unified desktop half (app-root copy + package marker) OPT-IN and tags it with its package', async () => {
-    desktopPluginsRoot.mockResolvedValue('/local/.hermes/desktop-plugins')
+    desktopPluginsRoot.mockResolvedValue('/local/.Zeloo/desktop-plugins')
     let desktopEntryPresent = true
-    const root = '/local/.hermes/desktop-plugins'
+    const root = '/local/.Zeloo/desktop-plugins'
 
     readDir.mockImplementation(async dir => {
       if (dir === root) {
@@ -137,7 +137,7 @@ describe('scanDiskPlugins (#66899)', () => {
       if (dir === `${root}/uni`) {
         return {
           entries: [
-            { isDirectory: false, name: '.hermes-package.json', path: `${root}/uni/.hermes-package.json` },
+            { isDirectory: false, name: '.Zeloo-package.json', path: `${root}/uni/.Zeloo-package.json` },
             { isDirectory: false, name: 'plugin.js', path: `${root}/uni/plugin.js` }
           ]
         }
@@ -150,7 +150,7 @@ describe('scanDiskPlugins (#66899)', () => {
 
     ;(globalThis as unknown as { __uniRegister: unknown }).__uniRegister = register
     readFileText.mockImplementation(async file =>
-      file.endsWith('.hermes-package.json')
+      file.endsWith('.Zeloo-package.json')
         ? { text: JSON.stringify({ package: 'uni-pkg', source: '/x/plugins/uni-pkg/desktop', sourceMtimeMs: 1 }) }
         : { text: 'export default { id: "uni", register: globalThis.__uniRegister }' }
     )
@@ -207,8 +207,8 @@ describe('scanDiskPlugins (#66899)', () => {
 })
 
 describe('watchRuntimePlugins dir watch (#66899)', () => {
-  it('watches the Electron-resolved app root, never the backend hermes_home', async () => {
-    desktopPluginsRoot.mockResolvedValue('/local/.hermes/desktop-plugins')
+  it('watches the Electron-resolved app root, never the backend zeloo_home', async () => {
+    desktopPluginsRoot.mockResolvedValue('/local/.Zeloo/desktop-plugins')
     readDir.mockResolvedValue({ entries: [] })
     watchDirectory.mockResolvedValue({ id: 'watch-1' })
 
@@ -216,8 +216,8 @@ describe('watchRuntimePlugins dir watch (#66899)', () => {
     // Drain the async scan + startDirWatches chains.
     await vi.waitFor(() => expect(watchDirectory).toHaveBeenCalledTimes(1))
 
-    expect(watchDirectory).toHaveBeenCalledWith('/local/.hermes/desktop-plugins')
-    expect(watchDirectory).not.toHaveBeenCalledWith('/remote/box/.hermes/desktop-plugins')
+    expect(watchDirectory).toHaveBeenCalledWith('/local/.Zeloo/desktop-plugins')
+    expect(watchDirectory).not.toHaveBeenCalledWith('/remote/box/.Zeloo/desktop-plugins')
     expect(getStatus).not.toHaveBeenCalled()
   })
 })
@@ -253,10 +253,10 @@ describe('plugin source reads (512 KiB preview-cap bug)', () => {
   /** Two-level standalone-root listing the metadata-walk probe needs:
    *  the root lists the package folder, the folder lists plugin.js. */
   const standaloneRootWith = (name: string) => {
-    const folder = `/local/.hermes/desktop-plugins/${name}`
+    const folder = `/local/.Zeloo/desktop-plugins/${name}`
 
     readDir.mockImplementation(async dir => {
-      if (dir === '/local/.hermes/desktop-plugins') {
+      if (dir === '/local/.Zeloo/desktop-plugins') {
         return { entries: [{ isDirectory: true, name, path: folder }] }
       }
 
@@ -269,8 +269,8 @@ describe('plugin source reads (512 KiB preview-cap bug)', () => {
   }
 
   it('loads the full source via readPluginSource when the shell offers it', async () => {
-    ;(window.hermesDesktop as unknown as { readPluginSource: unknown }).readPluginSource = readPluginSource
-    desktopPluginsRoot.mockResolvedValue('/local/.hermes/desktop-plugins')
+    ;(window.ZELOODesktop as unknown as { readPluginSource: unknown }).readPluginSource = readPluginSource
+    desktopPluginsRoot.mockResolvedValue('/local/.Zeloo/desktop-plugins')
     standaloneRootWith('big')
     // The preview read would truncate this source — it must never be used.
     readFileText.mockResolvedValue({ text: '// first 512 KiB only', truncated: true })
@@ -289,7 +289,7 @@ describe('plugin source reads (512 KiB preview-cap bug)', () => {
       await discoverRuntimePlugins()
 
       // The EVALUATED source came from the full read, not the truncated preview.
-      expect(readPluginSource).toHaveBeenCalledWith('/local/.hermes/desktop-plugins/big/plugin.js')
+      expect(readPluginSource).toHaveBeenCalledWith('/local/.Zeloo/desktop-plugins/big/plugin.js')
       expect(register).toHaveBeenCalledTimes(1)
       expect($pluginRecords.get().big).toMatchObject({ kind: 'disk', status: 'loaded' })
     } finally {
@@ -299,7 +299,7 @@ describe('plugin source reads (512 KiB preview-cap bug)', () => {
   })
 
   it('older shell without readPluginSource: a truncated preview read fails LOUDLY, never evaluates', async () => {
-    desktopPluginsRoot.mockResolvedValue('/local/.hermes/desktop-plugins')
+    desktopPluginsRoot.mockResolvedValue('/local/.Zeloo/desktop-plugins')
     standaloneRootWith('huge')
     // 512 KiB window of a larger file — parses fine, but is NOT the plugin.
     readFileText.mockResolvedValue({
@@ -317,7 +317,7 @@ describe('plugin source reads (512 KiB preview-cap bug)', () => {
       expect($pluginRecords.get().huge).toMatchObject({
         kind: 'disk',
         status: 'error',
-        file: '/local/.hermes/desktop-plugins/huge/plugin.js'
+        file: '/local/.Zeloo/desktop-plugins/huge/plugin.js'
       })
       expect($pluginRecords.get().huge.error).toMatch(/512 KiB/)
     } finally {
@@ -326,7 +326,7 @@ describe('plugin source reads (512 KiB preview-cap bug)', () => {
   })
 
   it('older shell, small plugin (not truncated): still loads through readFileText', async () => {
-    desktopPluginsRoot.mockResolvedValue('/local/.hermes/desktop-plugins')
+    desktopPluginsRoot.mockResolvedValue('/local/.Zeloo/desktop-plugins')
     standaloneRootWith('small')
 
     const register = vi.fn()
@@ -354,7 +354,7 @@ describe('plugin source reads (512 KiB preview-cap bug)', () => {
 describe('bundled-shadowed disk copies', () => {
   it('skips a disk copy of a bundled plugin but publishes a visible inventory row', async () => {
     // The bundled twin is already registered (build-time glob).
-    publishPlugin({ id: 'hermes-bots', name: 'Bot Mode', kind: 'bundled', status: 'loaded' })
+    publishPlugin({ id: 'Zeloo-bots', name: 'Bot Mode', kind: 'bundled', status: 'loaded' })
 
     // Same blob→data: URL reroute as the opt-in test above.
     const createObjectURL = vi
@@ -378,21 +378,21 @@ describe('bundled-shadowed disk copies', () => {
 
     try {
       const id = await loadRuntimePlugin(
-        'export default { id: "hermes-bots", name: "Bot Mode", register() {} }',
-        'hermes-bots',
-        { file: '/local/.hermes/desktop-plugins/hermes-bots/plugin.js' }
+        'export default { id: "Zeloo-bots", name: "Bot Mode", register() {} }',
+        'Zeloo-bots',
+        { file: '/local/.Zeloo/desktop-plugins/Zeloo-bots/plugin.js' }
       )
 
       // Skipped — the bundled copy stays the only live registration...
       expect(id).toBeNull()
-      expect($pluginRecords.get()['hermes-bots']).toMatchObject({ kind: 'bundled', status: 'loaded' })
+      expect($pluginRecords.get()['Zeloo-bots']).toMatchObject({ kind: 'bundled', status: 'loaded' })
 
       // ...but the stale folder is DISCOVERABLE: an inventory row names it,
       // carries its path (reveal/delete affordance), and can never activate.
-      expect($pluginRecords.get()['hermes-bots:disk-shadowed']).toMatchObject({
+      expect($pluginRecords.get()['Zeloo-bots:disk-shadowed']).toMatchObject({
         kind: 'disk',
         status: 'disabled',
-        file: '/local/.hermes/desktop-plugins/hermes-bots/plugin.js'
+        file: '/local/.Zeloo/desktop-plugins/Zeloo-bots/plugin.js'
       })
     } finally {
       createObjectURL.mockRestore()

@@ -2,8 +2,8 @@
 """MCP OAuth 2.1 client support: browser authorization-code flow with PKCE.
 
 The SDK's ``OAuthClientProvider`` does discovery, client identification, PKCE, exchange and
-refresh; this module supplies ``HermesTokenStorage`` (on-disk persistence), the localhost callback
-listener and ``build_oauth_auth()`` (legacy entry point). client_id is Hermes' Client ID Metadata
+refresh; this module supplies ``ZELOOTokenStorage`` (on-disk persistence), the localhost callback
+listener and ``build_oauth_auth()`` (legacy entry point). client_id is Zeloo' Client ID Metadata
 Document URL (CIMD) when the server supports it, else RFC 7591 DCR. ``mcp_servers.<name>.oauth`` keys
 (all optional): client_id, client_secret, scope, redirect_port, redirect_uri (proxy callback),
 redirect_host, client_name, client_metadata_url, cimd, user_agent, timeout."""
@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
 
-from hermes_constants import secure_parent_dir
+from zeloo_constants import secure_parent_dir
 from tools.mcp_dashboard_oauth import contextvar_set as _contextvar_set, get_dashboard_oauth_flow
 
 if TYPE_CHECKING:  # annotations only; the SDK is imported lazily at runtime
@@ -91,14 +91,14 @@ _oauth_interactive_forced = contextvars.ContextVar("_oauth_interactive_forced", 
 # Paste-prompt tokens that exit OAuth without auth; the waiter maps the sentinel to
 # OAuthNonInteractiveError("user_skipped") so MCP setup continues without this server.
 _SKIP_TOKENS = frozenset({"skip", "cancel", "s", "n", "no", "q", "quit"})
-_USER_SKIPPED_SENTINEL = "__hermes_user_skipped__"
+_USER_SKIPPED_SENTINEL = "__zeloo_user_skipped__"
 
 
-def _get_token_dir(hermes_home: str | Path | None = None) -> Path:
-    """``HERMES_HOME/mcp-tokens/`` — per-profile token directory."""
-    from hermes_constants import get_hermes_home
+def _get_token_dir(zeloo_home: str | Path | None = None) -> Path:
+    """``ZELOO_HOME/mcp-tokens/`` — per-profile token directory."""
+    from zeloo_constants import get_zeloo_home
 
-    return Path(hermes_home if hermes_home is not None else get_hermes_home()) / "mcp-tokens"
+    return Path(zeloo_home if zeloo_home is not None else get_zeloo_home()) / "mcp-tokens"
 
 
 def _safe_filename(name: str) -> str:
@@ -143,7 +143,7 @@ def _reserve_callback_port() -> int:
     return _bind_reserved(0)  # type: ignore[return-value]  # port 0 never returns None
 
 
-def _cached_client_info(storage: "HermesTokenStorage | None") -> dict | None:
+def _cached_client_info(storage: "ZELOOTokenStorage | None") -> dict | None:
     """The on-disk client registration for *storage*, or None."""
     try:
         return _read_json(storage._client_info_path()) if storage is not None else None
@@ -151,7 +151,7 @@ def _cached_client_info(storage: "HermesTokenStorage | None") -> dict | None:
         return None
 
 
-def _cached_redirect(storage: "HermesTokenStorage | None") -> "tuple[str | None, int | None]":
+def _cached_redirect(storage: "ZELOOTokenStorage | None") -> "tuple[str | None, int | None]":
     """``(https proxy URI, loopback callback port)`` from the cached client registration (None when
     absent): a DCR ``client_id`` is bound to its registered redirect URI, so a new random port under
     it gets ``redirect_uri does not match any registered URIs``."""
@@ -184,13 +184,13 @@ def _is_interactive() -> bool:
 def _raise_if_non_interactive(lead: str) -> None:
     """Raise ``OAuthNonInteractiveError`` unless interactive; *lead* is the boundary-specific first sentence.
 
-    ``lead`` is the boundary-specific first sentence; this helper appends the shared, actionable ``hermes
+    ``lead`` is the boundary-specific first sentence; this helper appends the shared, actionable ``Zeloo
     mcp login`` next-step so the guidance wording lives in one place across every non-interactive OAuth
     boundary (#57836).
     """
     if not _is_interactive():
         raise OAuthNonInteractiveError(
-            f"{lead} Run `hermes mcp login <server>` interactively to (re)authorize, then restart or reload the gateway."
+            f"{lead} Run `Zeloo mcp login <server>` interactively to (re)authorize, then restart or reload the gateway."
         )
 
 
@@ -245,11 +245,11 @@ def _write_json(path: Path, data: dict) -> None:
     users between create and chmod. Mirrors the fix in ``agent/google_oauth.py`` (#19673).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    # secure_parent_dir refuses to chmod /, top-level dirs, or the hermes-agent install tree (#25821,
+    # secure_parent_dir refuses to chmod /, top-level dirs, or the Zeloo-agent install tree (#25821,
     # #93050).
     # Tighten parent dir to 0o700 so siblings can't traverse to the creds. No-op on Windows (POSIX mode bits
     # aren't enforced); ignore failures. secure_parent_dir refuses to chmod /, top-level dirs, or the
-    # hermes-agent install tree (#25821, #93050).
+    # Zeloo-agent install tree (#25821, #93050).
     secure_parent_dir(path)
     tmp = path.with_suffix(f".tmp.{os.getpid()}.{secrets.token_hex(4)}")
     try:
@@ -270,16 +270,16 @@ def _model_json(model: Any) -> dict:
     return model.model_dump(mode="json", exclude_none=True)
 
 
-class HermesTokenStorage:
-    """Persist OAuth state as ``HERMES_HOME/mcp-tokens/<server_name>`` + ``.json`` (tokens),
+class ZELOOTokenStorage:
+    """Persist OAuth state as ``ZELOO_HOME/mcp-tokens/<server_name>`` + ``.json`` (tokens),
     ``.client.json`` (client info), ``.meta.json`` (server metadata), ``.cimd-off`` (CIMD refused)."""
 
-    def __init__(self, server_name: str, *, hermes_home: str | Path | None = None):
+    def __init__(self, server_name: str, *, zeloo_home: str | Path | None = None):
         self._server_name = _safe_filename(server_name)
-        self._hermes_home = Path(hermes_home) if hermes_home is not None else None
+        self._zeloo_home = Path(zeloo_home) if zeloo_home is not None else None
 
     def _path(self, suffix: str) -> Path:
-        return _get_token_dir(self._hermes_home) / f"{self._server_name}{suffix}"
+        return _get_token_dir(self._zeloo_home) / f"{self._server_name}{suffix}"
 
     _tokens_path = partialmethod(_path, ".json")
     _client_info_path = partialmethod(_path, ".client.json")
@@ -410,7 +410,7 @@ class HermesTokenStorage:
         self.remove()
         if not snapshot:
             return
-        token_dir = _get_token_dir(self._hermes_home)
+        token_dir = _get_token_dir(self._zeloo_home)
         token_dir.mkdir(parents=True, exist_ok=True)
         for fname, data in snapshot.items():
             try:
@@ -475,7 +475,7 @@ def _make_callback_handler() -> tuple[type, dict]:
         def do_GET(self) -> None:  # noqa: N802
             parsed = _parse_redirect_query(urlparse(self.path).query)
             result.update(auth_code=parsed["code"], state=parsed["state"], error=parsed["error"], iss=parsed["iss"])
-            body = ("<h2>Authorization Successful</h2><p>You can close this tab and return to Hermes.</p>" if parsed["code"]
+            body = ("<h2>Authorization Successful</h2><p>You can close this tab and return to Zeloo.</p>" if parsed["code"]
                     else f"<h2>Authorization Failed</h2><p>Error: {parsed['error'] or 'unknown'}</p>")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -502,7 +502,7 @@ def _paste_callback_reader(result: dict) -> None:
     if line.lower() in _SKIP_TOKENS:
         result["error"] = _USER_SKIPPED_SENTINEL
         print(
-            "  OAuth skipped. Run `hermes mcp login <server>` later to authenticate, "
+            "  OAuth skipped. Run `Zeloo mcp login <server>` later to authenticate, "
             "or set ``enabled: false`` on that server in config.yaml to disable persistently.",
             file=sys.stderr)
         return
@@ -543,7 +543,7 @@ _SSH_HINT_LOOPBACK = (
     "         ssh -N -L {port}:127.0.0.1:{port} <user>@<this-host>\n"
     "       then open the URL above and let it redirect normally.\n"
     "\n"
-    "  See: https://hermes-agent.nousresearch.com/docs/guides/oauth-over-ssh\n")
+    "  See: https://Zeloo-agent.nousresearch.com/docs/guides/oauth-over-ssh\n")
 
 
 def _announce_authorization_url(authorization_url: str, port: int, redirect_uri: str | None) -> None:
@@ -623,7 +623,7 @@ def _callback_outcome(result: dict, cimd_url: str | None):
     if result["auth_code"] is None:
         hint = (
             " If the browser showed an invalid-client error instead of an approval prompt, the authorization "
-            f"server rejected Hermes' Client ID Metadata Document ({cimd_url}); set ``cimd: false`` under that "
+            f"server rejected Zeloo' Client ID Metadata Document ({cimd_url}); set ``cimd: false`` under that "
             "server's ``oauth:`` block in config.yaml to authorize via dynamic client registration instead."
         ) if cimd_url else ""
         raise OAuthNonInteractiveError(
@@ -684,20 +684,20 @@ def _make_callback_waiter(port: int, cimd_url: str | None = None, timeout: float
 
 
 # Legacy build_oauth_auth provider class, built lazily (SDK) and cached here.
-HermesOAuthClientProvider: Any = None
+ZELOOOAuthClientProvider: Any = None
 
 
-def remove_oauth_tokens(server_name: str, *, hermes_home: str | Path | None = None) -> None:
+def remove_oauth_tokens(server_name: str, *, zeloo_home: str | Path | None = None) -> None:
     """Delete stored OAuth tokens and client info for a server."""
-    HermesTokenStorage(server_name, hermes_home=hermes_home).remove()
+    ZELOOTokenStorage(server_name, zeloo_home=zeloo_home).remove()
     logger.info("OAuth tokens removed for '%s'", server_name)
 
 
 # CIMD (OAuth Client ID Metadata Documents): the client_id IS an HTTPS URL the server fetches for our
-# name/logo/redirect URIs, replacing per-install DCR. The SDK does the protocol; Hermes only decides
+# name/logo/redirect URIs, replacing per-install DCR. The SDK does the protocol; Zeloo only decides
 # eligibility. Published from ``website/static/oauth/client-metadata.json``; the github.io origin is
-# deliberate — servers MUST NOT follow redirects when fetching it, and hermes-agent.nousresearch.com/docs/* 301s here.
-_CIMD_CLIENT_METADATA_URL = "https://nousresearch.github.io/hermes-agent/docs/oauth/client-metadata.json"
+# deliberate — servers MUST NOT follow redirects when fetching it, and Zeloo-agent.nousresearch.com/docs/* 301s here.
+_CIMD_CLIENT_METADATA_URL = "https://nousresearch.github.io/Zeloo-agent/docs/oauth/client-metadata.json"
 # Loopback ports/hosts declared in that document (exact match, so no ephemeral port under CIMD);
 # below Linux's 32768 ephemeral floor. tests/tools/test_mcp_cimd.py keeps them in sync.
 _CIMD_PORTS = (27890, 27891, 27892, 27893, 27894)
@@ -743,9 +743,9 @@ def _pick_cimd_port() -> int | None:
     return _assigned_cimd_ports[0] if _assigned_cimd_ports else None
 
 
-def _server_declined_cimd(storage: "HermesTokenStorage | None") -> bool:
+def _server_declined_cimd(storage: "ZELOOTokenStorage | None") -> bool:
     """True when cached metadata shows this server doesn't advertise CIMD. The SDK decides CIMD vs DCR
-    in its 401 branch — after Hermes must fix the redirect URI — so cached metadata closes the gap;
+    in its 401 branch — after Zeloo must fix the redirect URI — so cached metadata closes the gap;
     only a genuinely unknown server pays the optimistic pin."""
     try:
         metadata = storage.load_oauth_metadata() if storage is not None else None
@@ -754,7 +754,7 @@ def _server_declined_cimd(storage: "HermesTokenStorage | None") -> bool:
     return metadata is not None and getattr(metadata, "client_id_metadata_document_supported", None) is not True
 
 
-def _maybe_use_cimd(cfg: dict, storage: "HermesTokenStorage | None" = None) -> "tuple[str, int] | None":
+def _maybe_use_cimd(cfg: dict, storage: "ZELOOTokenStorage | None" = None) -> "tuple[str, int] | None":
     """``(client_id URL, pinned callback port)``, or None to use DCR. Each ineligibility case means the
     redirect URI is not one the document declares, the client identity is already settled, or the
     server is known not to want a document — a metadata URL would be rejected."""
@@ -793,7 +793,7 @@ def token_request_user_agent(cfg: dict) -> str | None:
     return ua.strip() if isinstance(ua, str) and ua.strip() else None
 
 
-def _configure_callback_port(cfg: dict, storage: "HermesTokenStorage | None" = None) -> int:
+def _configure_callback_port(cfg: dict, storage: "ZELOOTokenStorage | None" = None) -> int:
     """Resolve the callback port into ``cfg['_resolved_port']`` (0 = non-loopback URI). Precedence:
     dashboard flow / cached https redirect URI → CIMD pinned port (sets ``cfg['_cimd_url']``) →
     ``oauth.redirect_port`` → cached registration port → fresh ephemeral port (the only parked one).
@@ -882,7 +882,7 @@ def _build_client_metadata(cfg: dict) -> "OAuthClientMetadata":
     # Public client by default; confidential only with a known secret or a provider (Figma) needing confidential-style token posts.
     auth_method = cfg.get("token_endpoint_auth_method") or ("client_secret_post" if cfg.get("client_secret") else "none")
     metadata_kwargs: dict[str, Any] = {
-        "client_name": cfg.get("client_name", "Hermes Agent"),
+        "client_name": cfg.get("client_name", "Zeloo Agent"),
         "redirect_uris": [AnyUrl(_resolve_redirect_uri(cfg, port))],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
@@ -900,7 +900,7 @@ def _build_client_metadata(cfg: dict) -> "OAuthClientMetadata":
 
 
 def _invalidate_tokens_on_client_change(
-    storage: "HermesTokenStorage", new_client_id: str, new_client_secret: str | None) -> None:
+    storage: "ZELOOTokenStorage", new_client_id: str, new_client_secret: str | None) -> None:
     """Drop cached tokens when the configured client identity changes: tokens minted under the old
     ``client_id`` fail refresh with ``invalid_client``, and pre-registered clients are exempt from
     auto-poison, so stale tokens would wedge every request until a manual wipe. Compares on-disk
@@ -925,11 +925,11 @@ def _invalidate_tokens_on_client_change(
     if removed:
         logger.warning(
             "MCP OAuth '%s': configured OAuth client changed (client_id %r -> %r); discarded tokens minted under "
-            "the previous client. Re-authorize with: hermes mcp login %s",
+            "the previous client. Re-authorize with: Zeloo mcp login %s",
             storage._server_name, old_client_id, new_client_id, storage._server_name)
 
 
-def _maybe_preregister_client(storage: "HermesTokenStorage", cfg: dict, client_metadata: "OAuthClientMetadata") -> None:
+def _maybe_preregister_client(storage: "ZELOOTokenStorage", cfg: dict, client_metadata: "OAuthClientMetadata") -> None:
     """If cfg has a pre-registered client_id, persist it to storage."""
     client_id = cfg.get("client_id")
     if not client_id:
@@ -951,7 +951,7 @@ def humanize_oauth_registration_error(
     server_name: str, exc: BaseException | str, *, server_url: str | None = None) -> str | None:
     """Turn a DCR 403/Forbidden into a useful next step; None for anything else so the caller keeps the
     original text. Figma gates DCR on exact ``client_name`` (auto-set to ``Claude Code``), so this fires
-    when the user overrode it or an older Hermes is running."""
+    when the user overrode it or an older Zeloo is running."""
     msg = str(exc)
     lowered = msg.lower()
     looks_like_registration = ("403" in msg or "forbidden" in lowered) and (
@@ -963,9 +963,9 @@ def humanize_oauth_registration_error(
     if _is_figma_remote_mcp(server_name, server_url):
         return (
             f"'{server_name}' is Figma's remote MCP — DCR is allowlisted by exact client_name "
-            f"(\"{_FIGMA_DCR_CLIENT_NAME}\" and \"Codex\" work; most other names 403). Hermes defaults to "
+            f"(\"{_FIGMA_DCR_CLIENT_NAME}\" and \"Codex\" work; most other names 403). Zeloo defaults to "
             f"client_name: {_FIGMA_DCR_CLIENT_NAME!r} automatically. If you set oauth.client_name yourself, "
-            f"change it to one of those, or clear it and re-run:\n  hermes mcp login {server_name}")
+            f"change it to one of those, or clear it and re-run:\n  Zeloo mcp login {server_name}")
     return (
         f"'{server_name}' only allows pre-approved OAuth clients — it rejected client registration (403), so no "
         "browser flow can start. Options: set oauth.client_name to a name the provider allowlists, add a "
@@ -976,7 +976,7 @@ def humanize_oauth_registration_error(
 def build_oauth_auth(server_name: str, server_url: str, oauth_config: dict | None = None) -> "OAuthClientProvider | None":
     """``httpx.Auth`` OAuth handler for an MCP server; None if the SDK lacks OAuth. Legacy API — new code
     uses :func:`tools.mcp_oauth_manager.get_manager` so state is shared across config-time, runtime and reconnect paths."""
-    global HermesOAuthClientProvider
+    global ZELOOOAuthClientProvider
     if not _OAUTH_AVAILABLE or _sdk_class("OAuthClientProvider") is None:
         logger.warning("MCP OAuth requested for '%s' but SDK auth types are not available. Install with: pip install 'mcp>=1.26.0'", server_name)
         return None
@@ -986,16 +986,16 @@ def build_oauth_auth(server_name: str, server_url: str, oauth_config: dict | Non
     if not _is_interactive() and not storage.has_cached_tokens():
         raise OAuthNonInteractiveError(
             f"MCP OAuth for '{server_name}': non-interactive environment and no cached tokens found. The OAuth flow "
-            f"requires browser authorization. Run `hermes mcp login {server_name}` interactively first to complete "
+            f"requires browser authorization. Run `Zeloo mcp login {server_name}` interactively first to complete "
             "initial authorization, then cached tokens will be reused.")
     kwargs = build_provider_kwargs(cfg, storage, ssh_proxy_hint=True)
-    if HermesOAuthClientProvider is None:
-        from tools.mcp_oauth_provider import HermesProviderMixin
+    if ZELOOOAuthClientProvider is None:
+        from tools.mcp_oauth_provider import ZELOOProviderMixin
 
-        HermesOAuthClientProvider = type("HermesOAuthClientProvider", (HermesProviderMixin, _sdk_class("OAuthClientProvider")), {
-            "__doc__": "SDK provider plus Hermes' token-endpoint fixes (see ``HermesProviderMixin``).",
-            "__module__": __name__, "_hermes_logger": logger})
-    return HermesOAuthClientProvider(server_url=server_url, **kwargs)
+        ZELOOOAuthClientProvider = type("ZELOOOAuthClientProvider", (ZELOOProviderMixin, _sdk_class("OAuthClientProvider")), {
+            "__doc__": "SDK provider plus Zeloo' token-endpoint fixes (see ``ZELOOProviderMixin``).",
+            "__module__": __name__, "_zeloo_logger": logger})
+    return ZELOOOAuthClientProvider(server_url=server_url, **kwargs)
 
 
 # ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----

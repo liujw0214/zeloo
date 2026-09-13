@@ -30,13 +30,13 @@ const mocks = vi.hoisted(() => {
   return {
     activeProfile: makeAtom('default'),
     gatewayState: makeAtom<'closed' | 'open'>('closed'),
-    getHermesConfigRecord: vi.fn(),
+    getZELOOConfigRecord: vi.fn(),
     notify: vi.fn()
   }
 })
 
-vi.mock('@/hermes', () => ({
-  getHermesConfigRecord: mocks.getHermesConfigRecord,
+vi.mock('@/Zeloo', () => ({
+  getZELOOConfigRecord: mocks.getZELOOConfigRecord,
   testMcpServer: vi.fn()
 }))
 
@@ -67,7 +67,7 @@ afterEach(() => {
   stopMcpHealthChecker()
   mocks.gatewayState.set('closed')
   mocks.activeProfile.set('default')
-  mocks.getHermesConfigRecord.mockReset()
+  mocks.getZELOOConfigRecord.mockReset()
   mocks.notify.mockReset()
 })
 
@@ -99,12 +99,12 @@ it('coalesces reconnects during a sweep into one fresh follow-up sweep', async (
     releaseFirst = resolve
   })
 
-  mocks.getHermesConfigRecord.mockReturnValueOnce(first).mockResolvedValue({ mcp_servers: {} })
+  mocks.getZELOOConfigRecord.mockReturnValueOnce(first).mockResolvedValue({ mcp_servers: {} })
 
   startMcpHealthChecker()
   mocks.gatewayState.set('open')
   await flush()
-  expect(mocks.getHermesConfigRecord).toHaveBeenCalledTimes(1)
+  expect(mocks.getZELOOConfigRecord).toHaveBeenCalledTimes(1)
 
   for (let index = 0; index < 12; index += 1) {
     mocks.gatewayState.set('closed')
@@ -112,12 +112,12 @@ it('coalesces reconnects during a sweep into one fresh follow-up sweep', async (
   }
 
   await flush()
-  expect(mocks.getHermesConfigRecord).toHaveBeenCalledTimes(1)
+  expect(mocks.getZELOOConfigRecord).toHaveBeenCalledTimes(1)
 
   releaseFirst({ mcp_servers: {} })
   await flush()
   await flush()
-  expect(mocks.getHermesConfigRecord).toHaveBeenCalledTimes(2)
+  expect(mocks.getZELOOConfigRecord).toHaveBeenCalledTimes(2)
 })
 
 it('runs one follow-up when the active sweep fails through the handled config-error path', async () => {
@@ -127,7 +127,7 @@ it('runs one follow-up when the active sweep fails through the handled config-er
     rejectFirst = reject
   })
 
-  mocks.getHermesConfigRecord.mockReturnValueOnce(first).mockResolvedValue({ mcp_servers: {} })
+  mocks.getZELOOConfigRecord.mockReturnValueOnce(first).mockResolvedValue({ mcp_servers: {} })
 
   startMcpHealthChecker()
   mocks.gatewayState.set('open')
@@ -138,10 +138,10 @@ it('runs one follow-up when the active sweep fails through the handled config-er
   }
 
   await flush()
-  expect(mocks.getHermesConfigRecord).toHaveBeenCalledTimes(1)
+  expect(mocks.getZELOOConfigRecord).toHaveBeenCalledTimes(1)
 
   rejectFirst(new Error('backend restarting'))
   await flush()
   await flush()
-  expect(mocks.getHermesConfigRecord).toHaveBeenCalledTimes(2)
+  expect(mocks.getZELOOConfigRecord).toHaveBeenCalledTimes(2)
 })

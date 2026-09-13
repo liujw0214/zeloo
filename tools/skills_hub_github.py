@@ -10,11 +10,11 @@ from urllib.parse import quote
 
 import httpx
 
-from hermes_cli._subprocess_compat import windows_hide_flags
+from zeloo_cli._subprocess_compat import windows_hide_flags
 from tools.skills_guard import TRUSTED_REPOS
 from tools.skills_hub_models import (
     SkillBundle, SkillMeta, SkillSource, _cache_metas, _cached_metas, _dedupe_by_trust,
-    _hermes_tags, _matches_query, _parse_frontmatter, _referenced_support_paths,
+    _zeloo_tags, _matches_query, _parse_frontmatter, _referenced_support_paths,
     _validate_bundle_rel_path,
 )
 
@@ -305,7 +305,7 @@ class GitHubSource(SkillSource):
         if not content:
             return None
         fm = _parse_frontmatter(content)
-        tags = _hermes_tags(fm) or (fm["tags"] if isinstance(fm.get("tags"), list) else [])
+        tags = _zeloo_tags(fm) or (fm["tags"] if isinstance(fm.get("tags"), list) else [])
         provider = github_provider_for(repo)
         return SkillMeta(
             name=fm.get("name", skill_path.split("/")[-1]), description=str(fm.get("description", "")),

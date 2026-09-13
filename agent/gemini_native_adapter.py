@@ -25,12 +25,12 @@ from agent.gemini_schema import sanitize_gemini_tool_parameters
 logger = logging.getLogger(__name__)
 
 try:
-    import hermes_cli as _hermes_cli
+    import zeloo_cli as _zeloo_cli
 
-    _HERMES_VERSION = str(_hermes_cli.__version__)
+    _ZELOO_VERSION = str(_zeloo_cli.__version__)
 except Exception:
-    _HERMES_VERSION = "0.0.0"
-_API_CLIENT = f"hermes-agent/{_HERMES_VERSION}"  # client context per Gemini's partner-integration guidance
+    _ZELOO_VERSION = "0.0.0"
+_API_CLIENT = f"Zeloo-agent/{_ZELOO_VERSION}"  # client context per Gemini's partner-integration guidance
 
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -40,7 +40,7 @@ GEMINI_DEFAULT_MAX_OUTPUT_TOKENS = 65535
 
 _FREE_TIER_GUIDANCE = (
     "\n\nYour Google API key is on the free tier (a few hundred requests/day for Gemini Flash models). "
-    "Hermes typically makes 3-10 API calls per user turn, so the free tier is exhausted in a handful of "
+    "Zeloo typically makes 3-10 API calls per user turn, so the free tier is exhausted in a handful of "
     "messages and cannot sustain an agent session. Enable billing on your Google Cloud project and "
     "regenerate the key in a billing-enabled project: https://aistudio.google.com/apikey"
 )
@@ -49,7 +49,7 @@ _STANDARD_KEY_GUIDANCE = (
     "'Standard' Google Cloud keys for the Gemini API on June 19, 2026, and all Standard keys stop working in "
     "September 2026. Open https://aistudio.google.com/api-keys, check the key's type and status, and create a "
     "replacement Gemini API key (or, as a temporary bridge, restrict the Standard key to "
-    "generativelanguage.googleapis.com). Then update GEMINI_API_KEY / GOOGLE_API_KEY in ~/.hermes/.env and "
+    "generativelanguage.googleapis.com). Then update GEMINI_API_KEY / GOOGLE_API_KEY in ~/.Zeloo/.env and "
     "restart your session. Details: https://ai.google.dev/gemini-api/docs/api-key"
 )
 # Stands in for a model turn that never arrived (stream failure / interrupt / quota
@@ -68,7 +68,7 @@ _FINISH_REASON_MAP = {
 _HTTP_ERROR_CODES = {401: "gemini_unauthorized", 429: "gemini_rate_limited", 404: "gemini_model_not_found"}
 _MISSING_KEY_ERROR = (
     "Gemini native client requires an API key, but none was provided. Set GOOGLE_API_KEY or GEMINI_API_KEY in your "
-    "environment / ~/.hermes/.env (get one at https://aistudio.google.com/app/apikey), or run `hermes setup` to "
+    "environment / ~/.Zeloo/.env (get one at https://aistudio.google.com/app/apikey), or run `Zeloo setup` to "
     "configure the Google provider."
 )
 
@@ -149,7 +149,7 @@ def is_standard_key_auth_error(status: int, error_message: str, reason: str = ""
 
 
 class GeminiAPIError(Exception):
-    """Error shape compatible with Hermes retry/error classification."""
+    """Error shape compatible with Zeloo retry/error classification."""
 
     def __init__(self, message: str, *, code: str = "gemini_api_error", status_code: Optional[int] = None,
                  response: Optional[httpx.Response] = None, retry_after: Optional[float] = None, details: Optional[Dict[str, Any]] = None):
@@ -615,8 +615,8 @@ class GeminiNativeClient:
     """Minimal OpenAI-SDK-compatible facade (``client.chat.completions.create(**kwargs)``) over Gemini's native REST API."""
 
     # For agent/auxiliary_client.py: a complete client, never re-dispatched through a wire adapter.
-    # (No HERMES_SKIP_ASYNC_WRAP — the async path has a real conversion, AsyncGeminiNativeClient.)
-    HERMES_SKIP_TRANSPORT_WRAP = True
+    # (No ZELOO_SKIP_ASYNC_WRAP — the async path has a real conversion, AsyncGeminiNativeClient.)
+    ZELOO_SKIP_TRANSPORT_WRAP = True
 
     def __init__(
         self, *, api_key: str, base_url: Optional[str] = None, default_headers: Optional[Dict[str, str]] = None,

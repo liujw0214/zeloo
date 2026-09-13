@@ -21,10 +21,10 @@ describe('preview annotate host', () => {
 
   it('injects the guest overlay source', async () => {
     const executeJavaScript = vi.fn(async (code: string) => {
-      expect(code).toContain('hermes-annotate')
+      expect(code).toContain('Zeloo-annotate')
       expect(code).toContain('#2F80ED')
       expect(code).toContain('api.install()')
-      expect(code).toContain('window.__hermesAnnotate')
+      expect(code).toContain('window.__ZELOOAnnotate')
     })
 
     await installAnnotateOverlay({ executeJavaScript })

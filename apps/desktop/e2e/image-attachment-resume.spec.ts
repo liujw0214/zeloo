@@ -60,10 +60,10 @@ function writeImage(sandbox: Sandbox): string {
 async function setupSeededDesktop(): Promise<SeededFixture> {
   const mock = await startMockServer()
   const sandbox = createSandbox('image-attachment')
-  writeMockProviderConfig(sandbox.hermesHome, mock.url, undefined, NATIVE_IMAGE_CONFIG)
-  writeEnvFile(sandbox.hermesHome)
+  writeMockProviderConfig(sandbox.ZELOOHome, mock.url, undefined, NATIVE_IMAGE_CONFIG)
+  writeEnvFile(sandbox.ZELOOHome)
 
-  const builder = await RealSessionBuilder.start(sandbox.hermesHome)
+  const builder = await RealSessionBuilder.start(sandbox.ZELOOHome)
 
   try {
     await builder.createSession({

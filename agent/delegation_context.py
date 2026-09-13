@@ -1,6 +1,6 @@
 """Context-local state for delegate_task child execution.
 
-A Hermes process may itself be a Kanban dispatcher worker with HERMES_KANBAN_* in
+A Zeloo process may itself be a Kanban dispatcher worker with ZELOO_KANBAN_* in
 os.environ. In-process delegate_task children and cron jobs fired via
 ``cronjob(action="run")`` are NOT dispatcher-owned, so identity gates must fail
 closed for them without mutating the process-global environment.
@@ -12,16 +12,16 @@ from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import Iterator, Mapping, MutableMapping, overload
 
-_DELEGATED_CHILD_CONTEXT: ContextVar[bool] = ContextVar("hermes_delegated_child_context", default=False)
+_DELEGATED_CHILD_CONTEXT: ContextVar[bool] = ContextVar("zeloo_delegated_child_context", default=False)
 # Any in-process execution that is NOT the dispatcher-owned worker (cron jobs). Kept separate
 # so delegate_task-specific behaviour (subprocess env scrubbing, its error strings) is unchanged.
-_NON_DISPATCHER_OWNED_CONTEXT: ContextVar[bool] = ContextVar("hermes_non_dispatcher_owned_context", default=False)
+_NON_DISPATCHER_OWNED_CONTEXT: ContextVar[bool] = ContextVar("zeloo_non_dispatcher_owned_context", default=False)
 
-DELEGATED_CHILD_ENV_MARKER = "HERMES_DELEGATED_CHILD_CONTEXT"
+DELEGATED_CHILD_ENV_MARKER = "ZELOO_DELEGATED_CHILD_CONTEXT"
 
 KANBAN_ENV_KEYS: tuple[str, ...] = (
-    "HERMES_KANBAN_TASK", "HERMES_KANBAN_RUN_ID", "HERMES_KANBAN_CLAIM_LOCK",
-    "HERMES_KANBAN_GOAL_MODE", "HERMES_KANBAN_GOAL_MAX_TURNS",
+    "ZELOO_KANBAN_TASK", "ZELOO_KANBAN_RUN_ID", "ZELOO_KANBAN_CLAIM_LOCK",
+    "ZELOO_KANBAN_GOAL_MODE", "ZELOO_KANBAN_GOAL_MAX_TURNS",
 )
 
 
@@ -69,7 +69,7 @@ def non_dispatcher_owned_context() -> Iterator[None]:
 
 
 def is_dispatcher_owned_worker_context() -> bool:
-    """The single predicate every ``HERMES_KANBAN_*`` identity gate should use."""
+    """The single predicate every ``ZELOO_KANBAN_*`` identity gate should use."""
     return not (is_delegated_child_process_context() or _NON_DISPATCHER_OWNED_CONTEXT.get())
 
 
@@ -106,7 +106,7 @@ def delegated_child_subprocess_env(
     Location and credentials are untouched; callers retain their existing secret policy.
     Dispatcher workers and supervised tool transports grant their own explicit scope.
     """
-    if not (is_delegated_child_process_context() or os.environ.get("HERMES_KANBAN_TASK")
-            or (env and (env.get("HERMES_KANBAN_TASK") or env.get(DELEGATED_CHILD_ENV_MARKER)))):
+    if not (is_delegated_child_process_context() or os.environ.get("ZELOO_KANBAN_TASK")
+            or (env and (env.get("ZELOO_KANBAN_TASK") or env.get(DELEGATED_CHILD_ENV_MARKER)))):
         return None if env is None else dict(env)
     return scrub_kanban_env(os.environ if env is None else env)

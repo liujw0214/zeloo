@@ -2,7 +2,7 @@
 webhook server for inbound, ``App.send()`` for proactive sends.
 
 Requires the ``teams`` extra (auto-installed by the gateway on first start, or
-``<hermes-venv>/bin/pip install microsoft-teams-apps aiohttp``) and credentials via env
+``<Zeloo-venv>/bin/pip install microsoft-teams-apps aiohttp``) and credentials via env
 (TEAMS_CLIENT_ID / TEAMS_CLIENT_SECRET / TEAMS_TENANT_ID, optional TEAMS_PORT) or
 ``platforms.teams.extra`` in config.yaml (``client_id`` / ``client_secret`` / ``tenant_id`` / ``port``).
 """
@@ -195,7 +195,7 @@ async def _standalone_send(
 ) -> Dict[str, Any]:
     """Acquire a Bot Framework bearer token and POST a single message activity; used by
     ``send_message_tool._send_via_adapter`` when the gateway runner is not in this process
-    (``hermes cron``). ``TEAMS_SERVICE_URL`` is allowlisted and ``chat_id`` charset-checked
+    (``Zeloo cron``). ``TEAMS_SERVICE_URL`` is allowlisted and ``chat_id`` charset-checked
     (SSRF/path traversal). ``media_files`` / ``force_document`` are signature parity only — text-only."""
     extra = getattr(pconfig, "extra", {}) or {}
     client_id, client_secret, tenant_id = _credentials(pconfig)
@@ -268,7 +268,7 @@ _SDK_IMPORTS = {
 @contextmanager
 def _suppress_third_party_dotenv() -> Iterator[None]:
     """No-op ``dotenv.load_dotenv`` while importing the Teams SDK: ``microsoft_teams.apps.app`` loads a
-    cwd-discovered ``.env`` at import, mutating process-global ``os.environ``. Hermes owns dotenv loading.
+    cwd-discovered ``.env`` at import, mutating process-global ``os.environ``. Zeloo owns dotenv loading.
 
     See #62935.
     """
@@ -386,7 +386,7 @@ class TeamsAdapter(BasePlatformAdapter):
             self._app = App(
                 client_id=self._client_id, client_secret=self._client_secret, tenant_id=self._tenant_id,
                 http_server_adapter=_AiohttpBridgeAdapter(aiohttp_app),
-                client=ClientOptions(headers={"User-Agent": "Hermes"}))
+                client=ClientOptions(headers={"User-Agent": "Zeloo"}))
             # Handlers (ours, then plugin on_* decorators) must be wired before initialize(),
             # which registers POST /api/messages on aiohttp_app via the bridge's register_route().
             @self._app.on_message
@@ -454,7 +454,7 @@ class TeamsAdapter(BasePlatformAdapter):
         from gateway.platforms.base import _ssrf_redirect_guard, _read_httpx_body_with_limit
         if not is_safe_url(url):
             raise ValueError("Blocked unsafe attachment URL (SSRF protection)")
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; HermesAgent/1.0)"}
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; ZELOOAgent/1.0)"}
         if _is_botframework_attachment_url(url):
             try:
                 headers["Authorization"] = f"Bearer {await self._get_botframework_token()}"
@@ -583,14 +583,14 @@ class TeamsAdapter(BasePlatformAdapter):
         from tools.approval import resolve_gateway_approval, has_blocking_approval
 
         data = ctx.activity.value.action.data or {}
-        hermes_action = data.get("hermes_action", "")
+        zeloo_action = data.get("zeloo_action", "")
         session_key = data.get("session_key", "")
-        if not hermes_action or not session_key:
+        if not zeloo_action or not session_key:
             return self._invoke_message("Unknown action.")
         denied = self._card_action_denied(ctx.activity.from_)
         if denied:
             return self._invoke_message(denied)
-        choice = _APPROVAL_CHOICES.get(hermes_action)
+        choice = _APPROVAL_CHOICES.get(zeloo_action)
         if not choice:
             return self._invoke_message("Unknown action.")
         if not has_blocking_approval(session_key):
@@ -630,9 +630,9 @@ class TeamsAdapter(BasePlatformAdapter):
         # Button data carries a truncated cmd — just enough to reconstruct the card body.
         btn_data_base = {"session_key": session_key, "cmd": _truncate(command, 200), "desc": description}
 
-        def _action(title: str, hermes_action: str, **kw) -> "ExecuteAction":
+        def _action(title: str, zeloo_action: str, **kw) -> "ExecuteAction":
             return ExecuteAction(
-                title=title, verb="hermes_approve", data={**btn_data_base, "hermes_action": hermes_action}, **kw)
+                title=title, verb="zeloo_approve", data={**btn_data_base, "zeloo_action": zeloo_action}, **kw)
 
         actions = [_action("Allow Once", "approve_once", style="positive")]
         if not smart_denied and allow_session:
@@ -740,13 +740,13 @@ _SETUP_CREDENTIALS = (
 _SETUP_INTRO = (  # "" → blank line
     "You'll need the Teams CLI. If you haven't already:", "  npm install -g @microsoft/teams.cli@preview",
     "  teams login", "", "Then expose port 3978 publicly (devtunnel / ngrok / cloudflared),", "and create your bot:",
-    '  teams app create --name "Hermes" --endpoint "https://<tunnel>/api/messages"', "",
+    '  teams app create --name "Zeloo" --endpoint "https://<tunnel>/api/messages"', "",
     "The CLI will print CLIENT_ID, CLIENT_SECRET, and TENANT_ID. Paste them below.", "")
 
 
 def interactive_setup() -> None:
-    from hermes_cli.config import get_env_value, save_env_value
-    from hermes_cli.cli_output import prompt, prompt_yes_no, print_info, print_success, print_warning
+    from zeloo_cli.config import get_env_value, save_env_value
+    from zeloo_cli.cli_output import prompt, prompt_yes_no, print_info, print_success, print_warning
     existing_id = get_env_value("TEAMS_CLIENT_ID")
     if existing_id:
         print_info(f"Teams: already configured (app ID: {existing_id})")
@@ -773,14 +773,14 @@ def interactive_setup() -> None:
         save_env_value("TEAMS_ALLOW_ALL_USERS", "true")
         print_warning("⚠️  Open access — anyone who can message the bot can command it.")
     print()
-    print_success("Teams configuration saved to ~/.hermes/.env")
+    print_success("Teams configuration saved to ~/.Zeloo/.env")
     print_info("Install the app in Teams:  teams app install --id <teamsAppId>")
-    print_info("Restart the gateway:       hermes gateway restart")
+    print_info("Restart the gateway:       Zeloo gateway restart")
 
 
 def _install_hint() -> str:
     """Install hint derived from the LAZY_DEPS pins (aiohttp is CVE-pinned, so bumps happen);
-    ``venv_pip=True`` targets the real Hermes venv, sidestepping PEP 668 on Ubuntu 24.04."""
+    ``venv_pip=True`` targets the real Zeloo venv, sidestepping PEP 668 on Ubuntu 24.04."""
     try:
         from tools.lazy_deps import feature_install_command
         cmd = feature_install_command("platform.teams", venv_pip=True)
@@ -830,7 +830,7 @@ def __getattr__(name):  # PEP 562 — lazy so no import cycles
     if target is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     import importlib
-    from hermes_cli.plugin_compat import warn_once
+    from zeloo_cli.plugin_compat import warn_once
     warn_once(__name__, name, *target)
     return getattr(importlib.import_module(target[0]), target[1])
 # ---- END PLUGIN-COMPAT ----

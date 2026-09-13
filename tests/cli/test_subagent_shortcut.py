@@ -3,16 +3,16 @@ import asyncio
 
 
 def test_monitor_shortcuts_preserve_draft_and_respect_modal_prompts(monkeypatch):
-    from cli import HermesCLI
-    from hermes_cli import cli_subagent_monitor as monitor
+    from cli import ZELOOCLI
+    from zeloo_cli import cli_subagent_monitor as monitor
     from prompt_toolkit.application import Application
     from prompt_toolkit.document import Document
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.layout import Layout
     from prompt_toolkit.output import DummyOutput
 
-    monkeypatch.setenv('HERMES_DEFER_AGENT_STARTUP', '1')
-    cli = HermesCLI(model='fixture', provider='openai-compat', api_key='fixture',
+    monkeypatch.setenv('ZELOO_DEFER_AGENT_STARTUP', '1')
+    cli = ZELOOCLI(model='fixture', provider='openai-compat', api_key='fixture',
                     base_url='http://127.0.0.1:1/v1')
     cli._tui_init_run_state()
     editor = cli._tui_build_input_area()

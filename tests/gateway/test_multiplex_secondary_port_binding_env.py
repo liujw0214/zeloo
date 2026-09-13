@@ -11,15 +11,15 @@ import pytest
 
 @pytest.fixture
 def multiplex_root(tmp_path, monkeypatch):
-    root = tmp_path / "hermes"
+    root = tmp_path / "Zeloo"
     (root / "profiles" / "coder").mkdir(parents=True)
     (root / "config.yaml").write_text("model: {default: x}\n")
     (root / "profiles" / "coder" / "config.yaml").write_text("model: {default: x}\n")
     (root / "profiles" / "coder" / ".env").write_text("API_SERVER_KEY=abcdefghijklmnopqrstuvwxyz123456\n")
-    monkeypatch.setenv("HERMES_HOME", str(root))
+    monkeypatch.setenv("ZELOO_HOME", str(root))
     monkeypatch.delenv("API_SERVER_KEY", raising=False)
-    import hermes_constants
-    monkeypatch.setattr(hermes_constants, "_default_hermes_root_memo", None)
+    import zeloo_constants
+    monkeypatch.setattr(zeloo_constants, "_default_zeloo_root_memo", None)
     from agent import secret_scope
     monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
     return root
@@ -47,10 +47,10 @@ def test_default_profile_api_server_key_still_enables_listener(multiplex_root):
 @pytest.mark.parametrize(
     ("cmdline", "expected"),
     [
-        ("/v/python -m hermes_cli.main -p ops-2 gateway run", False),
-        ("/v/python -m hermes_cli.main --profile ops2 gateway run", False),
-        ("/v/python -m hermes_cli.main -p ops gateway run", True),
-        ("/v/python -m hermes_cli.main --profile=ops gateway run", True),
+        ("/v/python -m zeloo_cli.main -p ops-2 gateway run", False),
+        ("/v/python -m zeloo_cli.main --profile ops2 gateway run", False),
+        ("/v/python -m zeloo_cli.main -p ops gateway run", True),
+        ("/v/python -m zeloo_cli.main --profile=ops gateway run", True),
     ],
 )
 def test_profile_match_is_token_equality_not_substring(tmp_path, cmdline, expected):

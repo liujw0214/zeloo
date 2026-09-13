@@ -86,11 +86,11 @@ export function ConnectorTool(props: ToolCallMessagePartProps) {
     return createConnectorFlow(runtimeId, seeds, {
       request: (method, params) => requestGatewayForAgent(owner.connectionId, owner.profile, method, params, 45000),
       open: async url => {
-        if (!window.hermesDesktop?.openExternal) {
+        if (!window.ZELOODesktop?.openExternal) {
           throw new Error('System browser unavailable')
         }
 
-        await window.hermesDesktop.openExternal(url)
+        await window.ZELOODesktop.openExternal(url)
       }
     })
   }, [runtimeId, owner, storedId, signature, historical])

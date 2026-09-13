@@ -3,7 +3,7 @@
  * animation frames in the hidden main window are throttled. Native skip/close
  * events return here so every exit records seen and restores the main window.
  *
- * This store alone owns hermes-intro-reveal-seen-v1. First-run eligibility is
+ * This store alone owns Zeloo-intro-reveal-seen-v1. First-run eligibility is
  * guest onboarding enabled, not explicitly skipped, and not seen. The gate
  * observes completion to queue the guided chat without coupling this store to it.
  */
@@ -13,7 +13,7 @@ import { isOnboardingEnabled } from '@/lib/onboarding-enabled'
 import { readKey, writeKey } from '@/lib/storage'
 import { setOnboardingSurfaceActive } from '@/store/onboarding-presence'
 
-const SEEN_KEY = 'hermes-intro-reveal-seen-v1'
+const SEEN_KEY = 'Zeloo-intro-reveal-seen-v1'
 
 export type IntroRevealPhase = 'hidden' | 'playing' | 'leaving'
 
@@ -46,7 +46,7 @@ export function startIntroReveal(): void {
 
   $introReveal.set({ phase: 'playing' })
   // The film plays over the desktop; every exit path must restore the app.
-  void window.hermesDesktop?.introReveal?.open({ hideMain: true }).catch(finishIntroReveal)
+  void window.ZELOODesktop?.introReveal?.open({ hideMain: true }).catch(finishIntroReveal)
 }
 
 export function leaveIntroReveal(): void {
@@ -62,11 +62,11 @@ export function finishIntroReveal(): void {
 
   writeKey(SEEN_KEY, '1')
   $introReveal.set(INITIAL)
-  void window.hermesDesktop?.introReveal?.close({ showMain: true }).catch(() => undefined)
+  void window.ZELOODesktop?.introReveal?.close({ showMain: true }).catch(() => undefined)
 }
 
 export function installIntroRevealBridgeListeners(): () => void {
-  const bridge = window.hermesDesktop?.introReveal
+  const bridge = window.ZELOODesktop?.introReveal
   const offSkip = bridge?.onSkip(leaveIntroReveal)
   const offClosed = bridge?.onClosed(finishIntroReveal)
 

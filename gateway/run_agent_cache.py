@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from agent.interrupt_compat import _accepts_keyword
 from gateway.config import Platform
 from gateway.session import SessionSource, build_session_context_prompt
-from hermes_cli.config import cfg_get
+from zeloo_cli.config import cfg_get
 
 if TYPE_CHECKING:  # string annotations only; never imported at runtime (cycle)
     from gateway.run import GatewayRunner  # noqa: F401
@@ -376,7 +376,7 @@ class GatewayAgentCacheMixin:
         with suppress(Exception):
             interrupt_event = getattr(adapter, "_active_sessions", {}).get(session_key)
             if interrupt_event is not None:
-                interrupt_event._hermes_run_generation = int(generation)
+                interrupt_event._zeloo_run_generation = int(generation)
 
     async def _interrupt_and_clear_session(
         self, session_key: str, source: SessionSource, *, interrupt_reason: str,
@@ -542,8 +542,8 @@ class GatewayAgentCacheMixin:
             from gateway.session import _slack_tools_loaded
             slack_tools = "1" if _slack_tools_loaded() else "0"
         try:
-            from hermes_constants import display_hermes_home
-            home_display = str(display_hermes_home())
+            from zeloo_constants import display_zeloo_home
+            home_display = str(display_zeloo_home())
         except Exception:
             home_display = ""
         key_tuple = (
@@ -628,13 +628,13 @@ class GatewayAgentCacheMixin:
             target(*args)
             return
         from gateway.run import _profile_runtime_scope
-        from hermes_constants import get_hermes_home
+        from zeloo_constants import get_zeloo_home
         home = None
         store = getattr(self, "session_store", None)
         if session_key and store is not None:
             with suppress(Exception):
                 home = store._profile_home_for_key(session_key)
-        with _profile_runtime_scope(home or get_hermes_home()):
+        with _profile_runtime_scope(home or get_zeloo_home()):
             target(*args)
 
     def _commit_memory_before_soft_evict(self, agent: Any, key: str) -> None:
@@ -796,7 +796,7 @@ class GatewayAgentCacheMixin:
                 logger.debug("Pressure release failed for %s: %s", key, _e)
             del agent
         with suppress(Exception):
-            from hermes_cli.mem_trim import trim_memory
+            from zeloo_cli.mem_trim import trim_memory
             trim_memory(force=True, reason="agent_cache_pressure")
 
     def _enforce_agent_cache_cap(self) -> None:

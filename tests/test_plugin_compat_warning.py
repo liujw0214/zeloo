@@ -21,7 +21,7 @@ def _a_lazy_entry():
 
 
 def test_compat_resolution_warns_once_per_name_with_the_new_location():
-    from hermes_cli.plugin_compat import HermesPluginCompatWarning, _seen
+    from zeloo_cli.plugin_compat import ZELOOPluginCompatWarning, _seen
     facade, name = _a_lazy_entry()
     _seen.discard((facade, name))
     mod = importlib.import_module(facade)
@@ -29,7 +29,7 @@ def test_compat_resolution_warns_once_per_name_with_the_new_location():
         warnings.simplefilter("always")
         getattr(mod, name)
         getattr(mod, name)
-    ours = [w for w in rec if issubclass(w.category, HermesPluginCompatWarning)]
+    ours = [w for w in rec if issubclass(w.category, ZELOOPluginCompatWarning)]
     assert len(ours) == 1, [str(w.message) for w in rec]
     msg = str(ours[0].message)
     assert f"`{facade}.{name}` moved to `" in msg and "removed on 2026-09-14" in msg
@@ -37,10 +37,10 @@ def test_compat_resolution_warns_once_per_name_with_the_new_location():
 
 def test_importing_the_facade_itself_does_not_warn():
     """Only RESOLVING a compat name warns; plugins that import the module for its live API stay silent."""
-    from hermes_cli.plugin_compat import HermesPluginCompatWarning
+    from zeloo_cli.plugin_compat import ZELOOPluginCompatWarning
     import sys
     sys.modules.pop("tools.web_tools", None)
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         importlib.import_module("tools.web_tools")
-    assert not [w for w in rec if issubclass(w.category, HermesPluginCompatWarning)]
+    assert not [w for w in rec if issubclass(w.category, ZELOOPluginCompatWarning)]

@@ -24,17 +24,17 @@ from gateway.config import GatewayConfig, Platform
 from gateway.session import SessionEntry, SessionStore
 
 
-def test_session_store_default_db_uses_runtime_hermes_home(tmp_path, monkeypatch):
-    """SessionStore must honor runtime HERMES_HOME when opening the default DB.
+def test_session_store_default_db_uses_runtime_zeloo_home(tmp_path, monkeypatch):
+    """SessionStore must honor runtime ZELOO_HOME when opening the default DB.
 
     Regression for the import-time DEFAULT_DB_PATH freeze: importing
-    hermes_state before a fixture redirected HERMES_HOME used to pin every
-    default SessionDB() at the developer's real ~/.hermes/state.db.
+    zeloo_state before a fixture redirected ZELOO_HOME used to pin every
+    default SessionDB() at the developer's real ~/.Zeloo/state.db.
     """
     config = GatewayConfig()
-    fake_home = tmp_path / "alt_hermes_home"
+    fake_home = tmp_path / "alt_zeloo_home"
     fake_home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(fake_home))
+    monkeypatch.setenv("ZELOO_HOME", str(fake_home))
 
     with patch("gateway.session.SessionStore._ensure_loaded"):
         store = SessionStore(sessions_dir=tmp_path / "sessions", config=config)
@@ -257,4 +257,4 @@ class TestReadmeSentinel:
         assert next(iter(raw)) == "_README"
         # The note points users at the real store and command.
         assert "state.db" in raw["_README"]
-        assert "hermes sessions list" in raw["_README"]
+        assert "Zeloo sessions list" in raw["_README"]

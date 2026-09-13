@@ -1,7 +1,7 @@
 """Hindsight memory plugin — MemoryProvider with knowledge graph, entity resolution
 and multi-strategy retrieval; cloud (API key), local_external, or local_embedded.
 
-Config: $HERMES_HOME/hindsight/config.json (profile-scoped), else ~/.hindsight/
+Config: $ZELOO_HOME/hindsight/config.json (profile-scoped), else ~/.hindsight/
 config.json (legacy, shared), else env: HINDSIGHT_API_KEY / BANK_ID / BUDGET /
 API_URL / MODE / TIMEOUT / IDLE_TIMEOUT / RETAIN_TAGS / RETAIN_OBSERVATION_SCOPES /
 RETAIN_SOURCE / RETAIN_USER_PREFIX / RETAIN_ASSISTANT_PREFIX, and
@@ -27,9 +27,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 from agent.memory_provider import MemoryProvider, RecallStatus
 from agent.secret_scope import get_secret
-from hermes_cli.config import cfg_get
-from hermes_constants import get_hermes_home
-from hermes_time import now as _hermes_now
+from zeloo_cli.config import cfg_get
+from zeloo_constants import get_zeloo_home
+from zeloo_time import now as _zeloo_now
 from tools.registry import tool_error
 
 from .embedded import (
@@ -49,7 +49,7 @@ from .settings import (
 logger = logging.getLogger(__name__)
 
 _LOCAL_MODES = {"local", "local_embedded"}
-_RETAIN_CONTEXT_DEFAULT = "conversation between Hermes Agent and the User"
+_RETAIN_CONTEXT_DEFAULT = "conversation between Zeloo Agent and the User"
 
 
 def _ensure_client_dependency() -> None:
@@ -183,7 +183,7 @@ def _run_sync(coro, timeout: float = _DEFAULT_TIMEOUT):
 def _context_thread(target, name: str) -> threading.Thread:
     """Daemon thread running *target* in a snapshot of the spawner's contextvars.
     Threads start with an EMPTY Context; under multiplex_profiles get_secret fails
-    closed without the profile's secret scope + HERMES_HOME override. (The shared
+    closed without the profile's secret scope + ZELOO_HOME override. (The shared
     loop needs no wrap: run_coroutine_threadsafe inherits the submitter's context.)"""
     return threading.Thread(target=contextvars.copy_context().run, args=(target,), daemon=True, name=name)
 
@@ -235,9 +235,9 @@ REFLECT_SCHEMA = {
 
 
 def _load_config() -> dict:
-    """$HERMES_HOME/hindsight/config.json (profile-scoped), else ~/.hindsight/config.json
+    """$ZELOO_HOME/hindsight/config.json (profile-scoped), else ~/.hindsight/config.json
     (legacy, shared), else environment variables."""
-    for path in (get_hermes_home() / "hindsight" / "config.json", Path.home() / ".hindsight" / "config.json"):
+    for path in (get_zeloo_home() / "hindsight" / "config.json", Path.home() / ".hindsight" / "config.json"):
         if path.exists():
             with contextlib.suppress(Exception):
                 return json.loads(path.read_text(encoding="utf-8"))
@@ -254,15 +254,15 @@ def _load_config() -> dict:
         "retain_source": os.environ.get("HINDSIGHT_RETAIN_SOURCE", _DEFAULT_RETAIN_SOURCE),
         "retain_user_prefix": os.environ.get("HINDSIGHT_RETAIN_USER_PREFIX", "User"),
         "retain_assistant_prefix": os.environ.get("HINDSIGHT_RETAIN_ASSISTANT_PREFIX", "Assistant"),
-        "banks": {"hermes": {"bankId": get_secret("HINDSIGHT_BANK_ID", "") or "hermes",
+        "banks": {"Zeloo": {"bankId": get_secret("HINDSIGHT_BANK_ID", "") or "Zeloo",
                              "budget": os.environ.get("HINDSIGHT_BUDGET", "mid"), "enabled": True}},
     }
 
 
 def _event_timestamp() -> str:
-    """Configured Hermes event time with an explicit UTC offset."""
-    event_time = _hermes_now()
-    # hermes_time.now() is aware; guard a replacement clock emitting offset-less dates.
+    """Configured Zeloo event time with an explicit UTC offset."""
+    event_time = _zeloo_now()
+    # zeloo_time.now() is aware; guard a replacement clock emitting offset-less dates.
     if event_time.tzinfo is None or event_time.utcoffset() is None:
         event_time = event_time.astimezone()
     return event_time.isoformat(timespec="seconds")
@@ -310,7 +310,7 @@ class HindsightMemoryProvider(MemoryProvider):
         self._config = self._api_key = self._client = None
         self._api_url, self._llm_base_url, self._mode = _DEFAULT_API_URL, "", "cloud"
         self._timeout, self._idle_timeout = _DEFAULT_TIMEOUT, _DEFAULT_IDLE_TIMEOUT
-        self._bank_id, self._budget, self._bank_id_template = "hermes", "mid", ""
+        self._bank_id, self._budget, self._bank_id_template = "Zeloo", "mid", ""
         self._bank_mission, self._bank_retain_mission = "", None
         self._memory_mode = "hybrid"  # "context", "tools", or "hybrid"
         self._prefetch_method = "recall"  # "recall" or "reflect"
@@ -380,10 +380,10 @@ class HindsightMemoryProvider(MemoryProvider):
         available, reason = _check_local_runtime()
         return "" if available else _local_runtime_hint(reason).strip()
 
-    def save_config(self, values, hermes_home):
-        """Merge *values* into $HERMES_HOME/hindsight/config.json."""
+    def save_config(self, values, zeloo_home):
+        """Merge *values* into $ZELOO_HOME/hindsight/config.json."""
         from utils import atomic_json_write
-        config_path = Path(hermes_home) / "hindsight" / "config.json"
+        config_path = Path(zeloo_home) / "hindsight" / "config.json"
         config_path.parent.mkdir(parents=True, exist_ok=True)
         existing = {}
         if config_path.exists():
@@ -392,10 +392,10 @@ class HindsightMemoryProvider(MemoryProvider):
         existing.update(values)
         atomic_json_write(config_path, existing, mode=0o600)
 
-    def post_setup(self, hermes_home: str, config: dict) -> None:
+    def post_setup(self, zeloo_home: str, config: dict) -> None:
         """Custom setup wizard — installs only the deps needed for the selected mode."""
         from .setup import run_setup
-        run_setup(self, hermes_home, config)
+        run_setup(self, zeloo_home, config)
 
     def get_config_schema(self):
         return [
@@ -411,8 +411,8 @@ class HindsightMemoryProvider(MemoryProvider):
             {"key": "llm_base_url", "description": "Endpoint URL (e.g. http://192.168.1.10:8080/v1)", "default": "", "when": {"mode": "local_embedded", "llm_provider": "openai_compatible"}},
             {"key": "llm_api_key", "description": "LLM API key (optional for openai_compatible)", "secret": True, "env_var": "HINDSIGHT_LLM_API_KEY", "when": {"mode": "local_embedded"}},
             {"key": "llm_model", "description": "LLM model", "default": "gpt-4o-mini", "default_from": {"field": "llm_provider", "map": _PROVIDER_DEFAULT_MODELS}, "when": {"mode": "local_embedded"}},
-            {"key": "bank_id", "description": "Memory bank name (static fallback when bank_id_template is unset)", "default": "hermes"},
-            {"key": "bank_id_template", "description": "Optional template to derive bank_id dynamically. Placeholders: {profile}, {workspace}, {platform}, {user}, {session}. Example: hermes-{profile}", "default": ""},
+            {"key": "bank_id", "description": "Memory bank name (static fallback when bank_id_template is unset)", "default": "Zeloo"},
+            {"key": "bank_id_template", "description": "Optional template to derive bank_id dynamically. Placeholders: {profile}, {workspace}, {platform}, {user}, {session}. Example: Zeloo-{profile}", "default": ""},
             {"key": "bank_mission", "description": "Mission/purpose description for the memory bank"},
             {"key": "bank_retain_mission", "description": "Custom extraction prompt for memory retention"},
             {"key": "recall_budget", "description": "Recall thoroughness", "default": "mid", "choices": ["low", "mid", "high"]},
@@ -435,7 +435,7 @@ class HindsightMemoryProvider(MemoryProvider):
             {"key": "retain_async","description": "Process retain asynchronously on the Hindsight server", "default": True},
             {"key": "prefetch_waits_for_retain", "description": "Have the background next-turn prefetch wait for the just-completed retain to become recall-visible on the server (local queue drain + async operation completion) before recalling, so recall includes the just-completed turn (runs off the reply path, adds no response latency)", "default": True},
             {"key": "prefetch_retain_drain_timeout", "description": "Max seconds the background prefetch waits for the retain to become recall-visible (queue drain + server-side completion) before recalling anyway", "default": 10.0},
-            {"key": "retain_context", "description": "Context label for retained memories", "default": "conversation between Hermes Agent and the User"},
+            {"key": "retain_context", "description": "Context label for retained memories", "default": "conversation between Zeloo Agent and the User"},
             {"key": "recall_max_tokens", "description": "Maximum tokens for recall results", "default": 4096},
             {"key": "recall_max_input_chars", "description": "Maximum input query length for auto-recall", "default": 800},
             {"key": "recall_prompt_preamble", "description": "Custom preamble for recalled memories in context"},
@@ -461,11 +461,11 @@ class HindsightMemoryProvider(MemoryProvider):
         cfg = self._config
         llm_provider = _daemon_llm_provider(cfg.get("llm_provider", ""))
         logger.debug("Creating HindsightEmbedded client (profile=%s, provider=%s)",
-                     cfg.get("profile", "hermes"), llm_provider)
+                     cfg.get("profile", "Zeloo"), llm_provider)
         self._idle_timeout = self._int_setting(
             "idle_timeout", "HINDSIGHT_IDLE_TIMEOUT", _DEFAULT_IDLE_TIMEOUT, env_default=self._idle_timeout,
         )
-        kwargs = dict(profile=cfg.get("profile", "hermes"), llm_provider=llm_provider,
+        kwargs = dict(profile=cfg.get("profile", "Zeloo"), llm_provider=llm_provider,
                       llm_api_key=_embedded_llm_api_key(cfg), llm_model=cfg.get("llm_model", ""),
                       idle_timeout=self._idle_timeout)
         if self._llm_base_url:
@@ -714,11 +714,11 @@ class HindsightMemoryProvider(MemoryProvider):
         self._api_url = cfg.get("api_url") or get_secret("HINDSIGHT_API_URL", "") or default_url
         self._llm_base_url = cfg.get("llm_base_url", "")
 
-        banks = cfg_get(cfg, "banks", "hermes", default={})
+        banks = cfg_get(cfg, "banks", "Zeloo", default={})
         self._bank_id_template = cfg.get("bank_id_template", "") or ""
         self._bank_id = _resolve_bank_id_template(
             self._bank_id_template,
-            fallback=cfg.get("bank_id") or banks.get("bankId", "hermes"),
+            fallback=cfg.get("bank_id") or banks.get("bankId", "Zeloo"),
             profile=self._agent_identity, workspace=self._agent_workspace,
             platform=self._platform, user=self._user_id, session=self._session_id,
         )
@@ -790,13 +790,13 @@ class HindsightMemoryProvider(MemoryProvider):
         if hasattr(os, "geteuid") and os.geteuid() == 0:
             msg = ("Hindsight local_embedded mode cannot run as root "
                    "(PostgreSQL initdb refuses root). Skipping the embedded "
-                   "memory daemon. Run Hermes as a non-root user, or switch "
-                   "to cloud / local_external mode via 'hermes memory setup'.")
+                   "memory daemon. Run Zeloo as a non-root user, or switch "
+                   "to cloud / local_external mode via 'Zeloo memory setup'.")
             logger.warning(msg)
-            # Also print: otherwise the user would only see Hermes get sluggish.
+            # Also print: otherwise the user would only see Zeloo get sluggish.
             with contextlib.suppress(Exception):
                 # Surface to the terminal too — a daemon that never starts would otherwise fail silently and
-                # the user would only see Hermes get sluggish. (issue #13125)
+                # the user would only see Zeloo get sluggish. (issue #13125)
                 print(f"  ⚠ {msg}", file=sys.stderr, flush=True)
             self._mode = "disabled"
             return
@@ -804,7 +804,7 @@ class HindsightMemoryProvider(MemoryProvider):
 
     def _daemon_start_worker(self) -> None:
         import traceback
-        log_path = get_hermes_home() / "logs" / "hindsight-embed.log"
+        log_path = get_zeloo_home() / "logs" / "hindsight-embed.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
         def _log(text: str) -> None:
@@ -818,7 +818,7 @@ class HindsightMemoryProvider(MemoryProvider):
             dem.console = Console(file=open(log_path, "a", encoding="utf-8"), force_terminal=False)
 
             client = self._get_client()
-            profile = self._config.get("profile", "hermes")
+            profile = self._config.get("profile", "Zeloo")
             # Profile .env out of sync with config -> rewrite and restart a running daemon.
             # Fail-closed on key material: when this process holds no key (no secret
             # scope on this thread) but the file does, a rewrite would destroy the
@@ -915,7 +915,7 @@ class HindsightMemoryProvider(MemoryProvider):
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         # Opt-in: recall synchronously against the *current* message so the
         # injected memories match this turn's query, not the previous turn's.
-        # See NousResearch/hermes-agent#5820.
+        # See NousResearch/Zeloo-agent#5820.
         if self._recall_sync:
             return self._finish_prefetch(*(("", 0) if self._recall_disabled() else self._do_recall(query)))
         # Default: the background worker's result for the previous turn (capped join).
@@ -1130,7 +1130,7 @@ class HindsightMemoryProvider(MemoryProvider):
 
         Without this hook, initialize()-cached state (``_session_id``, ``_document_id``, ``_session_turns``,
         ``_turn_counter``) would keep pointing at the previous session and writes would land in the wrong
-        document. See hermes-agent#6672.
+        document. See Zeloo-agent#6672.
         Always update ``_session_id`` so metadata and tags on subsequent retains reflect the active session.
         Always clear the accumulated batch buffers (``_session_turns``, ``_turn_counter``, ``_turn_index``)
         — even for /resume and /branch, the new session's batching must start from zero so an in-flight

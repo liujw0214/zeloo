@@ -6,7 +6,7 @@ import { readKey, writeKey } from '@/lib/storage'
 import { hasSeenIntroReveal } from './intro-reveal'
 import { DEFAULT_ANSWERS, setOnboardingAnswers } from './onboarding-answers'
 
-const PHASE_KEY = 'hermes-onboarding-phase-v1'
+const PHASE_KEY = 'Zeloo-onboarding-phase-v1'
 
 export const ONBOARDING_PHASES = ['idle', 'cinematic', 'guided', 'skipped', 'handoff', 'done'] as const
 

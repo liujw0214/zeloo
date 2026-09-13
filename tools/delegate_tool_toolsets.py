@@ -36,7 +36,7 @@ def _is_mcp_toolset_name(name: str) -> bool:
     return bool(target and str(target).startswith("mcp-"))
 
 def _expand_parent_toolsets(parent_toolsets: set) -> set:
-    """Add every toolset whose tools are a subset of the parent's tools: a parent on a composite like ``hermes-cli``
+    """Add every toolset whose tools are a subset of the parent's tools: a parent on a composite like ``Zeloo-cli``
     must still let a child request ``web``/``terminal``; bare name intersection would reject them."""
     parent_tool_names = {t for ts_name in parent_toolsets for t in (TOOLSETS.get(ts_name) or {}).get("tools", [])}
     expanded = set(parent_toolsets)
@@ -71,7 +71,7 @@ def _resolve_child_toolsets(
     """``(enabled_toolsets, disabled_toolsets)`` for a child. Children never gain tools the parent lacks: explicit
     ``toolsets`` are intersected with the parent's (composite-expanded) set, else the parent's enabled set is
     inherited. Blocked tools are stripped twice — whole blocked toolsets here, and exact one-tool deny toolsets via
-    ``disabled_toolsets`` so blocked names inside mixed bundles (hermes-cli) are subtracted AFTER composite
+    ``disabled_toolsets`` so blocked names inside mixed bundles (Zeloo-cli) are subtracted AFTER composite
     expansion and survive registry refreshes. Orchestrators get ``delegation`` re-added unconditionally
     (role-granted, not inherited)."""
     # enabled_toolsets=None means "all tools", so derive from loaded tool names.

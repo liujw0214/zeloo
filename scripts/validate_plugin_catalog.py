@@ -4,12 +4,12 @@
 Validates ``plugin-catalog/*.yaml`` catalog entries and
 ``plugin-catalog/removed.yaml`` against the catalog contract schema, using
 only stdlib + PyYAML so the admission CI (and third-party repos) can run it
-WITHOUT installing hermes-agent.
+WITHOUT installing Zeloo-agent.
 
 NOTE: this script intentionally duplicates the schema rules instead of
-importing ``hermes_cli`` — the whole point is the no-install requirement for
+importing ``zeloo_cli`` — the whole point is the no-install requirement for
 cheap cross-repo CI use. The runtime twin of this schema lives in
-``hermes_cli/plugin_catalog.py``; if the contract changes there, update the
+``zeloo_cli/plugin_catalog.py``; if the contract changes there, update the
 rules here in lockstep.
 
 Usage:
@@ -59,14 +59,14 @@ KNOWN_KEYS = {
     "description",
     "maintainer",
     "tier",
-    "requires_hermes",
+    "requires_ZELOO",
     "docs_url",
     "platforms",
     "capabilities",
 }
 REQUIRED_KEYS = ("name", "repo", "sha", "description", "maintainer")
 
-# One comparator clause of a requires_hermes spec, e.g. ">=0.19" or "!=1.2.3".
+# One comparator clause of a requires_ZELOO spec, e.g. ">=0.19" or "!=1.2.3".
 _COMPARATOR_RE = re.compile(r"^(>=|<=|==|!=|>|<)\s*\d+(\.\d+)*$")
 
 
@@ -74,16 +74,16 @@ def _is_nonempty_str(value: object) -> bool:
     return isinstance(value, str) and value.strip() != ""
 
 
-def _check_requires_hermes(spec: object, errors: list[str]) -> None:
+def _check_requires_ZELOO(spec: object, errors: list[str]) -> None:
     if not isinstance(spec, str):
-        errors.append(f"requires_hermes must be a string, got {type(spec).__name__}")
+        errors.append(f"requires_ZELOO must be a string, got {type(spec).__name__}")
         return
     if spec.strip() == "":
         return  # empty = no constraint
     for clause in spec.split(","):
         if not _COMPARATOR_RE.match(clause.strip()):
             errors.append(
-                f"requires_hermes clause {clause.strip()!r} is not a valid "
+                f"requires_ZELOO clause {clause.strip()!r} is not a valid "
                 "comparator spec (expected e.g. '>=0.19')"
             )
 
@@ -125,8 +125,8 @@ def validate_entry(data: object) -> tuple[list[str], list[str]]:
     if tier not in TIERS:
         errors.append(f"tier {tier!r} must be one of {list(TIERS)}")
 
-    if "requires_hermes" in data:
-        _check_requires_hermes(data["requires_hermes"], errors)
+    if "requires_ZELOO" in data:
+        _check_requires_ZELOO(data["requires_ZELOO"], errors)
 
     platforms = data.get("platforms", [])
     if platforms is None:

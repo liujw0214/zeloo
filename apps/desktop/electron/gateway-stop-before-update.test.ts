@@ -8,8 +8,8 @@ import {
   stopGatewayBeforeUpdate
 } from './gateway-stop-before-update'
 
-const CLI = 'C:\\Users\\x\\hermes\\hermes-agent\\venv\\Scripts\\hermes.exe'
-const HOME = 'C:\\Users\\x\\hermes'
+const CLI = 'C:\\Users\\x\\Zeloo\\Zeloo-agent\\venv\\Scripts\\Zeloo.exe'
+const HOME = 'C:\\Users\\x\\Zeloo'
 
 function fakeExec(ok: boolean) {
   return (_command: string, _args: string[], _options: unknown) => {

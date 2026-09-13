@@ -7,7 +7,7 @@ shows the brand briefly. Sound defaults on and respects the haptics mute prefere
 Fonts are the existing Collapse and JetBrains Mono faces.
 
 Eligibility is `guestOnboardingEnabled && !firstRunSkipped && !hasSeenIntroReveal()`.
-Electron sets the flag from `HERMES_GUEST_ONBOARDING=1` or `--guest-onboarding`.
+Electron sets the flag from `ZELOO_GUEST_ONBOARDING=1` or `--guest-onboarding`.
 The gate queues the guided chat on completion; the chat gate acknowledges the
 free-tier notice as the cinematic starts. With the flag off, neither gate starts.
 

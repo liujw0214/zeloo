@@ -55,7 +55,7 @@ from gateway.platforms.yuanbao_media import (
     build_image_msg_body, build_file_msg_body, guess_mime_type, md5_hex,
 )
 from gateway.platforms.yuanbao_proto import (
-    CMD_TYPE, WS_HEARTBEAT_RUNNING, WS_HEARTBEAT_FINISH, HERMES_INSTANCE_ID,
+    CMD_TYPE, WS_HEARTBEAT_RUNNING, WS_HEARTBEAT_FINISH, ZELOO_INSTANCE_ID,
     _fields_to_dict, _get_string, _get_varint, _parse_fields,
     decode_conn_msg, decode_inbound_push, decode_forward_msg_data,
     decode_query_group_info_rsp, decode_get_group_member_list_rsp,
@@ -70,11 +70,11 @@ logger = logging.getLogger(__name__)
 
 # AUTH_BIND / sign-token header values
 try:
-    from hermes_cli import __version__ as _HERMES_VERSION
+    from zeloo_cli import __version__ as _ZELOO_VERSION
 except ImportError:
-    _HERMES_VERSION = "0.0.0"
-_APP_VERSION = _BOT_VERSION = _HERMES_VERSION
-_YUANBAO_INSTANCE_ID = str(HERMES_INSTANCE_ID)
+    _ZELOO_VERSION = "0.0.0"
+_APP_VERSION = _BOT_VERSION = _ZELOO_VERSION
+_YUANBAO_INSTANCE_ID = str(ZELOO_INSTANCE_ID)
 _OPERATION_SYSTEM = sys.platform
 
 DEFAULT_WS_GATEWAY_URL = "wss://bot-wss.yuanbao.tencent.com/wss/connection"
@@ -779,9 +779,9 @@ class AutoSetHomeMiddleware(InboundMiddleware):
     @staticmethod
     def _persist_home(adapter, ctx: InboundContext) -> None:
         try:
-            from hermes_constants import get_hermes_home
-            from hermes_cli.config import atomic_config_write, read_user_config_raw
-            config_path = get_hermes_home() / "config.yaml"
+            from zeloo_constants import get_zeloo_home
+            from zeloo_cli.config import atomic_config_write, read_user_config_raw
+            config_path = get_zeloo_home() / "config.yaml"
             # Raw read: merged defaults must not be persisted to the user's file.
             user_config: dict = read_user_config_raw(config_path)
             user_config["YUANBAO_HOME_CHANNEL"] = ctx.chat_id

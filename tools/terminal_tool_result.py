@@ -113,7 +113,7 @@ def _sudo_annotations(command: str, output: str, env_type: str) -> tuple[str, bo
     auth_failed = _sudo_wrong_password_failure(output)
     cache_cleared = _invalidate_cached_sudo_on_auth_failure(command, output)
     can_reprompt = cache_cleared and (
-        tt._get_sudo_password_callback() is not None or env_var_enabled("HERMES_INTERACTIVE")
+        tt._get_sudo_password_callback() is not None or env_var_enabled("ZELOO_INTERACTIVE")
     ) and not _in_delegated_child_context()
     if can_reprompt:
         output += ("\n\n⚠️ Sudo authentication failed — cached password "
@@ -125,7 +125,7 @@ def _apply_output_transform_hook(command, output, returncode, task_id, env_type)
     """Plugin output-transform seam (fail-open; first string result wins).
     Replacements are still subject to the output limit applied afterwards."""
     with _quiet("transform_terminal_output hook"):
-        from hermes_cli.lifecycle import invoke_hook
+        from zeloo_cli.lifecycle import invoke_hook
         results = invoke_hook("transform_terminal_output", command=command, output=output,
                               returncode=returncode, task_id=task_id or "", env_type=env_type)
         output = next((r for r in results if isinstance(r, str)), output)

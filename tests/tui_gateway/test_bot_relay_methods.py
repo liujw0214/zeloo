@@ -16,15 +16,15 @@ import json
 import pytest
 
 import tui_gateway.server as srv
-from hermes_cli.dashboard_auth.ws_tickets import INTERNAL_PROVIDER, INTERNAL_USER_ID
+from zeloo_cli.dashboard_auth.ws_tickets import INTERNAL_PROVIDER, INTERNAL_USER_ID
 from tools import bot_relay
 
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    h = tmp_path / ".hermes"
+    h = tmp_path / ".Zeloo"
     (h / "profiles" / "ops").mkdir(parents=True)
-    monkeypatch.setenv("HERMES_HOME", str(h))
+    monkeypatch.setenv("ZELOO_HOME", str(h))
     return h
 
 
@@ -53,7 +53,7 @@ def test_outbox_drain_returns_each_envelope_once(home):
     target = {"profile": "scout", "handle": "scout", "connection_id": "cloud-1",
               "connection_label": "", "title": "", "description": ""}
     env = bot_relay.enqueue_envelope(
-        home, target=target, message="m", sender_profile="default", sender_handle="hermes"
+        home, target=target, message="m", sender_profile="default", sender_handle="Zeloo"
     )
     first = _result(srv._methods["bot_relay.outbox.drain"](1, {}))
     assert [e["id"] for e in first["envelopes"]] == [env["id"]]
@@ -88,11 +88,11 @@ def test_deliver_validates_profile_and_runs_transport(home, monkeypatch):
     argv = calls["argv"]
     # argv[0] may be a resolved venv path (#93590) — match by basename.
     assert argv[1:3] == ["-p", "ops"]
-    assert argv[0].rsplit("\\", 1)[-1].rsplit("/", 1)[-1] in ("hermes", "hermes.exe")
+    assert argv[0].rsplit("\\", 1)[-1].rsplit("/", 1)[-1] in ("Zeloo", "Zeloo.exe")
     assert "Bot Chat" in argv and "--query-file" in argv
 
-    # 'hermes' alias resolves to default
-    _result(srv._methods["bot_relay.deliver"](2, {"profile": "hermes", "message": "x"}))
+    # 'Zeloo' alias resolves to default
+    _result(srv._methods["bot_relay.deliver"](2, {"profile": "Zeloo", "message": "x"}))
     assert calls["argv"][1:3] == ["-p", "default"]
 
     # unknown profile refuses without spawning
@@ -123,7 +123,7 @@ def test_deliver_lands_in_live_bot_chat_instead_of_subprocess(home, monkeypatch)
 
     def _fake_run(argv, *a, **k):
         # The server module's import-time update prefetch runs `git ...` on a
-        # daemon thread; only the relay's `hermes` CLI spawn is under test.
+        # daemon thread; only the relay's `Zeloo` CLI spawn is under test.
         if argv and argv[0] != "git":
             spawned.append(argv)
         return _Proc()
@@ -193,7 +193,7 @@ def test_deliver_write_failure_still_removes_tempfile(home, monkeypatch, tmp_pat
     err = srv._methods["bot_relay.deliver"](1, {"profile": "ops", "message": "x"})
     assert "error" in err
     assert made, "mkstemp was never reached"
-    assert not glob.glob(str(tmp_path / "hermes-relay-dm-*")), "tempfile leaked"
+    assert not glob.glob(str(tmp_path / "Zeloo-relay-dm-*")), "tempfile leaked"
 
 
 @pytest.fixture
@@ -221,13 +221,13 @@ def fake_runs(monkeypatch):
     ({}, None),
 ], ids=["sender fields", "sender on another connection", "no sender fields"])
 def test_deliver_child_env_carries_the_envelope_sender_on_every_attempt(home, monkeypatch, fake_runs, sender, expected):
-    """HERMES_TURN_AUTHOR on the child comes from the envelope's sender fields alone: the retry gets the same
+    """ZELOO_TURN_AUTHOR on the child comes from the envelope's sender fields alone: the retry gets the same
     author, and without sender fields a stale author on the gateway's own environment never reaches the child."""
     from agent.turn_author import TURN_AUTHOR_ENV
 
     calls, outcomes = fake_runs
     outcomes.extend([(1, "HTTP 429 rate limit"), (0, "")])
-    monkeypatch.setenv("HERMES_RELAY_TEST_MARKER", "kept")
+    monkeypatch.setenv("ZELOO_RELAY_TEST_MARKER", "kept")
     monkeypatch.setenv(TURN_AUTHOR_ENV, json.dumps({"id": "bot:stale", "name": "stale", "is_bot": True}))
 
     _result(srv._methods["bot_relay.deliver"](1, {"profile": "ops", "message": "ping", **sender}))
@@ -235,7 +235,7 @@ def test_deliver_child_env_carries_the_envelope_sender_on_every_attempt(home, mo
     envs = [c["env"] for c in calls]
     assert len(envs) == 2
     assert [json.loads(e[TURN_AUTHOR_ENV]) if TURN_AUTHOR_ENV in e else None for e in envs] == [expected, expected]
-    assert all(e["HERMES_RELAY_TEST_MARKER"] == "kept" for e in envs)
+    assert all(e["ZELOO_RELAY_TEST_MARKER"] == "kept" for e in envs)
 
 
 class _Client:

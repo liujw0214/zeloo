@@ -1,7 +1,7 @@
 """E2E tests for the per-profile MCP lifecycle RPCs (mcp.servers.*).
 
 These drive the real registered gateway handlers against a real temp
-``HERMES_HOME`` with named profile dirs — no mocks of the config/mcp layer — and
+``ZELOO_HOME`` with named profile dirs — no mocks of the config/mcp layer — and
 assert that every write lands in the RIGHT profile's ``config.yaml`` / ``.env``
 and NEVER leaks into the launch (default) profile.
 
@@ -21,21 +21,21 @@ import tui_gateway.server as server
 
 
 @pytest.fixture
-def hermes_root(tmp_path, monkeypatch):
-    """A temp HERMES_HOME root with two named profiles: 'work' and 'other'.
+def zeloo_root(tmp_path, monkeypatch):
+    """A temp ZELOO_HOME root with two named profiles: 'work' and 'other'.
 
-    Pointing HERMES_HOME at a dir outside ~/.hermes makes it the profile ROOT
-    (get_default_hermes_root's Docker/custom branch), so named profiles live at
+    Pointing ZELOO_HOME at a dir outside ~/.Zeloo makes it the profile ROOT
+    (get_default_zeloo_root's Docker/custom branch), so named profiles live at
     ``<root>/profiles/<name>/`` and the launch/default profile is ``<root>``.
     """
-    root = tmp_path / "hermes_home"
+    root = tmp_path / "zeloo_home"
     (root / "profiles" / "work").mkdir(parents=True)
     (root / "profiles" / "other").mkdir(parents=True)
-    monkeypatch.setenv("HERMES_HOME", str(root))
+    monkeypatch.setenv("ZELOO_HOME", str(root))
     # Make sure no stale process-wide home override leaks in from another test.
-    from hermes_constants import get_hermes_home_override
+    from zeloo_constants import get_zeloo_home_override
 
-    assert get_hermes_home_override() is None
+    assert get_zeloo_home_override() is None
     return root
 
 
@@ -59,8 +59,8 @@ def _read_yaml(path: Path) -> dict:
         return yaml.safe_load(f) or {}
 
 
-def test_add_lands_in_named_profile_only(hermes_root):
-    root = hermes_root
+def test_add_lands_in_named_profile_only(zeloo_root):
+    root = zeloo_root
     resp = _call(
         "mcp.servers.add",
         {
@@ -85,7 +85,7 @@ def test_add_lands_in_named_profile_only(hermes_root):
     assert "weather" not in other_cfg.get("mcp_servers", {})
 
 
-def test_list_reflects_the_scoped_profile(hermes_root):
+def test_list_reflects_the_scoped_profile(zeloo_root):
     _result(
         _call(
             "mcp.servers.add",
@@ -111,7 +111,7 @@ def test_list_reflects_the_scoped_profile(hermes_root):
     assert work_server["command"] == "svc-a-bin"
 
 
-def test_status_is_profile_scoped_and_credential_safe(hermes_root):
+def test_status_is_profile_scoped_and_credential_safe(zeloo_root):
     _result(
         _call(
             "mcp.servers.add",
@@ -141,7 +141,7 @@ def test_status_is_profile_scoped_and_credential_safe(hermes_root):
     assert "error" not in str(payload)
 
 
-def test_status_does_not_mix_launch_runtime_into_another_profile(hermes_root):
+def test_status_does_not_mix_launch_runtime_into_another_profile(zeloo_root):
     import tools.mcp_tool as mcp_tool
 
     _result(
@@ -175,12 +175,12 @@ def test_status_does_not_mix_launch_runtime_into_another_profile(hermes_root):
     assert payload["servers"][0]["tools"] == 0
 
 
-def test_status_includes_named_profile_runtime_in_multiplex(hermes_root):
+def test_status_includes_named_profile_runtime_in_multiplex(zeloo_root):
     from agent.secret_scope import is_multiplex_active, set_multiplex_active
-    from hermes_constants import (
-        hermes_home_key,
-        reset_hermes_home_override,
-        set_hermes_home_override,
+    from zeloo_constants import (
+        zeloo_home_key,
+        reset_zeloo_home_override,
+        set_zeloo_home_override,
     )
     import tools.mcp_tool as mcp_tool
 
@@ -190,11 +190,11 @@ def test_status_includes_named_profile_runtime_in_multiplex(hermes_root):
             {"profile": "work", "name": "shared", "config": {"command": "work-bin"}},
         )
     )
-    work_token = set_hermes_home_override(hermes_root / "profiles" / "work")
+    work_token = set_zeloo_home_override(zeloo_root / "profiles" / "work")
     try:
-        work_scope = hermes_home_key()
+        work_scope = zeloo_home_key()
     finally:
-        reset_hermes_home_override(work_token)
+        reset_zeloo_home_override(work_token)
 
     work_server = SimpleNamespace(
         session=object(),
@@ -224,8 +224,8 @@ def test_status_includes_named_profile_runtime_in_multiplex(hermes_root):
     assert payload["servers"][0]["tools"] == 1
 
 
-def test_set_api_key_writes_env_and_header_to_right_profile(hermes_root):
-    root = hermes_root
+def test_set_api_key_writes_env_and_header_to_right_profile(zeloo_root):
+    root = zeloo_root
     _result(
         _call(
             "mcp.servers.add",
@@ -261,8 +261,8 @@ def test_set_api_key_writes_env_and_header_to_right_profile(hermes_root):
     assert "sk-secret-123" not in str(work_cfg)
 
 
-def test_set_api_key_stdio_references_env_block(hermes_root):
-    root = hermes_root
+def test_set_api_key_stdio_references_env_block(zeloo_root):
+    root = zeloo_root
     _result(
         _call(
             "mcp.servers.add",
@@ -289,8 +289,8 @@ def test_set_api_key_stdio_references_env_block(hermes_root):
     assert "LOCALTOOL_TOKEN=tok-xyz" in work_env
 
 
-def test_remove_scoped_to_profile(hermes_root):
-    root = hermes_root
+def test_remove_scoped_to_profile(zeloo_root):
+    root = zeloo_root
     _result(
         _call(
             "mcp.servers.add",
@@ -313,7 +313,7 @@ def test_remove_scoped_to_profile(hermes_root):
     assert "temp" in _read_yaml(root / "profiles" / "other" / "config.yaml").get("mcp_servers", {})
 
 
-def test_add_duplicate_and_missing_errors(hermes_root):
+def test_add_duplicate_and_missing_errors(zeloo_root):
     _result(
         _call(
             "mcp.servers.add",
@@ -339,21 +339,21 @@ def test_add_duplicate_and_missing_errors(hermes_root):
     assert bad_profile["error"]["code"] == 4064
 
 
-def test_add_requires_transport(hermes_root):
+def test_add_requires_transport(zeloo_root):
     resp = _call("mcp.servers.add", {"profile": "work", "name": "empty", "config": {}})
     assert "error" in resp
     assert resp["error"]["code"] == 4063
 
 
-def test_default_profile_add_when_profile_omitted(hermes_root):
-    root = hermes_root
+def test_default_profile_add_when_profile_omitted(zeloo_root):
+    root = zeloo_root
     _result(
         _call(
             "mcp.servers.add",
             {"name": "rootsvc", "config": {"command": "rootsvc-bin"}},
         )
     )
-    # Omitted profile → launch/default profile == HERMES_HOME root config.yaml.
+    # Omitted profile → launch/default profile == ZELOO_HOME root config.yaml.
     default_cfg = _read_yaml(root / "config.yaml")
     assert "rootsvc" in default_cfg.get("mcp_servers", {})
     # ...and NOT in a named profile.

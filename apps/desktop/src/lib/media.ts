@@ -86,15 +86,15 @@ export async function resolveMediaDisplaySrc(path: string): Promise<string> {
     return path
   }
 
-  if (window.hermesDesktop && isRemoteGateway()) {
+  if (window.ZELOODesktop && isRemoteGateway()) {
     return gatewayMediaDataUrl(path)
   }
 
-  if (!window.hermesDesktop?.readFileDataUrl) {
+  if (!window.ZELOODesktop?.readFileDataUrl) {
     return mediaExternalUrl(path)
   }
 
-  return window.hermesDesktop.readFileDataUrl(filePathFromMediaPath(path))
+  return window.ZELOODesktop.readFileDataUrl(filePathFromMediaPath(path))
 }
 
 // Audio/video need a seekable source instead of a whole-file data URL. Keep
@@ -106,7 +106,7 @@ export async function resolveMediaPlaybackSrc(path: string): Promise<string> {
     return path
   }
 
-  if (window.hermesDesktop && ['audio', 'video'].includes(mediaKind(path))) {
+  if (window.ZELOODesktop && ['audio', 'video'].includes(mediaKind(path))) {
     return isRemoteGateway() ? mediaGatewayStreamUrl(path) : mediaStreamUrl(path)
   }
 
@@ -151,7 +151,7 @@ export function mediaGatewayStreamUrl(path: string): string {
       .filter(Boolean)
       .join('&')
 
-    return `hermes-media://remote/${file}${scope ? `?${scope}` : ''}`
+    return `Zeloo-media://remote/${file}${scope ? `?${scope}` : ''}`
   }
 
   return mediaExternalUrl(path)
@@ -161,7 +161,7 @@ export function mediaGatewayStreamUrl(path: string): string {
 // file with Range support. Used for audio/video so playback bypasses the data
 // URL size cap and supports seeking. `path` may be a plain path or `file://…`.
 export function mediaStreamUrl(path: string): string {
-  return `hermes-media://stream/${encodeURIComponent(filePathFromMediaPath(path))}`
+  return `Zeloo-media://stream/${encodeURIComponent(filePathFromMediaPath(path))}`
 }
 
 export function mediaPathFromMarkdownHref(href?: string): string | null {
@@ -196,7 +196,7 @@ export function isRemoteGateway(): boolean {
 
 // Fetch gateway-local media as a data URL via the authenticated desktop FS
 // bridge. Remote Desktop artifacts can live anywhere the gateway can read
-// (workspace, skills, ~/.hermes/cache, etc.); /api/media is intentionally
+// (workspace, skills, ~/.Zeloo/cache, etc.); /api/media is intentionally
 // narrower and rejects non-images plus images outside its media roots.
 export async function gatewayMediaDataUrl(path: string): Promise<string> {
   return readDesktopFileDataUrl(filePathFromMediaPath(path))
@@ -215,11 +215,11 @@ export async function downloadGatewayMediaFile(
   const file = path
   const conn = $connection.get()
 
-  if (!window.hermesDesktop?.saveGatewayFile) {
+  if (!window.ZELOODesktop?.saveGatewayFile) {
     throw new Error('Desktop file download bridge is unavailable')
   }
 
-  return window.hermesDesktop.saveGatewayFile({
+  return window.ZELOODesktop.saveGatewayFile({
     connectionId: conn?.connectionId,
     path: file,
     profile: origin?.profile ?? conn?.profile,

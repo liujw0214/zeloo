@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from hermes_constants import get_hermes_home
+from zeloo_constants import get_zeloo_home
 from tools.tool_backend_helpers import managed_nous_tools_enabled
 
 logger = logging.getLogger(__name__)
@@ -33,8 +33,8 @@ def _clean(value: object) -> Optional[str]:
 
 
 def auth_json_path():
-    """Return the Hermes auth store path, respecting HERMES_HOME overrides."""
-    return get_hermes_home() / "auth.json"
+    """Return the Zeloo auth store path, respecting ZELOO_HOME overrides."""
+    return get_zeloo_home() / "auth.json"
 
 
 def _read_nous_provider_state() -> Optional[dict]:
@@ -49,7 +49,7 @@ def _read_nous_provider_state() -> Optional[dict]:
         nous_provider = providers.get("nous", {}) if isinstance(providers, dict) else None
         if not isinstance(nous_provider, dict):
             return None
-        from hermes_cli.anon_auth import guest_enabled, is_guest_state
+        from zeloo_cli.anon_auth import guest_enabled, is_guest_state
 
         if is_guest_state(nous_provider) and not guest_enabled():
             return None
@@ -99,7 +99,7 @@ def read_nous_access_token() -> Optional[str]:
     """Read a Nous Subscriber OAuth access token from auth store or env override.
 
     A read: with no Nous identity there is no bearer and the answer is None. The free-tier identity
-    is created by the boot bootstrap (``hermes_cli.free_tier_bootstrap``), never on a token-read
+    is created by the boot bootstrap (``zeloo_cli.free_tier_bootstrap``), never on a token-read
     path (NS-845 Q1.2). A retired free-tier credential IS replaced here, once: that is the explicit
     dead-credential rule, shared with inference.
     """
@@ -112,14 +112,14 @@ def read_nous_access_token() -> Optional[str]:
     if cached_token and not _access_token_is_expiring(nous_provider.get("expires_at"), _NOUS_ACCESS_TOKEN_REFRESH_SKEW_SECONDS):
         return cached_token
     try:
-        from hermes_cli.auth import resolve_nous_access_token
+        from zeloo_cli.auth import resolve_nous_access_token
 
         if refreshed_token := _clean(resolve_nous_access_token(refresh_skew_seconds=_NOUS_ACCESS_TOKEN_REFRESH_SKEW_SECONDS)):
             return refreshed_token
     except Exception as exc:
         # Same dead-credential rule as inference (one place decides it: anon_auth): a retired free-tier
         # identity is replaced once, here, instead of handing back its stale token forever.
-        from hermes_cli.anon_auth import AnonCredentialDead
+        from zeloo_cli.anon_auth import AnonCredentialDead
 
         if isinstance(exc, AnonCredentialDead):
             return _replace_dead_guest_token(nous_provider)
@@ -128,8 +128,8 @@ def read_nous_access_token() -> Optional[str]:
 
 
 def _replace_dead_guest_token(dead_state: dict) -> Optional[str]:
-    from hermes_cli.anon_auth import clear_dead_guest, ensure_portal_identity
-    from hermes_cli.auth import resolve_nous_access_token
+    from zeloo_cli.anon_auth import clear_dead_guest, ensure_portal_identity
+    from zeloo_cli.auth import resolve_nous_access_token
 
     clear_dead_guest("anon_credential_dead", dead_token=dead_state.get("anon_token"))
     try:

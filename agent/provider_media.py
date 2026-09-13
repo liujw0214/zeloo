@@ -1,4 +1,4 @@
-"""``$HERMES_HOME/cache/<kind>/`` materialisation helpers for the image/video
+"""``$ZELOO_HOME/cache/<kind>/`` materialisation helpers for the image/video
 generation provider ABCs.
 
 Several backends return *ephemeral* delivery URLs that expire before a downstream
@@ -17,9 +17,9 @@ from typing import Dict, Tuple
 
 
 def cache_dir(kind: str) -> Path:
-    """Return ``$HERMES_HOME/cache/<kind>/``, creating parents as needed."""
-    from hermes_constants import get_hermes_home
-    path = get_hermes_home() / "cache" / kind
+    """Return ``$ZELOO_HOME/cache/<kind>/``, creating parents as needed."""
+    from zeloo_constants import get_zeloo_home
+    path = get_zeloo_home() / "cache" / kind
     path.mkdir(parents=True, exist_ok=True)
     return path
 

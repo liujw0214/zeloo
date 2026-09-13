@@ -1,22 +1,22 @@
 ---
 sidebar_position: 3
 title: "Free tier and signing in"
-description: "What Hermes gives you before you add a key or sign in, how the free tier coexists with your own API key, how to sign in, and how to turn it off."
+description: "What Zeloo gives you before you add a key or sign in, how the free tier coexists with your own API key, how to sign in, and how to turn it off."
 ---
 
 # Free tier and signing in
 
 :::note Not on yet
 The free tier is being rolled out. Until it is on for everyone, nothing on this page happens
-unless the process was started with `HERMES_GUEST_ONBOARDING=1` in its environment; without it a
+unless the process was started with `ZELOO_GUEST_ONBOARDING=1` in its environment; without it a
 fresh install behaves exactly as before (the provider picker on first run). This note goes away
 when the rollout completes.
 :::
 
-A fresh Hermes install works before you paste an API key or sign in anywhere. When Hermes starts
+A fresh Zeloo install works before you paste an API key or sign in anywhere. When Zeloo starts
 it sets up the **Nous free tier** (a few seconds, shown as "Setting up free inference…") and
 answers on the `nous/welcome` model. Nothing to configure, no wizard to click through.
-`hermes setup` is still there when you want it; it is never forced.
+`Zeloo setup` is still there when you want it; it is never forced.
 
 ## What you get out of the box
 
@@ -33,8 +33,8 @@ them. They work on the free tier without any sign-in.
 Background work (conversation compaction, chat titles, image understanding, and similar) runs on
 `nous/welcome` too.
 
-While the free tier carries inference, the banner and `hermes auth status` read
-`Nous · free tier · nous/welcome`, and `hermes model` lists a **Nous · free tier** row with that
+While the free tier carries inference, the banner and `Zeloo auth status` read
+`Nous · free tier · nous/welcome`, and `Zeloo model` lists a **Nous · free tier** row with that
 single model. Asking for another model on the free tier prints a pointer instead of switching
 silently:
 
@@ -43,10 +43,10 @@ gpt-5 needs a Nous account or an API key. Use /login to sign in, or /model to pi
 ```
 
 Calling a paid tool says `This needs a Nous account. Use /login to sign in.` inside a chat (and
-names `hermes auth upgrade` in the terminal); the turn continues without it.
+names `Zeloo auth upgrade` in the terminal); the turn continues without it.
 
 If `model.default` in `config.yaml` names something other than `nous/welcome` while the free tier
-is doing inference, Hermes uses `nous/welcome` anyway and says so in one line. The free tier
+is doing inference, Zeloo uses `nous/welcome` anyway and says so in one line. The free tier
 serves exactly one model.
 
 ## Using your own API key alongside it
@@ -60,7 +60,7 @@ The free tier is the last resort, never a preference. Any provider you configure
 | `model.provider` set in `config.yaml` | That provider | Free tier |
 | A Nous Portal sign-in | Nous Portal | Your account |
 
-On an install that already has a provider, Hermes still sets the free tier up once at start so
+On an install that already has a provider, Zeloo still sets the free tier up once at start so
 connectors have something to authenticate with; your provider keeps doing inference. A one-time
 notice says so:
 
@@ -68,25 +68,25 @@ notice says so:
 Free Nous inference and connectors are now available. /model to try them, /login to sign in.
 ```
 
-You can pick the free tier explicitly from `hermes model` (or `/model`) like any other provider.
+You can pick the free tier explicitly from `Zeloo model` (or `/model`) like any other provider.
 
 ## Signing in from a chat or terminal
 
 ### From a chat
 
-Run `/login` in a Hermes DM on Telegram, Discord, or another supported messaging platform (on
-Slack use `/hermes login`), or in a CLI chat session. It must be a paired direct message:
-elsewhere Hermes replies `Sign in from a direct message with Hermes.` Broadcast-shaped platforms
+Run `/login` in a Zeloo DM on Telegram, Discord, or another supported messaging platform (on
+Slack use `/Zeloo login`), or in a CLI chat session. It must be a paired direct message:
+elsewhere Zeloo replies `Sign in from a direct message with Zeloo.` Broadcast-shaped platforms
 such as ntfy are refused for the same reason.
 
 The DM gets an acknowledgement, followed by three messages: the consent link, the sign-in code on
 its own line, then `Do not share this code. Waiting for sign-in, up to N minutes.` You can keep
-chatting while Hermes waits, and the result is pushed into the same DM. Running `/login` again
+chatting while Zeloo waits, and the result is pushed into the same DM. Running `/login` again
 replaces the first code. Live sessions still on `nous/welcome` move to the settled model on their
 next message. In the Ink TUI the code appears but the confirmation does not; check `/status`.
 
 :::warning One account per install
-`/login` binds this whole Hermes install to the account that approves the code: its inference, its
+`/login` binds this whole Zeloo install to the account that approves the code: its inference, its
 connectors, every chat it serves. On a gateway several people can DM, set `allow_admin_from` for
 the platform (see the [slash-command access guide](/reference/slash-commands)) so only an operator
 can run it.
@@ -95,40 +95,40 @@ can run it.
 ### From a terminal
 
 ```bash
-hermes auth upgrade
+Zeloo auth upgrade
 ```
 
-1. Hermes prints a URL and a short code, and opens the browser unless you pass `--no-browser`
+1. Zeloo prints a URL and a short code, and opens the browser unless you pass `--no-browser`
    or you are in an SSH session. Never share the code.
 2. Sign in to Nous Portal in the browser and confirm.
 3. Back in the terminal: `Signed in as you@example.com.`
    If your default model was `nous/welcome`, a second line names the model your account now
    uses, for example `Default model is now upstage/solar-pro4:free.`
 
-Inference moves to your account's model catalog, paid tools unlock, and `hermes auth status`
+Inference moves to your account's model catalog, paid tools unlock, and `Zeloo auth status`
 shows your account instead of the free-tier line.
 `nous/welcome` stays with the free tier: an account that was using it lands on the recommended
-model for its plan (the same one a fresh `hermes model` pick would suggest), and a default model
+model for its plan (the same one a fresh `Zeloo model` pick would suggest), and a default model
 you chose yourself is left alone. If no recommendation is available at that moment, no default is
-set and Hermes tells you to run `hermes model`.
+set and Zeloo tells you to run `Zeloo model`.
 
-`/login` in a chat, or `hermes auth upgrade` in a terminal, is offered wherever the free tier is
+`/login` in a chat, or `Zeloo auth upgrade` in a terminal, is offered wherever the free tier is
 present, including installs that run inference on their own API key. Signing in still unlocks paid
 tools for those installs.
 
 :::note Plain login starts fresh
-`hermes auth add nous --type oauth` also signs you in, but it replaces the free tier outright and
-does not carry your connectors over. Use `/login`, or `hermes auth upgrade` in a terminal, when
+`Zeloo auth add nous --type oauth` also signs you in, but it replaces the free tier outright and
+does not carry your connectors over. Use `/login`, or `Zeloo auth upgrade` in a terminal, when
 you have connectors you want to keep.
 :::
 
-## On Hermes Desktop
+## On Zeloo Desktop
 
 The desktop app runs on the same free tier as the CLI and shows it in four places:
 
 | Where | What you see |
 |---|---|
-| First launch | A ready screen: "Hermes is ready." with the default model `nous/welcome`, a Free tier badge, and **Begin**. "Sign in with a Nous account instead" and "Other providers" sit under it. The screen shows once. |
+| First launch | A ready screen: "Zeloo is ready." with the default model `nous/welcome`, a Free tier badge, and **Begin**. "Sign in with a Nous account instead" and "Other providers" sit under it. The screen shows once. |
 | First launch with your own API key already present | A one-time strip above the composer: "Free Nous inference and connectors are now available." with **Open model picker**, **Sign in** and **Dismiss**. |
 | Status bar | A chip "Nous · free tier · nous/welcome" with a **Sign in** badge while the free tier carries inference. You can hide it from the bar's right-click menu. |
 | Settings › Billing | "You're on the Nous free tier" with one **Sign in** button; the summary reads Plan "Free tier", Model `nous/welcome`, Connectors "Included". There is no balance and nothing to pay, so no payment or usage sections appear. |
@@ -148,7 +148,7 @@ will not see it again on the desktop for that free-tier identity, and the other 
 ## Turning the free tier off
 
 ```bash
-hermes config set nous.guest false
+Zeloo config set nous.guest false
 ```
 
 `nous.guest` is a normal `config.yaml` setting (default `true`), not an environment variable.
@@ -158,19 +158,19 @@ With it off:
 |---|---|---|
 | Free inference on `nous/welcome` | Available | Off |
 | Connectors without sign-in | Available | Off |
-| Free-tier row in `hermes model` | Shown | Hidden |
-| Fresh install with nothing configured | Chats immediately | Offered `hermes setup` |
+| Free-tier row in `Zeloo model` | Shown | Hidden |
+| Fresh install with nothing configured | Chats immediately | Offered `Zeloo setup` |
 | Signing in with a Nous account | Works | Works |
 
 Nothing else changes. A signed-in Nous account, your own API keys, and every other provider work
 exactly as before. Set it back to `true` and the free tier returns on the next command that
 needs it.
 
-## What `hermes logout` does
+## What `Zeloo logout` does
 
 | Situation | Result |
 |---|---|
-| Only the free tier is present | Nothing is cleared. Hermes prints: `You're not signed in. Free inference and connectors are always on. Run hermes auth to sign in with a Nous account.` |
+| Only the free tier is present | Nothing is cleared. Zeloo prints: `You're not signed in. Free inference and connectors are always on. Run Zeloo auth to sign in with a Nous account.` |
 | Signed in with a Nous account | The sign-in is removed from this profile and from the shared store, so no other profile on this machine picks it back up. With `nous.guest: true` the install returns to the free tier at its next start. |
 | Another provider is active | Unchanged behaviour: that provider's stored credential is cleared. |
 
@@ -181,20 +181,20 @@ itself.
 
 | Symptom | What it means | What to do |
 |---|---|---|
-| First command prints `It looks like Hermes isn't configured yet` and offers `hermes setup` | The free tier could not be set up within a few seconds: you are offline, or the free tier is not open on the portal Hermes is pointed at, or it is rate limited. | Come back online and run the command again, or run `hermes setup` and add a provider of your own. Nothing is left half-configured. |
-| `Nous free tier is not open on this portal.` | The portal Hermes is pointed at is not offering the free tier right now. If you set `HERMES_PORTAL_BASE_URL`, that portal may not have it at all. | Sign in with an account, unset a portal override you no longer need, or add your own key with `hermes setup`. |
-| `Nous free tier is rate limited; try again shortly.` | The portal is throttling new free-tier setups at the moment. | Wait a few minutes and retry, or add your own key with `hermes setup`. |
-| `This needs a Nous account.` | You called a paid Tool Gateway tool on the free tier. | `/login` in a chat, `hermes auth upgrade` in a terminal, or configure that tool with your own key in `hermes tools`. |
+| First command prints `It looks like Zeloo isn't configured yet` and offers `Zeloo setup` | The free tier could not be set up within a few seconds: you are offline, or the free tier is not open on the portal Zeloo is pointed at, or it is rate limited. | Come back online and run the command again, or run `Zeloo setup` and add a provider of your own. Nothing is left half-configured. |
+| `Nous free tier is not open on this portal.` | The portal Zeloo is pointed at is not offering the free tier right now. If you set `ZELOO_PORTAL_BASE_URL`, that portal may not have it at all. | Sign in with an account, unset a portal override you no longer need, or add your own key with `Zeloo setup`. |
+| `Nous free tier is rate limited; try again shortly.` | The portal is throttling new free-tier setups at the moment. | Wait a few minutes and retry, or add your own key with `Zeloo setup`. |
+| `This needs a Nous account.` | You called a paid Tool Gateway tool on the free tier. | `/login` in a chat, `Zeloo auth upgrade` in a terminal, or configure that tool with your own key in `Zeloo tools`. |
 | Model picker shows only `nous/welcome` under Nous | Expected on the free tier. | Sign in for the full catalog, or add an API key for another provider. |
-| The free tier stopped working after two weeks away | The free-tier identity expired (see below) and is replaced at the next start, or the next time a turn or connector finds it retired. | Nothing; start Hermes again. Connectors linked before the gap need to be linked again unless you had signed in. |
+| The free tier stopped working after two weeks away | The free-tier identity expired (see below) and is replaced at the next start, or the next time a turn or connector finds it retired. | Nothing; start Zeloo again. Connectors linked before the gap need to be linked again unless you had signed in. |
 
 ## Privacy
 
-To make the free tier work, Hermes creates an identity on the Nous portal the first time it
-needs one and stores the credential in your Hermes directory, shared across the profiles under
+To make the free tier work, Zeloo creates an identity on the Nous portal the first time it
+needs one and stores the credential in your Zeloo directory, shared across the profiles under
 that directory. That identity holds no email address, no name, and no other personal data; it
 exists so inference and connector calls can be authenticated and rate limited. It expires after
-14 days without use, at which point Hermes transparently creates a new one the next time you run
-a command. Signing in (`/login`, or `hermes auth upgrade` in a terminal) moves what that identity
+14 days without use, at which point Zeloo transparently creates a new one the next time you run
+a command. Signing in (`/login`, or `Zeloo auth upgrade` in a terminal) moves what that identity
 holds (your linked connectors) into your account. Turning the free tier off with
 `nous.guest: false` means no identity is created or used at all.

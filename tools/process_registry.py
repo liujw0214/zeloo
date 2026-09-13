@@ -25,11 +25,11 @@ _IS_WINDOWS = platform.system() == "Windows"
 # See #70716.
 _IS_LINUX = platform.system() == "Linux"
 from tools.environments.local import _find_shell, _resolve_safe_cwd, _sanitize_subprocess_env
-from hermes_cli._subprocess_compat import windows_hide_flags
+from zeloo_cli._subprocess_compat import windows_hide_flags
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from hermes_cli.config import get_hermes_home
+from zeloo_cli.config import get_zeloo_home
 
 from tools.process_registry_notifications import format_process_notification
 from tools.process_registry_checkpoint import ProcessCheckpointMixin
@@ -38,16 +38,16 @@ from tools.process_registry_results import load_completed_results, save_complete
 logger = logging.getLogger(__name__)
 
 # Crash-recovery checkpoint (gateway only)
-CHECKPOINT_PATH = get_hermes_home() / "processes.json"
+CHECKPOINT_PATH = get_zeloo_home() / "processes.json"
 _CHECKPOINT_PATH_AT_IMPORT = CHECKPOINT_PATH
 
 
 def _checkpoint_path() -> Path:
     """Active profile's checkpoint file at call time: the patched ``CHECKPOINT_PATH`` when a test
-    changed it, else live profile-scoped HERMES_HOME — the multiplexed gateway serves every
+    changed it, else live profile-scoped ZELOO_HOME — the multiplexed gateway serves every
     profile from one process, so the import-time constant would pin every profile's process
     checkpoint to the launch home."""
-    return CHECKPOINT_PATH if CHECKPOINT_PATH != _CHECKPOINT_PATH_AT_IMPORT else get_hermes_home() / "processes.json"
+    return CHECKPOINT_PATH if CHECKPOINT_PATH != _CHECKPOINT_PATH_AT_IMPORT else get_zeloo_home() / "processes.json"
 
 MAX_OUTPUT_CHARS = 200_000      # rolling output buffer
 FINISHED_TTL_SECONDS = 1800     # keep finished processes 30 minutes
@@ -238,7 +238,7 @@ def _systemd_run_user_scope_available() -> bool:
                 binary = shutil.which("systemd-run")
                 if binary:
                     # Unique unit avoids collisions; the timeout bounds D-Bus.
-                    probe_unit = f"hermes-probe-scope-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+                    probe_unit = f"Zeloo-probe-scope-{os.getpid()}-{uuid.uuid4().hex[:8]}"
                     result = subprocess.run(
                         _systemd_scope_argv(binary, probe_unit, "/bin/sh", "-c", "exit 0"),
                         capture_output=True,
@@ -259,11 +259,11 @@ def _systemd_run_user_scope_available() -> bool:
 
 
 def _is_supervised_gateway_process() -> bool:
-    """Whether this process is the live, supervised Hermes gateway itself.
-    Supervisor markers and ``_HERMES_GATEWAY`` are inherited by every descendant (and
+    """Whether this process is the live, supervised Zeloo gateway itself.
+    Supervisor markers and ``_ZELOO_GATEWAY`` are inherited by every descendant (and
     importing ``gateway.run`` sets the latter), so also require ownership of the live
     gateway PID file — scopes are for the gateway, not terminal children or CLIs."""
-    if os.environ.get("_HERMES_GATEWAY") != "1":
+    if os.environ.get("_ZELOO_GATEWAY") != "1":
         return False
     try:
         from gateway.restart import is_gateway_supervisor_process
@@ -288,7 +288,7 @@ def _build_systemd_scope_argv(shell_argv: List[str], unit_suffix: str) -> List[s
     if binary is None:
         # Caller should have probed availability; never pass None into Popen anyway.
         return shell_argv
-    return _systemd_scope_argv(binary, f"hermes-worker-{unit_suffix}", *shell_argv)
+    return _systemd_scope_argv(binary, f"Zeloo-worker-{unit_suffix}", *shell_argv)
 
 
 def restart_safe_gateway_child_argv(
@@ -735,7 +735,7 @@ class ProcessRegistry(ProcessCheckpointMixin):
         """``config.yaml`` value for ``section.key``, else the DEFAULT_CONFIG value.
         Raises if config is unreadable; callers wrap with their own hard fallback so
         registry code paths never crash on a broken config file."""
-        from hermes_cli.config import DEFAULT_CONFIG, cfg_get, read_raw_config
+        from zeloo_cli.config import DEFAULT_CONFIG, cfg_get, read_raw_config
 
         val = cfg_get(read_raw_config(), section, key)
         return DEFAULT_CONFIG[section][key] if val is None else val
@@ -825,7 +825,7 @@ class ProcessRegistry(ProcessCheckpointMixin):
         return ProcessSession(
             id=f"proc_{uuid.uuid4().hex[:12]}", command=command, task_id=task_id,
             owner_task_id=owner_task_id or task_id, session_key=session_key, cwd=cwd,
-            parent_session_id=get_session_env("HERMES_SESSION_ID", ""),
+            parent_session_id=get_session_env("ZELOO_SESSION_ID", ""),
             started_at=time.time(), **extra)
 
     @staticmethod
@@ -850,7 +850,7 @@ class ProcessRegistry(ProcessCheckpointMixin):
         # This applies to both pipe mode and the PTY path above. See #70716.
         in_supervised_gateway = _IS_LINUX and _is_supervised_gateway_process()
         if in_supervised_gateway and _systemd_run_user_scope_available():
-            session.systemd_unit = f"hermes-worker-{unit_suffix}.scope"
+            session.systemd_unit = f"Zeloo-worker-{unit_suffix}.scope"
             return _build_systemd_scope_argv(argv, unit_suffix=unit_suffix)
         if in_supervised_gateway:
             # Under a supervisor but no private cgroup: a worker OOM can still take
@@ -1014,7 +1014,7 @@ class ProcessRegistry(ProcessCheckpointMixin):
         the correct sandbox context."""
         session = self._new_session(command, task_id, owner_task_id, session_key, cwd, env_ref=env, pid_scope="sandbox")
         temp_dir = self._env_temp_dir(env)
-        log_path, pid_path, exit_path = (f"{temp_dir}/hermes_bg_{session.id}.{ext}" for ext in ("log", "pid", "exit"))
+        log_path, pid_path, exit_path = (f"{temp_dir}/zeloo_bg_{session.id}.{ext}" for ext in ("log", "pid", "exit"))
         q = shlex.quote
         bg_command = (
             f"mkdir -p {q(temp_dir)} && "
@@ -1309,7 +1309,7 @@ class ProcessRegistry(ProcessCheckpointMixin):
         return session_id in self._completion_consumed
 
     def is_session_waiting(self, session_id: str) -> bool:
-        """Whether a goal loop (``hermes_cli.goals`` wait barrier) should stay parked on
+        """Whether a goal loop (``zeloo_cli.goals`` wait barrier) should stay parked on
         this session: still running AND, with ``watch_patterns``, none matched yet (a
         long-lived watcher unblocks on its trigger, not on exit). Unknown/exited/
         already-fired sessions return False so a stale barrier can never wedge the loop."""
@@ -1326,7 +1326,7 @@ class ProcessRegistry(ProcessCheckpointMixin):
         self, task_id: Optional[str] = None, *, timeout: float | None = None, poll_interval: float = 1.0,
     ) -> dict:
         """Bounded linger for ``notify_on_complete`` background processes at one-shot exit.
-        A one-shot CLI run (``hermes -q/-Q/-z``) exits when its turn ends; a background
+        A one-shot CLI run (``Zeloo -q/-Q/-z``) exits when its turn ends; a background
         process it spawned still holds a stdout pipe owned by the dying parent and dies of
         SIGPIPE seconds later (Bot Mode handoff replies were the visible casualty). Only
         ``notify_on_complete`` processes carry a completion contract — servers/daemons/
@@ -1335,7 +1335,7 @@ class ProcessRegistry(ProcessCheckpointMixin):
         disables). Each pass re-reconciles child state so an orphaned-pipe exit can't wedge
         the linger. Returns ``{"waited", "completed", "timed_out"}`` id lists.
 
-        Bot Mode handoff REPLIES are the visible casualty (#90879): a recipient invoked as ``hermes -p <bot>
+        Bot Mode handoff REPLIES are the visible casualty (#90879): a recipient invoked as ``Zeloo -p <bot>
         chat -Q --query-file ...`` dispatches its reply via ``message_agent`` / ``bot_relay`` exactly this
         way, then exits, and the reply process is destroyed ~3s later. The sender waits forever for a reply
         that was already killed.
@@ -1530,14 +1530,14 @@ class ProcessRegistry(ProcessCheckpointMixin):
     def _reconcile_local_exit(self, session: "ProcessSession") -> None:
         """Reconcile ``session.exited`` against the real child state.
         The reader flips ``exited`` only at EOF; when the direct child has exited but a
-        descendant (e.g. a daemon from ``hermes update``) holds the pipe open, poll()
+        descendant (e.g. a daemon from ``Zeloo update``) holds the pipe open, poll()
         would report "running" forever. If ``Popen.poll()`` has an exit code, drain
         readable bytes non-blocking and flip ``exited``. No-op for env/PTY, exited and
         detached sessions.
 
         The reader thread (`_reader_loop`) sets `session.exited = True` only in its `finally` block, which
         runs when `stdout.read()` returns EOF. If the direct `Popen` child has exited but a descendant
-        process (e.g. a daemon spawned by `hermes update` restarting the gateway) is still holding the
+        process (e.g. a daemon spawned by `Zeloo update` restarting the gateway) is still holding the
         stdout pipe open, the reader blocks forever and poll() keeps returning "running" indefinitely (issue
         #17327 — 74 polls over 7 minutes on Feishu).
         """
@@ -1853,7 +1853,7 @@ class ProcessRegistry(ProcessCheckpointMixin):
         kill the process — output keeps buffering and the tab can be reopened from the
         status stack. Errors when no UI close sink is wired."""
         if self.on_close is None:
-            return {"status": "error", "error": "close_terminal is only available in the Hermes desktop app."}
+            return {"status": "error", "error": "close_terminal is only available in the Zeloo desktop app."}
         # The session may already be finished (or pruned) — the tab can still
         # linger and be closed, so a missing session is not an error here.
         try:

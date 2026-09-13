@@ -715,7 +715,7 @@ export function TreeGroup({
           {isEmpty ? (
             <div className="grid h-full place-items-center">
               {/* Same decode primitive as the CONNECTING boot overlay. */}
-              <DecodeText className="text-(--ui-text-quaternary)" cursor prefix={1} text="HERMES" />
+              <DecodeText className="text-(--ui-text-quaternary)" cursor prefix={1} text="Zeloo" />
             </div>
           ) : (
             keptPanes.map(paneId => {
@@ -931,7 +931,7 @@ function ZoneDropOverlay({ node }: { node: GroupNode }) {
   return (
     <div
       className="pointer-events-none absolute inset-0 z-40"
-      style={{ animation: `hermes-zone-fade ${OVERLAY_FADE_MS}ms linear both` }}
+      style={{ animation: `Zeloo-zone-fade ${OVERLAY_FADE_MS}ms linear both` }}
     >
       <div
         className={cn(

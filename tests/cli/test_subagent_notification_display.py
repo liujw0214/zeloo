@@ -5,7 +5,7 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from cli import HermesCLI
+from cli import ZELOOCLI
 from tools.process_registry_notifications import format_process_notification
 from tui_gateway import server
 
@@ -20,7 +20,7 @@ def test_completion_display_keeps_payload_separate_across_surfaces(monkeypatch, 
                  "results": [{"task_index": 1, "status": status, "truncated": truncated, "summary": "Full result evidence"}]}
         original = copy.deepcopy(event)
         payload = format_process_notification(event)
-        cli = HermesCLI.__new__(HermesCLI)
+        cli = ZELOOCLI.__new__(ZELOOCLI)
         cli.session_id = event["session_key"]
         cli._pending_input = queue.Queue()
         registry = SimpleNamespace(drain_notifications=lambda **kw: [(event, payload)], completion_queue=queue.Queue())
@@ -62,8 +62,8 @@ def test_completion_display_keeps_payload_separate_across_surfaces(monkeypatch, 
         from agent.prompt_caching import build_prompt_cache_plan, strip_anthropic_cache_control
         plan = build_prompt_cache_plan([core_message], tools=None)
         assert strip_anthropic_cache_control(plan.messages)[0]["content"] == payload
-        from hermes_cli.cli_agent_setup_mixin import _collect_resume_entries
-        from hermes_state import SessionDB
+        from zeloo_cli.cli_agent_setup_mixin import _collect_resume_entries
+        from zeloo_state import SessionDB
         with SessionDB(tmp_path / f"{status}-{truncated}.db") as db:
             db.create_session(cli.session_id, source="cli")
             db.append_messages_batch(cli.session_id, cli.conversation_history)

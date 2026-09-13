@@ -2,7 +2,7 @@
  * THE PARTING SIGNPOST — one lit moment, at the one moment it earns itself.
  *
  * The handoff is the only point in the run where the ground moves under the
- * user: they were talking to Hermes on its own profile, and they land mid-build
+ * user: they were talking to Zeloo on its own profile, and they land mid-build
  * in a session of their own. The chat they just spent five minutes in is still
  * there, one square away in the profile rail, and nothing on screen says so.
  *
@@ -65,6 +65,6 @@ export async function showProfileSignpost(): Promise<void> {
     selector: RAIL,
     side: 'right',
     text: "You're in your own workspace now, and this is where the profiles live. The chat we just had is still in there — come back to it whenever you want a hand.",
-    title: 'Hermes is still next door'
+    title: 'Zeloo is still next door'
   })
 }

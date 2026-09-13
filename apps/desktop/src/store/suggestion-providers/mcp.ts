@@ -1,5 +1,5 @@
 import { capabilityScoped } from '@/api/client'
-import { addMcpServer, getMcpCatalog, listMcpServers, removeMcpServer } from '@/hermes'
+import { addMcpServer, getMcpCatalog, listMcpServers, removeMcpServer } from '@/Zeloo'
 import { translateNow } from '@/i18n'
 import { completeMcpDesktopOAuth, McpOAuthCancelled } from '@/lib/mcp-dashboard-oauth'
 import { MCP_DIRECTORY } from '@/lib/mcp-directory'
@@ -13,7 +13,7 @@ import { notifyError } from '@/store/notifications'
  *
  * Matches the draft against the Nous-approved MCP catalog's `suggest`
  * metadata (`GET /api/mcp/catalog` — the same reviewed manifests behind
- * `hermes mcp catalog`), by whole-word keyword and pasted-link host suffix,
+ * `Zeloo mcp catalog`), by whole-word keyword and pasted-link host suffix,
  * excluding servers already configured. The catalog is the single source of
  * truth for suggestible servers; the renderer-local `lib/mcp-directory.ts`
  * remains only as a compatibility rung for older backends whose catalog

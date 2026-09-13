@@ -3,12 +3,12 @@ import {
   isGatewayWebSocketUrl,
   JsonRpcGatewayError,
   resolveGatewayWsUrl
-} from '@hermes/shared'
+} from '@Zeloo/shared'
 import { useEffect, useRef } from 'react'
 
 import { shouldApplyPostBootProgressError } from '@/components/boot-failure-reauth'
-import type { DesktopBootProgress, HermesConnection } from '@/global'
-import { HermesGateway } from '@/hermes'
+import type { DesktopBootProgress, ZELOOConnection } from '@/global'
+import { ZELOOGateway } from '@/Zeloo'
 import { translateNow } from '@/i18n'
 import { desktopDefaultCwd } from '@/lib/desktop-fs'
 import { decideLivenessForceClose, LIVENESS_REPROBE_DELAY_MS } from '@/lib/gateway-liveness-policy'
@@ -88,7 +88,7 @@ import {
   resetTileRuntimeBindings
 } from '@/store/session-states'
 import { windowProfileOverride } from '@/store/windows'
-import type { RpcEvent } from '@/types/hermes'
+import type { RpcEvent } from '@/types/Zeloo'
 
 import { stashGatewaySurvivor, survivorIsStale, takeGatewaySurvivor } from './gateway-hmr-survivor'
 
@@ -135,7 +135,7 @@ const BOOT_RETRY_BASE_DELAY_MS = 2_000
 // own connect timeout.
 
 /** Registry identity whose runtimes died with the primary connection. */
-export function primaryRuntimeConnectionId(connection: Pick<HermesConnection, 'connectionId' | 'mode'>): null | string {
+export function primaryRuntimeConnectionId(connection: Pick<ZELOOConnection, 'connectionId' | 'mode'>): null | string {
   const connectionId = connection.connectionId?.trim()
 
   if (connectionId) {
@@ -149,10 +149,10 @@ interface GatewayBootOptions {
   beforeConnectionSwitch: () => void
   handleGatewayEvent: (event: RpcEvent) => void
   onConnectionReady: (
-    connection: Awaited<ReturnType<NonNullable<typeof window.hermesDesktop>['getConnection']>> | null
+    connection: Awaited<ReturnType<NonNullable<typeof window.ZELOODesktop>['getConnection']>> | null
   ) => void
-  onGatewayReady: (gateway: HermesGateway | null) => void
-  refreshHermesConfig: (force?: boolean, shouldPublish?: () => boolean) => Promise<void>
+  onGatewayReady: (gateway: ZELOOGateway | null) => void
+  refreshZELOOConfig: (force?: boolean, shouldPublish?: () => boolean) => Promise<void>
   refreshSessions: (shouldPublish?: () => boolean) => Promise<void>
 }
 
@@ -161,7 +161,7 @@ export function useGatewayBoot({
   handleGatewayEvent,
   onConnectionReady,
   onGatewayReady,
-  refreshHermesConfig,
+  refreshZELOOConfig,
   refreshSessions
 }: GatewayBootOptions) {
   const callbacksRef = useRef({
@@ -169,7 +169,7 @@ export function useGatewayBoot({
     handleGatewayEvent,
     onConnectionReady,
     onGatewayReady,
-    refreshHermesConfig,
+    refreshZELOOConfig,
     refreshSessions
   })
 
@@ -178,15 +178,15 @@ export function useGatewayBoot({
     handleGatewayEvent,
     onConnectionReady,
     onGatewayReady,
-    refreshHermesConfig,
+    refreshZELOOConfig,
     refreshSessions
   }
 
   useEffect(() => {
     let cancelled = false
-    const desktop = window.hermesDesktop
+    const desktop = window.ZELOODesktop
 
-    const publish = (next: HermesConnection | null) => {
+    const publish = (next: ZELOOConnection | null) => {
       callbacksRef.current.onConnectionReady(next)
       setConnection(next)
       desktop?.setActiveConnectionRoute?.(
@@ -219,7 +219,7 @@ export function useGatewayBoot({
     // --- Reconnect-after-sleep machinery -------------------------------------
     // macOS sleep silently drops the renderer's WebSocket. The backend Python
     // process keeps running, but nothing re-opened the socket on wake, so the
-    // composer stayed disabled forever on "Starting Hermes...". Once the
+    // composer stayed disabled forever on "Starting Zeloo...". Once the
     // initial boot succeeds we treat any non-open state as recoverable and
     // reconnect with backoff, and we nudge a reconnect on the OS/browser
     // signals that fire around wake (power resume, network online, the window
@@ -334,7 +334,7 @@ export function useGatewayBoot({
         // remote backend can become unreachable, but it has no child process
         // whose 'exit' would clear the main process's cached descriptor — without
         // this the renderer re-dials the same dead endpoint forever and stays on
-        // "Starting Hermes…". The probe is a no-op for a healthy or local backend.
+        // "Starting Zeloo…". The probe is a no-op for a healthy or local backend.
         // Bounded like the two awaits below: a wedged revalidation (#93454) is
         // the specific hang this loop must survive, not just a rejection.
         await withTimeout(
@@ -350,7 +350,7 @@ export function useGatewayBoot({
         const conn = await withTimeout(
           desktop.getConnection(),
           RECONNECT_ATTEMPT_TIMEOUT_MS,
-          'Timed out reconnecting to Hermes backend'
+          'Timed out reconnecting to Zeloo backend'
         )
 
         setPrimaryGatewayConnection(conn)
@@ -369,7 +369,7 @@ export function useGatewayBoot({
         // Re-mint the WS URL before reconnecting. OAuth tickets are single-use
         // with a short TTL, so the ticket baked into the cached conn.wsUrl is
         // dead on every reconnect after the initial boot — reusing it surfaces
-        // as an opaque "Could not connect to Hermes gateway". resolveGatewayWsUrl
+        // as an opaque "Could not connect to Zeloo gateway". resolveGatewayWsUrl
         // mints a fresh ticket rather than connecting with a stale one. An
         // explicit auth rejection asks for sign-in; transport failures stay in
         // this reconnect loop. For local/token gateways the URL carries a
@@ -413,7 +413,7 @@ export function useGatewayBoot({
         // A manual retry may finish after the user has moved to another route.
         if (!manual || (isActivePrimary() && gatewayActivationEpoch() === manual.activationEpoch)) {
           reconcileBusyStatesOnReconnect()
-          await callbacksRef.current.refreshHermesConfig().catch(() => undefined)
+          await callbacksRef.current.refreshZELOOConfig().catch(() => undefined)
           await callbacksRef.current.refreshSessions().catch(() => undefined)
         }
       } catch (err) {
@@ -642,7 +642,7 @@ export function useGatewayBoot({
         const conn = await withTimeout(
           desktop.getConnection(windowProfileOverride() ?? undefined),
           BACKEND_BOOT_WAIT_TIMEOUT_MS,
-          'Timed out reconnecting to Hermes backend'
+          'Timed out reconnecting to Zeloo backend'
         )
 
         if (!ownsSwitch()) {
@@ -688,7 +688,7 @@ export function useGatewayBoot({
 
         await Promise.all([
           seedDefaultCwd(ownsSwitch),
-          callbacksRef.current.refreshHermesConfig(false, ownsSwitch).catch(() => undefined),
+          callbacksRef.current.refreshZELOOConfig(false, ownsSwitch).catch(() => undefined),
           callbacksRef.current.refreshSessions(ownsSwitch).catch(() => undefined)
         ])
 
@@ -734,7 +734,7 @@ export function useGatewayBoot({
         return
       }
 
-      // Soft switch / post-boot startHermes re-emits progress — ignore so the
+      // Soft switch / post-boot startZELOO re-emits progress — ignore so the
       // cold-boot CONNECTING overlay stays down. Post-boot errors are gated:
       // only confirmed reauth takes the full-screen recovery surface. Transient
       // ticket-mint / host-unreachable failures must stay in the reconnect loop
@@ -796,7 +796,7 @@ export function useGatewayBoot({
       }
     }
 
-    const gateway = adoptedFromHmr ? survivor!.gateway : new HermesGateway()
+    const gateway = adoptedFromHmr ? survivor!.gateway : new ZELOOGateway()
 
     callbacksRef.current.onGatewayReady(gateway)
     setPrimaryGateway(gateway, survivor?.profile ?? normalizeProfileKey($activeGatewayProfile.get()))
@@ -927,7 +927,7 @@ export function useGatewayBoot({
         activeGateway()?.close()
 
         if (!(await ensureActiveGatewayOpen())) {
-          throw new Error('Hermes gateway is not connected')
+          throw new Error('Zeloo gateway is not connected')
         }
 
         return
@@ -1077,13 +1077,13 @@ export function useGatewayBoot({
         // backend directly — ensureBackend spawns/reuses it from the pool.
         // Everything else keeps dialing the primary.
         // Bounded like the reconnect path (#93454): a wedged main-process
-        // round-trip must not hang "Starting Hermes…" forever. Initial boot
+        // round-trip must not hang "Starting Zeloo…" forever. Initial boot
         // rides out a full backend cold spawn, so it gets the shared 45s
         // backend-boot budget, not the 20s reconnect budget.
         const conn = await withTimeout(
           desktop.getConnection(windowProfileOverride() ?? undefined),
           BACKEND_BOOT_WAIT_TIMEOUT_MS,
-          'Timed out connecting to Hermes backend'
+          'Timed out connecting to Zeloo backend'
         )
 
         if (cancelled) {
@@ -1118,7 +1118,7 @@ export function useGatewayBoot({
         // conn.wsUrl is stale; resolveGatewayWsUrl() re-mints it rather than
         // connecting with a dead ticket. Auth rejection asks for sign-in. This
         // await is bounded like the reconnect path (#93454) so a wedged mint
-        // reaches the recovery affordance instead of hanging "Starting Hermes…".
+        // reaches the recovery affordance instead of hanging "Starting Zeloo…".
         const wsUrl = await withTimeout(
           resolveGatewayWsUrl(desktop, conn),
           RECONNECT_ATTEMPT_TIMEOUT_MS,
@@ -1157,12 +1157,12 @@ export function useGatewayBoot({
           // post-connect pass covers the remote backend default. Non-fatal: a
           // failed sync must not abort boot (the remembered cwd remains).
           seedDefaultCwd().catch(err => console.warn('Failed to sync default workspace cwd post-connect', err)),
-          callbacksRef.current.refreshHermesConfig(),
+          callbacksRef.current.refreshZELOOConfig(),
           // Session-list population is never boot-fatal. The gateway WS is
           // already open by this point — a failed sidebar fetch (transient
           // blip, or an endpoint the fallback couldn't cover) must leave the
           // app usable with an empty sidebar (the reconnect/turn refreshes
-          // retry it), not brick boot behind the "Hermes couldn't start"
+          // retry it), not brick boot behind the "Zeloo couldn't start"
           // overlay. Matches the reconnect + softSwitch call sites.
           callbacksRef.current.refreshSessions().catch(() => {
             setSessionsLoading(false)
@@ -1232,7 +1232,7 @@ export function useGatewayBoot({
       // input doesn't sit disabled after the swap.
       reportPrimaryGatewayState(gateway.connectionState)
 
-      await callbacksRef.current.refreshHermesConfig().catch(() => undefined)
+      await callbacksRef.current.refreshZELOOConfig().catch(() => undefined)
 
       if (cancelled) {
         return

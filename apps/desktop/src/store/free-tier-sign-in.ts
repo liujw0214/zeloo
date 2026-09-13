@@ -1,6 +1,6 @@
 import { atom } from 'nanostores'
 
-import { cancelOAuthSession, listOAuthProviders, pollOAuthSession, startOAuthLogin } from '@/hermes'
+import { cancelOAuthSession, listOAuthProviders, pollOAuthSession, startOAuthLogin } from '@/Zeloo'
 
 import { type FreeTierRequester, NOUS_PROVIDER_ID, refreshFreeTierStatus } from './free-tier'
 
@@ -123,9 +123,9 @@ const FAILURE_BY_REASON: Record<string, FreeTierSignInFailure> = {
 // when the bridge isn't there (dev preview, tests) so the flow never strands in
 // a waiting state. Same contract as the onboarding store's opener.
 async function openSignInUrl(url: string) {
-  if (window.hermesDesktop?.openExternal) {
+  if (window.ZELOODesktop?.openExternal) {
     try {
-      await window.hermesDesktop.openExternal(url)
+      await window.ZELOODesktop.openExternal(url)
 
       return
     } catch {
@@ -137,7 +137,7 @@ async function openSignInUrl(url: string) {
 }
 
 /**
- * Drive one sign-in attempt end to end: resolve what identity this Hermes is
+ * Drive one sign-in attempt end to end: resolve what identity this Zeloo is
  * on, start the transfer, open the consent page, then poll until it resolves.
  * Safe to call again from a "Try again" button — it clears any previous timers
  * first.

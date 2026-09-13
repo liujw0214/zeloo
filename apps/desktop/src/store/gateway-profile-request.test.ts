@@ -9,8 +9,8 @@ const secondaryGateways: Array<{
 
 let connectGate: Promise<void> | null = null
 
-vi.mock('@/hermes', () => ({
-  HermesGateway: class {
+vi.mock('@/Zeloo', () => ({
+  ZELOOGateway: class {
     connectionState = 'closed'
     connect = vi.fn(async () => {
       if (this.connectionState === 'connecting') {
@@ -63,7 +63,7 @@ const {
 } = await import('./gateway')
 
 function installDesktop(getConnection: ReturnType<typeof vi.fn>): void {
-  ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+  ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = {
     getConnection,
     touchBackend: vi.fn(async () => undefined)
   }
@@ -86,7 +86,7 @@ beforeEach(async () => {
 afterEach(() => {
   closeSecondaryGateways()
   vi.clearAllMocks()
-  delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
+  delete (window as unknown as { ZELOODesktop?: unknown }).ZELOODesktop
 })
 
 describe('requestGatewayForProfile', () => {
@@ -205,7 +205,7 @@ describe('requestGatewayForAgent', () => {
     setPrimaryGateway(primary as never, 'default')
     setPrimaryGatewayConnection({ connectionId: 'remote-primary' })
 
-    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+    ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = {
       getConnection: vi.fn(),
       getConnectionFor,
       getGatewayWsUrlFor: vi.fn(async () => ({ ok: true as const, wsUrl: 'wss://remote.invalid/api/ws' })),
@@ -243,7 +243,7 @@ describe('requestGatewayForAgent', () => {
     setPrimaryGateway(primary as never, 'default')
     setPrimaryGatewayConnection({ connectionId: 'remote-primary' })
 
-    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+    ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = {
       getConnection: vi.fn(),
       getConnectionFor,
       getGatewayWsUrlFor: vi.fn(async () => ({ ok: true as const, wsUrl: 'wss://remote.invalid/api/ws' })),
@@ -276,7 +276,7 @@ describe('requestGatewayForAgent', () => {
     }))
 
     setPrimaryGateway(primary as never, 'default')
-    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+    ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = {
       getConnection,
       getConnectionFor,
       getGatewayWsUrlFor,
@@ -319,7 +319,7 @@ describe('requestGatewayForAgent', () => {
     }))
 
     setPrimaryGateway(primary as never, 'default')
-    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+    ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = {
       getConnection,
       getConnectionFor,
       getGatewayWsUrlFor: vi.fn(async ({ connectionId, profile }) => ({
@@ -347,7 +347,7 @@ describe('requestGatewayForAgent', () => {
 
     setPrimaryGateway(primary as never, 'default')
     configureGatewayRegistry({ onActiveConnectionInvalidated, onEvent: vi.fn() })
-    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+    ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = {
       getConnection: vi.fn(),
       getConnectionFor,
       getGatewayWsUrlFor: vi.fn(async ({ connectionId, profile }) => ({
@@ -376,7 +376,7 @@ describe('requestGatewayForAgent', () => {
 
     setPrimaryGateway(primary as never, 'pinned')
     configureGatewayRegistry({ onActiveConnectionChanged, onActiveConnectionInvalidated, onEvent: vi.fn() })
-    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+    ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = {
       getConnection: vi.fn(),
       getConnectionFor: vi.fn(async ({ connectionId, profile }) => ({ connectionId, port: 5151, profile })),
       getGatewayWsUrlFor: vi.fn(async ({ connectionId, profile }) => ({
@@ -413,7 +413,7 @@ describe('requestGatewayForAgent', () => {
 
     setPrimaryGateway(primary as never, 'default')
     configureGatewayRegistry({ onActiveConnectionChanged, onEvent: vi.fn() })
-    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+    ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = {
       getConnection: vi.fn(async profile => ({ port: 4242, profile })),
       getConnectionFor: vi.fn(async ({ connectionId, profile }) => ({ connectionId, port: 5151, profile })),
       getGatewayWsUrlFor: vi.fn(async ({ connectionId, profile }) => ({
@@ -447,7 +447,7 @@ describe('requestGatewayForAgent', () => {
 
     setPrimaryGateway(primary as never, 'default')
     configureGatewayRegistry({ onActiveConnectionChanged, onEvent: vi.fn() })
-    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+    ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = {
       getConnection: vi.fn(async profile => ({ port: 4242, profile })),
       getConnectionFor: vi.fn(async ({ connectionId, profile }) => ({ connectionId, port: 5151, profile })),
       getGatewayWsUrlFor: vi.fn(async ({ connectionId, profile }) => ({
@@ -476,7 +476,7 @@ describe('requestGatewayForAgent', () => {
 
 describe('retainGatewayForAgent (#93602)', () => {
   function installRegistryDesktop() {
-    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+    ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = {
       getConnection: vi.fn(async (profile: null | string) => ({ port: 4242, profile, token: 't' })),
       getConnectionFor: vi.fn(async ({ connectionId, profile }) => ({ connectionId, port: 5151, profile })),
       getGatewayWsUrlFor: vi.fn(async ({ connectionId, profile }) => ({
@@ -567,7 +567,7 @@ describe('retainGatewayForAgent (#93602)', () => {
 
 describe('attached shared-remote group turns (#96493)', () => {
   function installAttachedSharedRemote() {
-    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+    ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = {
       getConnection: vi.fn(async (profile: null | string) => ({ port: 4242, profile, token: 't' })),
       getConnectionFor: vi.fn(async ({ connectionId, profile }: { connectionId: string; profile: string }) => ({
         connectionId,
@@ -614,7 +614,7 @@ describe('attached shared-remote group turns (#96493)', () => {
     const primary = makePrimary()
     setPrimaryGateway(primary as never, 'default')
     setPrimaryGatewayConnection({ connectionId: 'homelab' })
-    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+    ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = {
       getConnection: vi.fn(async (profile: null | string) => ({ port: 4242, profile, token: 't' })),
       getConnectionFor: vi.fn(async ({ connectionId, profile }: { connectionId: string; profile: string }) => ({
         connectionId,
@@ -640,7 +640,7 @@ describe('attached shared-remote group turns (#96493)', () => {
     const primary = makePrimary()
     setPrimaryGateway(primary as never, 'default')
     setPrimaryGatewayConnection({ connectionId: 'homelab' })
-    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+    ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = {
       getConnection: vi.fn(async (profile: null | string) => ({ port: 4242, profile, token: 't' })),
       getConnectionFor: vi.fn(async () => {
         throw new Error('Timed out connecting to profile "voter"')

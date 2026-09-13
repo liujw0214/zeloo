@@ -12,19 +12,19 @@ from typing import Any, Dict, List, Optional, Union
 
 import copy
 
-from hermes_constants import display_hermes_home
+from zeloo_constants import display_zeloo_home
 
 logger = logging.getLogger(__name__)
 
 # Heartbeat cadence keeping the caller's inactivity watchdog at bay while a manual
-# `cronjob(action="run")` executes in-process (comfortably below HERMES_AGENT_TIMEOUT).
+# `cronjob(action="run")` executes in-process (comfortably below ZELOO_AGENT_TIMEOUT).
 # Mirrors the 10s cadence of tools/environments/base.py::touch_activity_if_due (delegate_task's heartbeat
-# uses 30s) — comfortably below the 1800s default HERMES_AGENT_TIMEOUT. See #76502.
+# uses 30s) — comfortably below the 1800s default ZELOO_AGENT_TIMEOUT. See #76502.
 _CRON_RUN_HEARTBEAT_INTERVAL = 10.0
-# Hard ceiling: with HERMES_CRON_TIMEOUT=0 a truly hung run would otherwise mask the
+# Hard ceiling: with ZELOO_CRON_TIMEOUT=0 a truly hung run would otherwise mask the
 # gateway watchdog forever; past this the heartbeat stops and the watchdog regains authority.
-# The child cron run has its own inactivity watchdog (HERMES_CRON_TIMEOUT, default 600s) that bounds a
-# wedged job, but with HERMES_CRON_TIMEOUT=0 (explicit "unlimited") a truly hung run_one_job would otherwise
+# The child cron run has its own inactivity watchdog (ZELOO_CRON_TIMEOUT, default 600s) that bounds a
+# wedged job, but with ZELOO_CRON_TIMEOUT=0 (explicit "unlimited") a truly hung run_one_job would otherwise
 # mask the gateway watchdog forever — pre-#76502 the parent was at least reaped at ~1800s.
 _CRON_RUN_HEARTBEAT_CEILING = 6 * 3600.0
 
@@ -109,7 +109,7 @@ def _api_server_base_url() -> str:
     except ValueError:
         port = 8642
     try:
-        from hermes_cli.config import cfg_get, load_config_readonly
+        from zeloo_cli.config import cfg_get, load_config_readonly
         host = str(cfg_get(load_config_readonly(), "platforms", "api_server", "extra", "host", default="") or "").strip()
     except Exception:
         host = ""
@@ -357,12 +357,12 @@ def _latest_job_output_excerpt(job_id: str, max_chars: int = 2000) -> Optional[s
 
 def _reap_stale_executions(job_name: str) -> None:
     """Reap execution rows left 'claimed'/'running' by a provably-dead owner (e.g. a prior
-    one-shot `hermes cron run` that died mid-run). The ticker does this at startup; one-shot
+    one-shot `Zeloo cron run` that died mid-run). The ticker does this at startup; one-shot
     invocations have no such moment, so a stale claim would block every later manual run.
     Best-effort self-heal: must not block dispatch."""
     try:
         # Reap any execution row this job (or any job) left stranded 'claimed'/ 'running' by a dead owner
-        # process -- e.g. a PRIOR one-shot `hermes cron run` invocation whose dispatched runner died with
+        # process -- e.g. a PRIOR one-shot `Zeloo cron run` invocation whose dispatched runner died with
         # the exiting process before writing a terminal status (issue #86721). Safe and cheap: only
         # provably-dead owners (PID gone, or PID reused by a different process per its start time) are
         # reaped; a genuinely live owner's row is left untouched.
@@ -435,7 +435,7 @@ def _try_dispatch_background_run(
     _reap_stale_executions(job_name)
 
     # Routing capture BEFORE the claim: no routable session = no durable consumer for a detached
-    # completion, so don't claim-and-dispatch (direct callers like `hermes cron run` exit right after).
+    # completion, so don't claim-and-dispatch (direct callers like `Zeloo cron run` exit right after).
     session_key = _background_session_key(session_id)
     # CLI path: the approval contextvar is only bound during gateway/TUI turns. The CLI drain filters
     # completions by the durable agent session id (#64240), so stamp it as the key — an empty key would fail
@@ -461,7 +461,7 @@ def _try_dispatch_background_run(
     origin_ui_session_id = ""
     try:
         from gateway.session_context import get_session_env
-        origin_ui_session_id = get_session_env("HERMES_UI_SESSION_ID", "") or ""
+        origin_ui_session_id = get_session_env("ZELOO_UI_SESSION_ID", "") or ""
     except Exception:
         pass
 
@@ -917,7 +917,7 @@ def _cronjob_schema_overrides() -> dict:
     static schema is built once per process, but the multiplexed gateway serves every profile from
     that process, so a path baked in at import would name the launch profile's home (#95685)."""
     params = copy.deepcopy(CRONJOB_SCHEMA["parameters"])
-    params["properties"]["script"]["description"] = _script_description(display_hermes_home())
+    params["properties"]["script"]["description"] = _script_description(display_zeloo_home())
     return {"parameters": params}
 
 
@@ -971,7 +971,7 @@ Jobs run in a fresh session with no current-chat context, so prompts must be sel
             },
             "script": {
                 "type": "string",
-                "description": _script_description("the profile HERMES_HOME")
+                "description": _script_description("the profile ZELOO_HOME")
             },
             "monitor": {
                 "type": "string",
@@ -1015,14 +1015,14 @@ def check_cronjob_requirements() -> bool:
     internal; no crontab needed). Flags must be explicitly truthy via ``env_var_enabled``."""
     from utils import env_var_enabled
     return (
-        env_var_enabled("HERMES_INTERACTIVE")
-        or env_var_enabled("HERMES_GATEWAY_SESSION")
-        or env_var_enabled("HERMES_EXEC_ASK")
+        env_var_enabled("ZELOO_INTERACTIVE")
+        or env_var_enabled("ZELOO_GATEWAY_SESSION")
+        or env_var_enabled("ZELOO_EXEC_ASK")
     )
 
 
 # Agent-facing arguments forwarded verbatim to cronjob(). model / provider / base_url are
-# intentionally NOT here: per-job inference pins are user-owned (dashboard, `hermes cron
+# intentionally NOT here: per-job inference pins are user-owned (dashboard, `Zeloo cron
 # create/edit --model`, hand-edited jobs) — the agent must not point unattended spend at a
 # different model. Programmatic callers of cronjob() itself retain the parameters.
 _HANDLER_FORWARDED_ARGS = (
@@ -1075,7 +1075,7 @@ def __getattr__(name):  # PEP 562 — lazy so no import cycles
     if target is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     import importlib
-    from hermes_cli.plugin_compat import warn_once
+    from zeloo_cli.plugin_compat import warn_once
     warn_once(__name__, name, *target)
     return getattr(importlib.import_module(target[0]), target[1])
 # ---- END PLUGIN-COMPAT ----

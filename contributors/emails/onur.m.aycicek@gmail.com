@@ -1,2 +1,2 @@
 onuraycicek
-# Group room ordering, Hermes-Bot-Mode#105
+# Group room ordering, Zeloo-Bot-Mode#105

@@ -29,7 +29,7 @@ else:
         if claim is None:
             continue
         mark_execution_handoff_pending(claim['execution_id'])
-        home = Path(os.environ['HERMES_HOME'])
+        home = Path(os.environ['ZELOO_HOME'])
         payload = home / (claim['execution_id'] + '.json')
         ack = home / (claim['execution_id'] + '.ready')
         payload.write_text(json.dumps({'job': claim, 'profile_home': str(home),
@@ -43,9 +43,9 @@ else:
 
 def _fire(home, mode):
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith(('HERMES_', '_HERMES_'))
+           if not k.startswith(('zeloo_', '_ZELOO_'))
            and not k.endswith(('_API_KEY', '_TOKEN'))}
-    env['HERMES_HOME'] = str(home)
+    env['ZELOO_HOME'] = str(home)
     env['PYTHONPATH'] = str(Path(__file__).resolve().parents[2])
     result = subprocess.run([sys.executable, '-c', _FIRE, mode], env=env,
                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=90)
@@ -55,7 +55,7 @@ def _fire(home, mode):
 @pytest.mark.parametrize('mode', ['builtin', 'provider', 'worker'])
 def test_completed_occurrence_survives_restart_and_prestamp_rollback(tmp_path, mode):
     from datetime import timedelta
-    from hermes_time import now
+    from zeloo_time import now
 
     home = tmp_path / mode
     cron = home / 'cron'
@@ -148,7 +148,7 @@ def test_ledger_migration_and_completion_identity(tmp_path, monkeypatch):
 
         # A runnable legacy wall-clock value cannot establish an exact UTC identity.
         from datetime import timedelta
-        from hermes_time import now
+        from zeloo_time import now
         naive = jobs.create_job(prompt='legacy', schedule='every 4h')
         rows = jobs.load_jobs()
         for item in rows:

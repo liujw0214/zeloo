@@ -1,11 +1,11 @@
 """Unopenable admission lock files must fail CLOSED (#100368).
 
 `state.db` has two cross-process admission authorities that gate destructive
-work on a file several Hermes processes share (gateway service, the Desktop
-app's `hermes serve` backend, CLI sessions, the TUI slash worker):
+work on a file several Zeloo processes share (gateway service, the Desktop
+app's `Zeloo serve` backend, CLI sessions, the TUI slash worker):
 
-* `hermes_state_common.fts_rebuild_admission` — full structural FTS rebuilds
-* `hermes_state_repair._cross_process_repair_lock`   — writable_schema surgery / VACUUM
+* `zeloo_state_common.fts_rebuild_admission` — full structural FTS rebuilds
+* `zeloo_state_repair._cross_process_repair_lock`   — writable_schema surgery / VACUUM
 
 Both document themselves as fail-closed, and both honoured that only for a
 *timed-out* acquire. When the lock file could not be `open()`ed at all they
@@ -33,11 +33,11 @@ from pathlib import Path
 
 import pytest
 
-import hermes_state
-import hermes_state_repair
-import hermes_state_common
-from hermes_state import SessionDB
-from hermes_state_repair import repair_state_db_schema
+import zeloo_state
+import zeloo_state_repair
+import zeloo_state_common
+from zeloo_state import SessionDB
+from zeloo_state_repair import repair_state_db_schema
 
 
 def _make_unopenable(lock_path: Path) -> None:
@@ -62,7 +62,7 @@ def test_fts_admission_fails_closed_when_lock_file_is_unopenable(tmp_path):
     db_path = tmp_path / "state.db"
     _make_unopenable(db_path.with_name(db_path.name + ".fts_rebuild.lock"))
 
-    with hermes_state_common.fts_rebuild_admission(db_path) as admitted:
+    with zeloo_state_common.fts_rebuild_admission(db_path) as admitted:
         assert admitted is False
 
 
@@ -71,7 +71,7 @@ def test_fts_admission_still_admits_a_pathless_db(tmp_path):
 
     The fix must not turn the legitimate no-op case into a permanent deferral.
     """
-    with hermes_state_common.fts_rebuild_admission(None) as admitted:
+    with zeloo_state_common.fts_rebuild_admission(None) as admitted:
         assert admitted is True
 
 
@@ -132,7 +132,7 @@ def test_repair_lock_fails_closed_when_lock_file_is_unopenable(tmp_path):
     db_path = tmp_path / "state.db"
     _make_unopenable(db_path.with_name(db_path.name + ".repair.lock"))
 
-    with hermes_state_repair._cross_process_repair_lock(db_path) as holding:
+    with zeloo_state_repair._cross_process_repair_lock(db_path) as holding:
         assert holding is False
 
 
@@ -147,7 +147,7 @@ def test_repair_skips_surgery_when_lock_file_is_unopenable(tmp_path):
     db_path = tmp_path / "state.db"
     _build_healthy_db(db_path)
     _corrupt_duplicate_fts(db_path)
-    assert hermes_state_repair._db_opens_cleanly(db_path) is not None
+    assert zeloo_state_repair._db_opens_cleanly(db_path) is not None
     before = db_path.read_bytes()
 
     _make_unopenable(db_path.with_name(db_path.name + ".repair.lock"))

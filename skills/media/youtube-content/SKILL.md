@@ -2,11 +2,11 @@
 name: youtube-content
 description: "YouTube transcripts to summaries, threads, blogs."
 version: 1.0.0
-author: Teknium (teknium1), Hermes Agent
+author: Teknium (teknium1), Zeloo Agent
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
-  hermes:
+  Zeloo:
     tags: [YouTube, Video, Transcripts, Media]
     related_skills: []
 ---
@@ -21,7 +21,7 @@ Extract transcripts from YouTube videos and convert them into useful formats.
 
 ## Setup
 
-Use `uv` so the dependency is installed into the same Hermes-managed environment
+Use `uv` so the dependency is installed into the same Zeloo-managed environment
 that runs the helper script:
 
 ```bash

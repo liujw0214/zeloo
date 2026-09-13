@@ -73,7 +73,7 @@ def _coerce_bool(value: Any, fallback: bool) -> bool:
 def load_config() -> ConnectorConfig:
     """Load connector config from the user config file."""
     try:
-        from hermes_cli.config import load_config_readonly as _load
+        from zeloo_cli.config import load_config_readonly as _load
 
         cfg = _load() or {}
         tools_cfg = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
@@ -100,7 +100,7 @@ def connectors_available(
         if not resolved_loader().enabled:
             return False
         if entitlement_check is None:
-            from hermes_cli.anon_auth import is_guest_state
+            from zeloo_cli.anon_auth import is_guest_state
             from tools.managed_tool_gateway import _read_nous_provider_state
             from tools.tool_backend_helpers import managed_nous_tools_enabled
 

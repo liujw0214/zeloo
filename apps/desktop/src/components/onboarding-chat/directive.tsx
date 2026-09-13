@@ -1,6 +1,6 @@
 /**
  * In-chat onboarding cards — the `::onboarding{step="…"}` transcript
- * directive. Hermes walks the user through setup in the transcript, and each
+ * directive. Zeloo walks the user through setup in the transcript, and each
  * step's paragraph renders as an interactive picker with a shared option
  * catalog and persistence.
  *

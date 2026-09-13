@@ -260,7 +260,7 @@ _DECISION_MESSAGES: dict[str, str] = {
 }
 
 _IDENTICAL_CALL_NOTICE = (
-    "[hermes note: this is the {ordinal} consecutive identical call to "
+    "[Zeloo note: this is the {ordinal} consecutive identical call to "
     "{tool_name} with identical arguments returning the same result. "
     "Do not repeat it — change arguments, use a different tool, or "
     "proceed with what you have.]"
@@ -452,7 +452,7 @@ class ToolCallGuardrailController:
         first_id = self._identical_streak_first_call_id
         ref = f" (tool_call_id {first_id})" if first_id else ""
         stub = (
-            f"[hermes note: this result is byte-identical to the {tool_name} "
+            f"[Zeloo note: this result is byte-identical to the {tool_name} "
             f"result earlier this turn{ref}. Refer to that result; it has not "
             f"changed. Args: {args_preview}]"
         )

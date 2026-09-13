@@ -16,16 +16,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
-from hermes_constants import OPENROUTER_BASE_URL
-from hermes_cli.config import load_env
+from zeloo_constants import OPENROUTER_BASE_URL
+from zeloo_cli.config import load_env
 from agent.secret_scope import get_secret as _get_secret
 from agent.credential_persistence import (
     fingerprint_secret_value,
     is_borrowed_credential_source,
     sanitize_borrowed_credential_payload,
 )
-import hermes_cli.auth as auth_mod
-from hermes_cli.auth import (
+import zeloo_cli.auth as auth_mod
+from zeloo_cli.auth import (
     CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
     PROVIDER_REGISTRY,
     SINGLE_USE_REFRESH_POOL_PROVIDERS,
@@ -57,7 +57,7 @@ def _load_config_safe() -> Optional[dict]:
     that copy the dominant cost of ``model.options``.
     """
     try:
-        from hermes_cli.config import load_config_readonly
+        from zeloo_cli.config import load_config_readonly
 
         return load_config_readonly()
     except Exception:
@@ -65,9 +65,9 @@ def _load_config_safe() -> Optional[dict]:
 
 
 def _is_source_suppressed_fn() -> Callable[[str, str], bool]:
-    """``hermes_cli.auth.is_source_suppressed`` (late-bound), or an always-False stub."""
+    """``zeloo_cli.auth.is_source_suppressed`` (late-bound), or an always-False stub."""
     try:
-        from hermes_cli.auth import is_source_suppressed
+        from zeloo_cli.auth import is_source_suppressed
         return is_source_suppressed
     except ImportError:
         return lambda _p, _s: False
@@ -101,7 +101,7 @@ _TERMINAL_AUTH_REASONS = frozenset({
 CREDENTIAL_PERSIST_FAILED_REASON = "credential_persist_failed"
 
 # DEAD ``manual:*`` entries are pruned after this quiet window — they have no
-# singleton to re-seed from and the user can re-add via ``hermes auth add``.
+# singleton to re-seed from and the user can re-add via ``Zeloo auth add``.
 # Singleton-seeded entries (device_code, claude_code) are NOT pruned because
 # ``_seed_from_singletons`` would re-create them from the same stale tokens.
 DEAD_MANUAL_PRUNE_TTL_SECONDS = 24 * 60 * 60
@@ -150,10 +150,10 @@ FAILURE_REASON_BILLING_UNVERIFIED = "billing_unverified"
 # core, and stalled the event loop (Desktop backend readiness timeouts).
 # Credential selection runs on a hot path (every model call, plus auxiliary tasks like
 # compression/moa/titles), so when a pool is empty or fully exhausted the un-throttled log fires on *every*
-# selection. On Windows several Hermes processes share one rotating log guarded by concurrent-log-handler's
+# selection. On Windows several Zeloo processes share one rotating log guarded by concurrent-log-handler's
 # cross-process lock; that per-selection volume storms the lock (``RuntimeError: Cannot acquire lock after
 # 20 attempts``), pegs a core, and stalls the asyncio event loop long enough to fail the Desktop backend
-# readiness handshake ("Timed out connecting to Hermes backend after 15000ms"). Logging the condition at
+# readiness handshake ("Timed out connecting to Zeloo backend after 15000ms"). Logging the condition at
 # most once per window preserves the signal while removing the storm — same class of fix as the warn-once
 # dedup in #58265.
 NO_AVAILABLE_ENTRIES_LOG_THROTTLE_SECONDS = 60.0
@@ -455,7 +455,7 @@ def _iter_custom_providers(config: Optional[dict] = None):
     if config is None:
         return
     try:
-        from hermes_cli.config import get_compatible_custom_providers
+        from zeloo_cli.config import get_compatible_custom_providers
 
         custom_providers = get_compatible_custom_providers(config)
     except Exception:
@@ -500,7 +500,7 @@ def custom_provider_pool_key_candidates(
 ) -> List[str]:
     """Return pool keys to try for a custom endpoint.
 
-    ``hermes auth add <key>`` stores ``providers.<key>`` credentials under the
+    ``Zeloo auth add <key>`` stores ``providers.<key>`` credentials under the
     durable config slug; older rows and legacy ``custom_providers:`` entries
     live under ``custom:<display-name>``. Try the slug first, then the legacy
     namespace, so a populated pool is not skipped in favour of the
@@ -708,7 +708,7 @@ def _guarded_global_root(global_path: Optional[Path]) -> Optional[Path]:
     """Apply the pytest seat belt to a resolved global-root auth.json path.
 
     ``None`` means classic mode (profile == root) or "refuse": under pytest,
-    never write the real user's ``~/.hermes/auth.json`` even when HERMES_HOME
+    never write the real user's ``~/.Zeloo/auth.json`` even when ZELOO_HOME
     points at a profile path (mirrors the read-side guard in
     ``_load_global_auth_store``). Uses the unmodified HOME env, not
     ``Path.home()`` which fixtures may monkeypatch.
@@ -718,7 +718,7 @@ def _guarded_global_root(global_path: Optional[Path]) -> Optional[Path]:
     if os.environ.get("PYTEST_CURRENT_TEST"):
         real_home_env = os.environ.get("HOME", "")
         if real_home_env:
-            real_root = Path(real_home_env) / ".hermes" / "auth.json"
+            real_root = Path(real_home_env) / ".Zeloo" / "auth.json"
             try:
                 if global_path.resolve(strict=False) == real_root.resolve(strict=False):
                     return None
@@ -743,7 +743,7 @@ def _write_through_provider_state_to_global_root(
     the profile store (the caller already saved that). Swallows all errors —
     a failed write-through degrades to root-stale and must never break the
     profile's own successful save. Mirrors
-    ``hermes_cli.auth._write_through_xai_oauth_to_global_root``.
+    ``zeloo_cli.auth._write_through_xai_oauth_to_global_root``.
 
     See #48415.
     """
@@ -760,12 +760,12 @@ def _write_through_provider_state_to_global_root(
 
 
 def _singleton_target_for_entry(pool: "CredentialPool", entry: "PooledCredential") -> Optional[Path]:
-    """Root ``.anthropic_oauth.json`` when *entry* is a borrowed hermes_pkce row, else None."""
-    if entry.source != "hermes_pkce" or entry.id not in getattr(pool, "_borrowed_root_ids", ()):
+    """Root ``.anthropic_oauth.json`` when *entry* is a borrowed zeloo_pkce row, else None."""
+    if entry.source != "zeloo_pkce" or entry.id not in getattr(pool, "_borrowed_root_ids", ()):
         return None
     try:
-        from agent.anthropic_credentials import _root_hermes_oauth_file
-        return _root_hermes_oauth_file()
+        from agent.anthropic_credentials import _root_zeloo_oauth_file
+        return _root_zeloo_oauth_file()
     except Exception:
         return None
 
@@ -881,7 +881,7 @@ def persist_pool_entries(
 #
 # Providers whose OAuth singleton lives in auth.json ``providers.<id>.tokens``
 # (Codex, xAI): log names (sync-message form, "<name> OAuth" form),
-# ``hermes_cli.auth`` refresh function and terminal-error predicate (looked
+# ``zeloo_cli.auth`` refresh function and terminal-error predicate (looked
 # up at call time so tests can patch them).
 _TOKENS_SINGLETON_PROVIDERS: Dict[str, Tuple[str, str, str, str]] = {
     "openai-codex": ("Codex", "Codex", "refresh_codex_oauth_pure", "_is_terminal_codex_oauth_refresh_error"),
@@ -897,8 +897,8 @@ REFRESHABLE_OAUTH_PROVIDERS = frozenset({"anthropic", "nous", *_TOKENS_SINGLETON
 _SINGLE_USE_REFRESH_PROVIDERS = ("openai-codex", "xai-oauth", "anthropic")
 
 _REFRESH_TIMEOUT_ENV_VARS = {
-    "openai-codex": "HERMES_CODEX_REFRESH_TIMEOUT_SECONDS",
-    "xai-oauth": "HERMES_XAI_REFRESH_TIMEOUT_SECONDS",
+    "openai-codex": "ZELOO_CODEX_REFRESH_TIMEOUT_SECONDS",
+    "xai-oauth": "ZELOO_XAI_REFRESH_TIMEOUT_SECONDS",
 }
 
 # Singleton-seeded source whose exhausted/DEAD pool row may be revived by a
@@ -1219,7 +1219,7 @@ class CredentialPool(CredentialPoolAdminMixin):
     def _sync_entry_from_auth_store(self, entry: PooledCredential) -> PooledCredential:
         """Sync a Codex / xAI device_code entry from auth.json ``providers.<id>.tokens``.
 
-        A fresh ``hermes model`` / ``hermes auth`` login writes new tokens
+        A fresh ``Zeloo model`` / ``Zeloo auth`` login writes new tokens
         under ``_auth_store_lock`` while the pool entry may sit frozen behind
         a ``last_error_reset_at`` hours in the future; without this sync every
         request fails with "no available entries" despite fresh credentials on
@@ -1390,7 +1390,7 @@ class CredentialPool(CredentialPoolAdminMixin):
             return self._refresh_entry_impl(entry, force=force)
 
         # Single-use refresh tokens: sync -> POST -> write-back must be atomic
-        # across Hermes processes, or two processes adopt the same on-disk
+        # across Zeloo processes, or two processes adopt the same on-disk
         # token, both POST it, and the loser gets ``refresh_token_reused`` /
         # ``invalid_grant`` (for Anthropic sources other than claude_code
         # there was no recovery path at all). Serialize through the shared
@@ -1444,7 +1444,7 @@ class CredentialPool(CredentialPoolAdminMixin):
     ) -> None:
         """Quarantine an entry whose rotated pair never reached its store.
 
-        For ``claude_code`` / ``hermes_pkce`` the singleton file — not
+        For ``claude_code`` / ``zeloo_pkce`` the singleton file — not
         auth.json — is authoritative: ``_seed_from_singletons()`` re-reads it
         on every ``load_pool()``. When the refresh POST succeeded but the
         singleton write failed, the replacement pair exists only in memory
@@ -1489,7 +1489,7 @@ class CredentialPool(CredentialPoolAdminMixin):
 
     def _single_use_refresh_lock_timeout(self) -> float:
         """Configured refresh POST timeout plus margin, so a slow token endpoint cannot starve the flock."""
-        env_var = _REFRESH_TIMEOUT_ENV_VARS.get(self.provider, "HERMES_ANTHROPIC_REFRESH_TIMEOUT_SECONDS")
+        env_var = _REFRESH_TIMEOUT_ENV_VARS.get(self.provider, "ZELOO_ANTHROPIC_REFRESH_TIMEOUT_SECONDS")
         refresh_timeout_seconds = auth_mod.env_float(env_var, 20)
         return max(float(auth_mod.AUTH_LOCK_TIMEOUT_SECONDS), float(refresh_timeout_seconds) + 5.0)
 
@@ -1499,16 +1499,16 @@ class CredentialPool(CredentialPoolAdminMixin):
         """Write a rotated Anthropic pair to its authoritative singleton, or fail closed.
 
         claude_code -> ~/.claude/.credentials.json (so the fallback resolver
-        and other profiles see it). hermes_pkce -> ~/.hermes/.anthropic_oauth.json
+        and other profiles see it). zeloo_pkce -> ~/.Zeloo/.anthropic_oauth.json
         (``_seed_from_singletons`` re-seeds it every load; a borrowed row commits
         to the ROOT's file, never a new profile-local copy, #100339). Not
-        ``endswith``: manual:hermes_pkce is pool-owned and a singleton for it
+        ``endswith``: manual:zeloo_pkce is pool-owned and a singleton for it
         would be a second authority for the same refresh-token family.
         """
         if entry.source == "claude_code":
             store = "~/.claude/.credentials.json"
-        elif entry.source == "hermes_pkce":
-            store = "~/.hermes/.anthropic_oauth.json"
+        elif entry.source == "zeloo_pkce":
+            store = "~/.Zeloo/.anthropic_oauth.json"
         else:
             return
         try:
@@ -1517,7 +1517,7 @@ class CredentialPool(CredentialPoolAdminMixin):
             if entry.source == "claude_code":
                 ac._write_claude_code_credentials(*args)
             else:
-                ac._write_hermes_oauth_credentials(*args, target=_singleton_target_for_entry(self, entry))
+                ac._write_zeloo_oauth_credentials(*args, target=_singleton_target_for_entry(self, entry))
         except Exception as wexc:
             # Authoritative commit failed: do not mark, persist or return the
             # rotation as successful, and bypass the re-POST recovery path —
@@ -1546,7 +1546,7 @@ class CredentialPool(CredentialPoolAdminMixin):
                 ),
                 store=str(source_path or "credential store"),
             ))
-        refreshed = refresh_anthropic_oauth_pure(entry.refresh_token, use_json=entry.source.endswith("hermes_pkce"))
+        refreshed = refresh_anthropic_oauth_pure(entry.refresh_token, use_json=entry.source.endswith("zeloo_pkce"))
         updated = replace(
             entry,
             access_token=refreshed["access_token"],
@@ -1623,7 +1623,7 @@ class CredentialPool(CredentialPoolAdminMixin):
                     try:
                         from agent.anthropic_credentials import refresh_anthropic_oauth_pure
                         refreshed = refresh_anthropic_oauth_pure(
-                            synced.refresh_token, use_json=synced.source.endswith("hermes_pkce"),
+                            synced.refresh_token, use_json=synced.source.endswith("zeloo_pkce"),
                         )
                         # Commit to the authoritative singleton BEFORE marking or
                         # persisting the pool row, or a failed write leaves an
@@ -1646,7 +1646,7 @@ class CredentialPool(CredentialPoolAdminMixin):
                     logger.debug("Credentials file has valid token, using without refresh")
                     return synced
             else:
-                # Backstop for pool-owned sources (hermes_pkce, manual:dashboard_pkce):
+                # Backstop for pool-owned sources (zeloo_pkce, manual:dashboard_pkce):
                 # the winner may have persisted between our pre-check and our POST.
                 synced = self._sync_entry_from_pool_store(entry)
                 if synced.refresh_token != entry.refresh_token:
@@ -1811,7 +1811,7 @@ class CredentialPool(CredentialPoolAdminMixin):
     def _resync_stale_entry(self, entry: PooledCredential) -> PooledCredential:
         """Re-read an exhausted/DEAD singleton-seeded entry from its token authority.
 
-        The user may have re-authed (``hermes model`` / ``hermes auth``, the
+        The user may have re-authed (``Zeloo model`` / ``Zeloo auth``, the
         Claude Code CLI, another profile) leaving fresh tokens on disk while
         the pool entry is frozen behind ``last_error_reset_at``.
         """
@@ -1861,7 +1861,7 @@ class CredentialPool(CredentialPoolAdminMixin):
                     if dead_at and now - dead_at > DEAD_MANUAL_PRUNE_TTL_SECONDS:
                         logger.warning(
                             "credential pool: pruning DEAD manual entry %s "
-                            "(reason=%s, age=%.1fh) — re-add via `hermes auth add %s`",
+                            "(reason=%s, age=%.1fh) — re-add via `Zeloo auth add %s`",
                             entry.label or entry.id[:8],
                             entry.last_error_reason or "unknown",
                             (now - dead_at) / 3600.0,
@@ -2235,7 +2235,7 @@ def _upsert_entry(entries: List[PooledCredential], provider: str, source: str, p
 _ANTHROPIC_SOURCE_RANK = {
     "env:ANTHROPIC_TOKEN": 0,
     "env:CLAUDE_CODE_OAUTH_TOKEN": 1,
-    "hermes_pkce": 2,
+    "zeloo_pkce": 2,
     "claude_code": 3,
     "env:ANTHROPIC_API_KEY": 4,
 }
@@ -2285,7 +2285,7 @@ class _Seeder:
         self.is_suppressed = _is_source_suppressed_fn()
 
     def upsert(self, source: str, payload: Dict[str, Any]) -> bool:
-        """Upsert unless suppressed (``hermes auth remove`` must stay stable across loads)."""
+        """Upsert unless suppressed (``Zeloo auth remove`` must stay stable across loads)."""
         if self.is_suppressed(self.provider, source):
             return False
         self.active_sources.add(source)
@@ -2299,23 +2299,23 @@ class _Seeder:
 
 
 def _seed_anthropic_singletons(seed: _Seeder) -> None:
-    # Only auto-discover external credentials (Claude Code, Hermes PKCE) when
+    # Only auto-discover external credentials (Claude Code, Zeloo PKCE) when
     # the user explicitly configured anthropic; otherwise auxiliary fallback
     # chains would read ~/.claude/.credentials.json without consent (PR #4210).
     try:
-        from hermes_cli.auth import is_provider_explicitly_configured
+        from zeloo_cli.auth import is_provider_explicitly_configured
         if not is_provider_explicitly_configured("anthropic"):
             return
     except ImportError:
         pass
 
-    # API-key vs OAuth is a user-visible choice at `hermes setup`. The API-key
+    # API-key vs OAuth is a user-visible choice at `Zeloo setup`. The API-key
     # signal is ANTHROPIC_API_KEY set AND no OAuth env vars (the save_* helpers
     # zero the other side). Then we MUST NOT seed autodiscovered OAuth tokens:
     # rotation on a 401/429 would silently flip the session onto OAuth, which
     # forces the Claude Code identity injection, `mcp_` tool-name rewrite and
     # claude-cli User-Agent the user explicitly opted out of. Prefer
-    # ~/.hermes/.env over os.environ, as `_seed_from_env` does.
+    # ~/.Zeloo/.env over os.environ, as `_seed_from_env` does.
     _env_file = load_env()
 
     def _env_val(key: str) -> str:
@@ -2325,16 +2325,16 @@ def _seed_anthropic_singletons(seed: _Seeder) -> None:
     if _env_val("ANTHROPIC_API_KEY") and not anthropic_oauth_env:
         # Prune stale autodiscovered OAuth entries from a previous OAuth
         # session so a transient 401 cannot revive them.
-        seed.changed |= _retain_sources_not_in(seed.entries, {"hermes_pkce", "claude_code"})
+        seed.changed |= _retain_sources_not_in(seed.entries, {"zeloo_pkce", "claude_code"})
         return
 
     from agent.anthropic_credentials import (
         read_claude_code_credentials,
-        read_hermes_oauth_credentials,
+        read_zeloo_oauth_credentials,
     )
 
     for source_name, creds in (
-        ("hermes_pkce", read_hermes_oauth_credentials()),
+        ("zeloo_pkce", read_zeloo_oauth_credentials()),
         ("claude_code", read_claude_code_credentials()),
     ):
         if creds and creds.get("accessToken"):
@@ -2357,7 +2357,7 @@ def _seed_nous_singleton(seed: _Seeder, auth_store: Dict[str, Any]) -> None:
         seed.changed |= _retain_sources_not_in(seed.entries, {"device_code", "manual:device_code"})
     if not (state and has_runtime_material):
         return
-    # Prefer a user-supplied label embedded in the singleton state (``hermes
+    # Prefer a user-supplied label embedded in the singleton state (``Zeloo
     # auth add nous --label <name>``) over the token-derived fingerprint.
     custom_label = str(state.get("label") or "").strip()
     seed.upsert("device_code", {
@@ -2385,7 +2385,7 @@ def _seed_copilot_singleton(seed: _Seeder) -> None:
     # Copilot tokens are resolved dynamically via `gh auth token` or env vars
     # (COPILOT_GITHUB_TOKEN / GH_TOKEN); they don't live in the auth store.
     try:
-        from hermes_cli.copilot_auth import (
+        from zeloo_cli.copilot_auth import (
             COPILOT_ENV_VARS,
             resolve_copilot_token,
             get_copilot_api_token,
@@ -2432,7 +2432,7 @@ def _seed_qwen_singleton(seed: _Seeder) -> None:
     # Qwen OAuth tokens live in ~/.qwen/oauth_creds.json (written by the Qwen
     # CLI). refresh_if_expiring=False avoids network calls during pool loading.
     try:
-        from hermes_cli.auth import resolve_qwen_runtime_credentials
+        from zeloo_cli.auth import resolve_qwen_runtime_credentials
         creds = resolve_qwen_runtime_credentials(refresh_if_expiring=False)
         token = creds.get("api_key", "")
         if token:
@@ -2452,7 +2452,7 @@ def _seed_minimax_singleton(seed: _Seeder) -> None:
     # Read the raw auth.json state rather than resolve_minimax_oauth_runtime_credentials,
     # which always refreshes on expiry (surprise network calls during discovery).
     try:
-        from hermes_cli.auth import get_provider_auth_state
+        from zeloo_cli.auth import get_provider_auth_state
         state = get_provider_auth_state("minimax-oauth")
         if not (state and state.get("access_token")):
             return
@@ -2478,10 +2478,10 @@ def _seed_minimax_singleton(seed: _Seeder) -> None:
 def _seed_tokens_singleton(seed: _Seeder, auth_store: Dict[str, Any]) -> None:
     """Codex / xAI: surface the auth.json ``providers.<id>.tokens`` singleton as ``device_code``.
 
-    Hermes owns its own Codex auth state and does NOT auto-import
+    Zeloo owns its own Codex auth state and does NOT auto-import
     ~/.codex/auth.json: refresh tokens are single-use, so sharing them with
     Codex CLI / VS Code causes refresh_token_reused races. Adoption is an
-    explicit one-time prompt via `hermes auth openai-codex`.
+    explicit one-time prompt via `Zeloo auth openai-codex`.
     """
     state = _load_provider_state(auth_store, seed.provider)
     tokens = state.get("tokens") if isinstance(state, dict) else None
@@ -2517,7 +2517,7 @@ def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tup
     elif provider == "minimax-oauth":
         _seed_minimax_singleton(seed)
     elif provider in _TOKENS_SINGLETON_PROVIDERS:
-        # `hermes auth remove openai-codex` suppresses device_code; without
+        # `Zeloo auth remove openai-codex` suppresses device_code; without
         # this gate the removal is undone on the next load_pool().
         if provider == "openai-codex" and seed.is_suppressed(provider, "device_code"):
             return seed.result
@@ -2526,7 +2526,7 @@ def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tup
 
 
 def get_env_prefer_dotenv(key: str) -> str:
-    """Resolve a credential env var, preferring ~/.hermes/.env over os.environ.
+    """Resolve a credential env var, preferring ~/.Zeloo/.env over os.environ.
 
     The user's config file is authoritative; stale env vars from parent
     processes (Codex CLI, test scripts) must not override deliberate .env
@@ -2562,7 +2562,7 @@ def _warn_env_ingestion_once(provider: str, env_var: str) -> None:
     logger.warning(
         "Ingested %s from environment into the %s credential pool — this "
         "enables %s spend. Remove the key or run "
-        "hermes auth remove %s <n> to suppress.",
+        "Zeloo auth remove %s <n> to suppress.",
         env_var,
         provider,
         "OpenRouter" if provider == "openrouter" else provider,
@@ -2578,7 +2578,7 @@ def _env_payload(*, env_var: str, token: str, base_url: str) -> Dict[str, Any]:
         "label": env_var,
     }
     try:
-        from hermes_cli.env_loader import get_secret_source
+        from zeloo_cli.env_loader import get_secret_source
         source_label = get_secret_source(env_var)
     except Exception:
         source_label = None
@@ -2647,11 +2647,11 @@ def _prune_stale_seeded_entries(
         # ``env:*`` entries are persisted references re-hydrated on every load.
         # A process that merely lacks the env var must NOT delete the on-disk
         # entry for every other process (#9331); prune only when explicitly
-        # requested (an `hermes auth` command that confirmed the source is gone).
+        # requested (an `Zeloo auth` command that confirmed the source is gone).
         if entry.source.startswith("env:"):
             return prune_env_sources
-        # File-backed singletons and Hermes PKCE disappear when their backing file is gone.
-        return is_borrowed_credential_source(entry.source, entry.provider) or entry.source == "hermes_pkce"
+        # File-backed singletons and Zeloo PKCE disappear when their backing file is gone.
+        return is_borrowed_credential_source(entry.source, entry.provider) or entry.source == "zeloo_pkce"
 
     retained = [
         entry

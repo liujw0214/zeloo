@@ -27,7 +27,7 @@ def _fresh_probe_cache():
 
 
 def _managed_home(tmp_path, *, teammates=("researcher",), peers=()) -> Path:
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".Zeloo"
     home.mkdir(exist_ok=True)
     for name in teammates:
         d = home / "profiles" / name
@@ -37,7 +37,7 @@ def _managed_home(tmp_path, *, teammates=("researcher",), peers=()) -> Path:
                 """\
                 description: teammate for tests
                 ui_meta:
-                  hermes-bots:
+                  Zeloo-bots:
                     shape: cloud
                 """
             ),
@@ -101,7 +101,7 @@ def test_never_injects_outside_bot_chat(tmp_path, title):
 
 def test_never_injects_on_unmanaged_install(tmp_path):
     """A 'Bot Chat'-titled session on a plain install stays tool-free."""
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".Zeloo"
     home.mkdir()
     agent = _FakeAgent(home, title="Bot Chat")
     assert bot_mode_dm.ensure_message_agent_tool(agent) is False
@@ -141,7 +141,7 @@ def test_tool_refuses_outside_bot_chat(tmp_path):
 
 
 def test_tool_refuses_on_unmanaged_install(tmp_path):
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".Zeloo"
     home.mkdir()
     agent = _FakeAgent(home, title="Bot Chat")
     result = json.loads(
@@ -167,7 +167,7 @@ def test_cannot_message_self(tmp_path):
     home = _managed_home(tmp_path)
     agent = _FakeAgent(home, title="Bot Chat")  # default profile
     result = json.loads(
-        bot_mode_dm.message_agent_tool(target="hermes", message="hi", agent=agent)
+        bot_mode_dm.message_agent_tool(target="Zeloo", message="hi", agent=agent)
     )
     assert "error" in result
     assert "yourself" in result["error"]
@@ -262,7 +262,7 @@ def test_local_delivery_command_and_ack(tmp_path, monkeypatch):
     mode, dm_file, transport_argv = _runner_parts(command)
     assert mode == "query-file"
     assert transport_argv == [
-        "hermes",
+        "Zeloo",
         "-p",
         "researcher",
         "chat",
@@ -277,11 +277,11 @@ def test_local_delivery_command_and_ack(tmp_path, monkeypatch):
     assert "PAYLOAD_SENTINEL_7A91" not in command
     assert "$(" not in command
     # the sender rides the runner argv as a stable id plus display handle
-    assert _runner_author(command) == {"id": "bot:default", "name": "hermes", "is_bot": True}
+    assert _runner_author(command) == {"id": "bot:default", "name": "Zeloo", "is_bot": True}
 
     # attribution prefix applied server-side; body verbatim inside the file
     content = Path(dm_file).read_text(encoding="utf-8")
-    assert content.startswith("Message from 🤖 hermes (@hermes): ")
+    assert content.startswith("Message from 🤖 Zeloo (@Zeloo): ")
     assert '$(and this is not shell)' in content
 
 
@@ -289,7 +289,7 @@ def test_peer_delivery_command_pins_registry_profile_for_secondary_bots(
     tmp_path, monkeypatch
 ):
     """A secondary-profile bot's peer DM must run in the registry-owning
-    profile (#93935). `hermes peer` resolves bot_peers through
+    profile (#93935). `Zeloo peer` resolves bot_peers through
     profile-scoped load_config(); unpinned, the subprocess inherits the
     calling bot's profile and dies with "No peer named" even though the
     tool-side roster (read from the machine-root config) validated the
@@ -311,7 +311,7 @@ def test_peer_delivery_command_pins_registry_profile_for_secondary_bots(
     assert mode == "stdin"
     # The registry the tool validated against is the machine root's — the
     # default profile's home — so the CLI runs there, not in reviewer.
-    assert transport_argv == ["hermes", "-p", "default", "peer", "dm", "spark"]
+    assert transport_argv == ["Zeloo", "-p", "default", "peer", "dm", "spark"]
 
 
 def test_peer_delivery_command(tmp_path, monkeypatch):
@@ -327,9 +327,9 @@ def test_peer_delivery_command(tmp_path, monkeypatch):
     assert "spark" in result["to"]
     mode, _dm_file, transport_argv = _runner_parts(calls[0]["command"])
     assert mode == "stdin"
-    assert transport_argv == ["hermes", "-p", "default", "peer", "dm", "spark/researcher"]
+    assert transport_argv == ["Zeloo", "-p", "default", "peer", "dm", "spark/researcher"]
     # the peer child reads the author from its env and forwards it in the request body
-    assert _runner_author(calls[0]["command"]) == {"id": "bot:eri-mac.local/default", "name": "hermes", "is_bot": True}
+    assert _runner_author(calls[0]["command"]) == {"id": "bot:eri-mac.local/default", "name": "Zeloo", "is_bot": True}
 
     # bare peer name targets the peer's main agent
     result2 = json.loads(
@@ -338,7 +338,7 @@ def test_peer_delivery_command(tmp_path, monkeypatch):
     assert result2["status"] == "sent"
     mode, _dm_file, transport_argv = _runner_parts(calls[1]["command"])
     assert mode == "stdin"
-    assert transport_argv == ["hermes", "-p", "default", "peer", "dm", "spark"]
+    assert transport_argv == ["Zeloo", "-p", "default", "peer", "dm", "spark"]
 
 
 def test_peer_delivery_author_carries_the_sender_hostname_and_local_stays_bare(tmp_path, monkeypatch):
@@ -357,7 +357,7 @@ def test_peer_delivery_author_carries_the_sender_hostname_and_local_stays_bare(t
 
 
 def test_named_profile_sender_prefix(tmp_path, monkeypatch):
-    """A named-profile bot signs with its own handle, not @hermes."""
+    """A named-profile bot signs with its own handle, not @Zeloo."""
     calls = _capture_spawn(monkeypatch)
     home = _managed_home(tmp_path, teammates=("researcher", "coder"))
     profile_home = home / "profiles" / "coder"
@@ -376,24 +376,24 @@ def test_named_profile_sender_prefix(tmp_path, monkeypatch):
 
 def test_delivery_command_author_json_survives_quoting_and_windows_slash_rewrite(tmp_path, monkeypatch):
     """The author JSON sits between ``--run-delivery`` and the mode, survives shlex, and the Windows slash rewrite skips it."""
-    author = {"id": "bot:default", "name": "hermes", "is_bot": True}
-    command = bot_mode_dm._delivery_command(["hermes", "-p", "x"], str(tmp_path / "dm.txt"),
+    author = {"id": "bot:default", "name": "Zeloo", "is_bot": True}
+    command = bot_mode_dm._delivery_command(["Zeloo", "-p", "x"], str(tmp_path / "dm.txt"),
                                             stdin_file=False, author=author)
     parts = shlex.split(command)
     assert parts[2:4] == ["--run-delivery", "--author"]
     assert json.loads(parts[4]) == author
     assert parts[5] == "query-file"
-    assert _runner_parts(command) == ("query-file", str(tmp_path / "dm.txt"), ["hermes", "-p", "x"])
+    assert _runner_parts(command) == ("query-file", str(tmp_path / "dm.txt"), ["Zeloo", "-p", "x"])
 
     monkeypatch.setattr(sys, "platform", "win32")
-    command = bot_mode_dm._delivery_command(["hermes", "-p", "x"], "C:\\Users\\me\\dm.txt",
+    command = bot_mode_dm._delivery_command(["Zeloo", "-p", "x"], "C:\\Users\\me\\dm.txt",
                                             stdin_file=False, author={"id": "bot:default", "name": 'q"q', "is_bot": True})
     parts = shlex.split(command)
     assert json.loads(parts[4]) == {"id": "bot:default", "name": 'q"q', "is_bot": True}
     assert parts[6] == "C:/Users/me/dm.txt"
 
     # without an author the legacy shape is produced unchanged
-    command = bot_mode_dm._delivery_command(["hermes"], "dm.txt", stdin_file=True)
+    command = bot_mode_dm._delivery_command(["Zeloo"], "dm.txt", stdin_file=True)
     assert shlex.split(command)[2:4] == ["--run-delivery", "stdin"]
     assert _runner_author(command) is None
 
@@ -423,7 +423,7 @@ def test_live_dm_admitted_before_waiter_failure(tmp_path, monkeypatch):
     owner = dict(profile_home=str(target), session_id="bot", lease_id="lease", live_session_id="live")
     monkeypatch.setattr(live, "find_canonical_live_owner", lambda h: owner if Path(h) == target else None)
     monkeypatch.setattr(bot_mode_dm, "_dm_dir", lambda: tmp_path)
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "wrong-home"))
+    monkeypatch.setenv("ZELOO_HOME", str(tmp_path / "wrong-home"))
     import tools.terminal_tool as terminal
     monkeypatch.setattr(terminal, "terminal_tool", lambda *a, **k: json.dumps({"error": "spawn failed"}))
 
@@ -432,8 +432,8 @@ def test_live_dm_admitted_before_waiter_failure(tmp_path, monkeypatch):
     record = live.read_delivery_result(target, result["delivery_id"])
     assert record is not None
     assert record["owner"] == owner
-    assert record["message"] == "Message from 🤖 hermes (@hermes): hello"
-    assert record["author"] == {"id": "bot:default", "name": "hermes", "is_bot": True}
+    assert record["message"] == "Message from 🤖 Zeloo (@Zeloo): hello"
+    assert record["author"] == {"id": "bot:default", "name": "Zeloo", "is_bot": True}
     assert "notification_error" in result
 
 
@@ -442,14 +442,14 @@ def test_live_dm_runner_retry_never_reexecutes_failed_claim(tmp_path, monkeypatc
 
     home = _managed_home(tmp_path)
     target = home / "profiles" / "researcher"
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ZELOO_HOME", str(home))
     owner = dict(profile_home=str(target), session_id="bot", lease_id="lease", live_session_id="live")
     monkeypatch.setattr(live, "find_canonical_live_owner", lambda h: owner)
     monkeypatch.setattr(bot_mode_dm, "_LIVE_WAIT_SECONDS", 0)
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("must not launch a model turn"))
     dm_file = tmp_path / "message.txt"
     dm_file.write_text("hello", encoding="utf-8")
-    argv = ["hermes", "-p", "researcher"]
+    argv = ["Zeloo", "-p", "researcher"]
     assert bot_mode_dm._run_delivery(argv, str(dm_file), stdin_file=False) == 0
     queued = json.loads(capsys.readouterr().out)
     assert queued["status"] == "queued"
@@ -508,7 +508,7 @@ def test_delivery_runner_unlinks_when_child_launch_raises(tmp_path, monkeypatch)
 
     monkeypatch.setattr(subprocess, "run", boom)
     with pytest.raises(RuntimeError, match="child launch failed"):
-        bot_mode_dm._run_delivery(["hermes"], str(dm_file), stdin_file=False)
+        bot_mode_dm._run_delivery(["Zeloo"], str(dm_file), stdin_file=False)
     assert not dm_file.exists()
 
 
@@ -572,7 +572,7 @@ def test_query_file_delivery_closes_stdin_for_initial_attempt_and_retry(
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     returncode = bot_mode_dm._run_delivery(
-        ["hermes", "-p", "researcher"], str(dm_file), stdin_file=False
+        ["Zeloo", "-p", "researcher"], str(dm_file), stdin_file=False
     )
 
     assert returncode == 0
@@ -590,7 +590,7 @@ def test_query_file_delivery_closes_stdin_for_initial_attempt_and_retry(
     ("query-file", None),
 ], ids=["stdin", "query-file", "no author"])
 def test_delivery_main_child_env_carries_only_the_argv_author(tmp_path, monkeypatch, mode, author):
-    """The ``--author`` payload becomes HERMES_TURN_AUTHOR on the child. Without it the runner drops the
+    """The ``--author`` payload becomes ZELOO_TURN_AUTHOR on the child. Without it the runner drops the
     variable it inherited from the sending bot's own turn instead of passing it on as the recipient's author."""
     from agent.turn_author import TURN_AUTHOR_ENV
 
@@ -603,33 +603,33 @@ def test_delivery_main_child_env_carries_only_the_argv_author(tmp_path, monkeypa
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setenv("HERMES_DM_TEST_MARKER", "kept")
+    monkeypatch.setenv("ZELOO_DM_TEST_MARKER", "kept")
     monkeypatch.setenv(TURN_AUTHOR_ENV, json.dumps({"id": "bot:previous", "name": "previous", "is_bot": True}))
     author_args = ["--author", json.dumps(author)] if author else []
 
     returncode = bot_mode_dm._delivery_main(
-        ["--run-delivery", *author_args, mode, str(dm_file), "hermes", "-p", "researcher"])
+        ["--run-delivery", *author_args, mode, str(dm_file), "Zeloo", "-p", "researcher"])
 
     assert returncode == 0
     [(argv, kwargs)] = calls
-    assert argv[:3] == ["hermes", "-p", "researcher"]
-    assert kwargs["env"]["HERMES_DM_TEST_MARKER"] == "kept"
+    assert argv[:3] == ["Zeloo", "-p", "researcher"]
+    assert kwargs["env"]["ZELOO_DM_TEST_MARKER"] == "kept"
     assert (json.loads(kwargs["env"][TURN_AUTHOR_ENV]) if TURN_AUTHOR_ENV in kwargs["env"] else None) == author
     assert not dm_file.exists()
 
 
 def test_real_delivery_command_round_trip_carries_author(tmp_path):
-    """Through a real subprocess, the runner argv built by ``_delivery_command`` sets HERMES_TURN_AUTHOR on the child."""
+    """Through a real subprocess, the runner argv built by ``_delivery_command`` sets ZELOO_TURN_AUTHOR on the child."""
     dm_file = tmp_path / "message.txt"
     dm_file.write_text("secret", encoding="utf-8")
     observed = tmp_path / "observed.txt"
     child = tmp_path / "child.py"
     child.write_text(
         "import os, pathlib, sys\n"
-        "pathlib.Path(sys.argv[1]).write_text(os.environ.get('HERMES_TURN_AUTHOR', 'unset'), encoding='utf-8')\n",
+        "pathlib.Path(sys.argv[1]).write_text(os.environ.get('ZELOO_TURN_AUTHOR', 'unset'), encoding='utf-8')\n",
         encoding="utf-8",
     )
-    author = {"id": "bot:default", "name": "hermes", "is_bot": True}
+    author = {"id": "bot:default", "name": "Zeloo", "is_bot": True}
     command = bot_mode_dm._delivery_command(
         [sys.executable, str(child), str(observed)], str(dm_file), stdin_file=False, author=author
     )
@@ -832,7 +832,7 @@ def test_write_dm_file_unlinks_partial_file_on_write_exception(tmp_path, monkeyp
 def test_sweeper_removes_only_stale_dm_files(tmp_path, monkeypatch):
     monkeypatch.setattr(bot_mode_dm.tempfile, "gettempdir", lambda: str(tmp_path))
     dm_dir = bot_mode_dm._dm_dir()
-    legacy_stale = tmp_path / "hermes-dm-stale.txt"
+    legacy_stale = tmp_path / "Zeloo-dm-stale.txt"
     stale = dm_dir / "dm-stale.txt"
     fresh = dm_dir / "dm-fresh.txt"
     unrelated = tmp_path / "other.txt"

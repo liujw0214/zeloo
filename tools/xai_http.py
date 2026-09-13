@@ -33,8 +33,8 @@ def has_xai_credentials() -> bool:
     if (get_secret("XAI_API_KEY", "") or "").strip():
         return True
     try:
-        from hermes_constants import get_hermes_home
-        auth_path = get_hermes_home() / "auth.json"
+        from zeloo_constants import get_zeloo_home
+        auth_path = get_zeloo_home() / "auth.json"
         if not auth_path.exists():
             return False
         store = json.loads(auth_path.read_text(encoding="utf-8-sig"))
@@ -50,30 +50,30 @@ def has_xai_credentials() -> bool:
 
 
 def get_env_value(name: str, default=None):
-    """Read ``name`` from ``~/.hermes/.env`` first, then ``os.environ``.
+    """Read ``name`` from ``~/.Zeloo/.env`` first, then ``os.environ``.
 
-    Wraps :func:`hermes_cli.config.get_env_value` so tests can patch ``tools.xai_http.get_env_value``.
+    Wraps :func:`zeloo_cli.config.get_env_value` so tests can patch ``tools.xai_http.get_env_value``.
     """
     try:
-        from hermes_cli.config import get_env_value as _hermes_get_env_value
+        from zeloo_cli.config import get_env_value as _zeloo_get_env_value
     except ImportError:
         return os.environ.get(name, default)
-    value = _hermes_get_env_value(name)
+    value = _zeloo_get_env_value(name)
     return value if value is not None else default
 
 
-def hermes_xai_user_agent() -> str:
-    """Return a stable Hermes-specific User-Agent for xAI HTTP calls."""
+def zeloo_xai_user_agent() -> str:
+    """Return a stable Zeloo-specific User-Agent for xAI HTTP calls."""
     try:
-        from hermes_cli import __version__
+        from zeloo_cli import __version__
     except Exception:
         __version__ = "unknown"
-    return f"Hermes-Agent/{__version__}"
+    return f"Zeloo-Agent/{__version__}"
 
 
-def hermes_xai_default_headers() -> Dict[str, str]:
+def zeloo_xai_default_headers() -> Dict[str, str]:
     """Default headers for OpenAI-SDK and raw HTTP clients talking to xAI (replaces the SDK User-Agent)."""
-    return {"User-Agent": hermes_xai_user_agent()}
+    return {"User-Agent": zeloo_xai_user_agent()}
 
 
 _TRUE_WORDS = {"1", "true", "yes", "on", "enabled"}
@@ -109,7 +109,7 @@ def read_xai_imagine_storage_config(section_name: str) -> Dict[str, Any]:
     """Read ``<section_name>.xai.storage`` (``image_gen``/``video_gen``) -> {enabled, public_url, expires_after}.
     On by default so xAI returns permanent public URLs, not short-lived CDN ones; null TTL = permanent."""
     try:
-        from hermes_cli.config import load_config
+        from zeloo_cli.config import load_config
         storage = _dict_get(_dict_get(_dict_get(load_config(), section_name), "xai"), "storage")
     except Exception:
         storage = None
@@ -154,13 +154,13 @@ def xai_storage_notice_text(section_name: str) -> str:
 
 
 def maybe_mark_xai_storage_notice_seen(section_name: str) -> Optional[str]:
-    """Return the storage notice once per Hermes home, then mark it seen."""
+    """Return the storage notice once per Zeloo home, then mark it seen."""
     notice = xai_storage_notice_text(section_name)
     if not notice:
         return None
     try:
-        from hermes_constants import get_hermes_home
-        marker_dir = get_hermes_home() / "state"
+        from zeloo_constants import get_zeloo_home
+        marker_dir = get_zeloo_home() / "state"
         marker_dir.mkdir(parents=True, exist_ok=True)
         marker = marker_dir / f"{section_name}_xai_storage_notice_seen"
         if marker.exists():
@@ -182,8 +182,8 @@ def _resolve_explicit_xai_api_key() -> str:
 
 
 def _xai_base_url_override() -> str:
-    """``HERMES_XAI_BASE_URL`` then ``XAI_BASE_URL``, stripped; '' when unset."""
-    return str(get_env_value("HERMES_XAI_BASE_URL") or get_env_value("XAI_BASE_URL") or "").strip().rstrip("/")
+    """``ZELOO_XAI_BASE_URL`` then ``XAI_BASE_URL``, stripped; '' when unset."""
+    return str(get_env_value("ZELOO_XAI_BASE_URL") or get_env_value("XAI_BASE_URL") or "").strip().rstrip("/")
 
 
 def resolve_xai_http_credentials(
@@ -191,24 +191,24 @@ def resolve_xai_http_credentials(
 ) -> Dict[str, str]:
     """Resolve bearer credentials for direct xAI HTTP endpoints.
 
-    Default order: Hermes-managed xAI OAuth, then ``XAI_API_KEY`` (via ``get_env_value`` so
-    ``~/.hermes/.env`` keys count). ``prefer_api_key=True`` inverts that for API-metered
+    Default order: Zeloo-managed xAI OAuth, then ``XAI_API_KEY`` (via ``get_env_value`` so
+    ``~/.Zeloo/.env`` keys count). ``prefer_api_key=True`` inverts that for API-metered
     endpoints where the subscription OAuth bearer authorizes but misbehaves (x_search answers
-    without citations, TTS 403s). Both branches honor ``HERMES_XAI_BASE_URL``/``XAI_BASE_URL``
+    without citations, TTS 403s). Both branches honor ``ZELOO_XAI_BASE_URL``/``XAI_BASE_URL``
     behind the same origin-pinning validation. ``force_refresh=True`` forces an OAuth refresh;
     pass the rejected bearer as ``api_key_hint`` so a multi-account pool refreshes the issuing
     entry, not whichever its strategy selects first.
 
-    Prefers Hermes-managed xAI OAuth credentials when available, then falls back to ``XAI_API_KEY`` resolved
-    via ``hermes_cli.config.get_env_value`` so keys stored in ``~/.hermes/.env`` (the standard Hermes
+    Prefers Zeloo-managed xAI OAuth credentials when available, then falls back to ``XAI_API_KEY`` resolved
+    via ``zeloo_cli.config.get_env_value`` so keys stored in ``~/.Zeloo/.env`` (the standard Zeloo
     location) are honored — not just ones already exported into ``os.environ``. This keeps direct xAI
     endpoints (images, TTS, STT, etc.) aligned with the main runtime auth model and preserves the regression
     contract from PR #17140 / #17163.
     The key is read through :func:`tools.tool_backend_helpers.resolve_provider_secret` so profile secret
-    scoping is identical to the fallback branch, and the base URL honors ``HERMES_XAI_BASE_URL`` /
+    scoping is identical to the fallback branch, and the base URL honors ``ZELOO_XAI_BASE_URL`` /
     ``XAI_BASE_URL`` behind the same origin-pinning validation as the OAuth branch. See #87045, #88040.
     """
-    import hermes_cli.auth as auth_mod
+    import zeloo_cli.auth as auth_mod
     if prefer_api_key and (explicit_key := str(_resolve_explicit_xai_api_key() or "").strip()):
         # Origin-pinned so a tampered env override can't exfiltrate the bearer; rejection -> default URL.
         override = _xai_base_url_override()

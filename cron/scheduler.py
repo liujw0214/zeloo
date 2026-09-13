@@ -1,5 +1,5 @@
 """Cron job scheduler: tick() runs due jobs (gateway calls it every 60s from a background thread).
-A file lock (~/.hermes/cron/.tick.lock) keeps overlapping processes to one tick at a time.
+A file lock (~/.Zeloo/cron/.tick.lock) keeps overlapping processes to one tick at a time.
 """
 
 import atexit
@@ -32,15 +32,15 @@ from pathlib import Path
 from typing import Any, Callable, List, Optional, Protocol
 
 # Must precede repo-level imports: standalone invocations (e.g. module reload after
-# `hermes update`) otherwise fail with ModuleNotFoundError for hermes_time et al.
+# `Zeloo update`) otherwise fail with ModuleNotFoundError for zeloo_time et al.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from hermes_constants import get_hermes_home
-from hermes_cli._subprocess_compat import windows_hide_flags
-from hermes_cli.config import (
+from zeloo_constants import get_zeloo_home
+from zeloo_cli._subprocess_compat import windows_hide_flags
+from zeloo_cli.config import (
     _expand_env_vars, load_config, resolve_cron_model_drift_defaults)
-from hermes_cli.fallback_config import get_fallback_chain
-from hermes_time import now as _hermes_now
+from zeloo_cli.fallback_config import get_fallback_chain
+from zeloo_time import now as _zeloo_now
 from agent.interrupt_compat import request_hard_interrupt
 from agent.delegation_context import (
     enter_non_dispatcher_owned_context, exit_non_dispatcher_owned_context)
@@ -59,7 +59,7 @@ def _close_late_session_db_result(future: "concurrent.futures.Future") -> None:
     with contextlib.suppress(Exception):
         db = future.result()
         if db is not None:
-            from hermes_state_registry import release_or_close
+            from zeloo_state_registry import release_or_close
             release_or_close(db)
 
 
@@ -108,7 +108,7 @@ def _fallback_chain_phrase() -> str:
     if chain:
         return "Fallback chain was exhausted or unavailable."
     return (
-        "No fallback chain configured — add one with `hermes fallback add`, "
+        "No fallback chain configured — add one with `Zeloo fallback add`, "
         "or set a cron fleet default via `cron.model` + `cron.model_provider` in config.yaml."
     )
 
@@ -137,7 +137,7 @@ def _failure_streak_nudge(job: dict) -> str:
     job_ref = job.get("name") or job.get("id") or "this job"
     return (
         f"\nThis job has failed {streak} runs in a row — worth a review. "
-        f"Fix its prompt/config, or pause it with `hermes cron pause {job_ref}` "
+        f"Fix its prompt/config, or pause it with `Zeloo cron pause {job_ref}` "
         "(resume/remove also available) to stop the noise."
     )
 
@@ -159,7 +159,7 @@ class CronTickYielded(RuntimeError):
     Raised by ``tick()`` BEFORE the tick lock when boot fingerprint ≠ disk, this process does NOT
     own the runtime lock and a fresh process holds it — the stale process must stay out of the
     dispatch race (contention would starve the fresh ticker). Skew ``None`` never yields (fail
-    open). Raised, not returned, so ``record_ticker_error`` sees it and ``hermes cron status``
+    open). Raised, not returned, so ``record_ticker_error`` sees it and ``Zeloo cron status``
     isn't green.
     """
 
@@ -303,7 +303,7 @@ def _summarize_cron_failure_for_delivery(job: dict, error: str | None) -> str:
     # (message unchanged); no_agent jobs excluded via the same mode gate (a fresh subprocess
     # resolves imports against disk, so its ImportError is the script's own problem).
     # Import-class failures (#95294 part 3): a long-lived gateway whose checkout was updated underneath it
-    # (interrupted `hermes update`, manual git pull) serves MIXED modules — old entries frozen in
+    # (interrupted `Zeloo update`, manual git pull) serves MIXED modules — old entries frozen in
     # sys.modules, new files loaded by lazy imports — and every agent cron job then dies with `cannot import
     # name X` / ModuleNotFoundError. The error itself reads like a code bug, so operators debug the wrong
     # thing (2 days on the reporting incident, 15 missed jobs).
@@ -319,7 +319,7 @@ def _summarize_cron_failure_for_delivery(job: dict, error: str | None) -> str:
             message += (
                 f" Likely cause: the gateway is running stale code (booted "
                 f"on {boot_rev}, disk is at {disk_rev}) — run "
-                "`hermes gateway restart` to fix it."
+                "`Zeloo gateway restart` to fix it."
             )
 
     return message
@@ -401,8 +401,8 @@ def _merge_mcp_into_per_job_toolsets(per_job: list[str], cfg: dict) -> list[str]
     result = [t for t in per_job if t != "no_mcp"]
     if "no_mcp" in per_job:
         return result
-    # lazy: avoid heavy hermes_cli import at module load; shares MCP-membership with gateway/CLI
-    from hermes_cli.tools_config import enabled_mcp_server_names
+    # lazy: avoid heavy zeloo_cli import at module load; shares MCP-membership with gateway/CLI
+    from zeloo_cli.tools_config import enabled_mcp_server_names
     enabled_mcp = enabled_mcp_server_names(cfg)
     if set(result) & enabled_mcp:
         return result
@@ -428,7 +428,7 @@ def _resolve_cron_enabled_toolsets(job: dict, cfg: dict) -> list[str] | None:
     if per_job:
         return _merge_mcp_into_per_job_toolsets(list(per_job), cfg or {})
     try:
-        from hermes_cli.tools_config import _get_platform_tools  # lazy: avoid heavy import at cron module load
+        from zeloo_cli.tools_config import _get_platform_tools  # lazy: avoid heavy import at cron module load
         return sorted(_get_platform_tools(cfg or {}, "cron"))
     except Exception as exc:
         logger.warning(
@@ -441,7 +441,7 @@ def _resolve_job_reasoning_config(job: dict, cfg: dict, model: str) -> dict | No
     """Effective reasoning config for a cron run. A per-job ``reasoning_effort`` pin beats global
     and per-model config and is model-independent by design (also governs an auth-fallback swap);
     clamping stays with provider transports. An unparseable pin warns and falls back to config."""
-    from hermes_constants import parse_reasoning_effort, resolve_reasoning_config
+    from zeloo_constants import parse_reasoning_effort, resolve_reasoning_config
 
     pinned = job.get("reasoning_effort")
     if pinned is not None:
@@ -605,7 +605,7 @@ def _inflight_min_allowance_minutes() -> float:
             val = float(_cfg_val)
             if val > 0:
                 return val
-    raw = os.getenv("HERMES_CRON_INFLIGHT_MAX_MINUTES", "").strip()
+    raw = os.getenv("ZELOO_CRON_INFLIGHT_MAX_MINUTES", "").strip()
     if raw:
         try:
             val = float(raw)
@@ -613,7 +613,7 @@ def _inflight_min_allowance_minutes() -> float:
                 return val
         except (ValueError, TypeError):
             logger.warning(
-                "Invalid HERMES_CRON_INFLIGHT_MAX_MINUTES=%r; using default %s",
+                "Invalid ZELOO_CRON_INFLIGHT_MAX_MINUTES=%r; using default %s",
                 raw,
                 _INFLIGHT_MIN_ALLOWANCE_MINUTES)
     return _INFLIGHT_MIN_ALLOWANCE_MINUTES
@@ -685,12 +685,12 @@ def _record_forced_release(job_id: str, name: str, age_seconds: float, allowance
         "name": name,
         "age_seconds": round(age_seconds, 1),
         "allowance_seconds": round(allowance_seconds, 1),
-        "at": _hermes_now().isoformat()}
+        "at": _zeloo_now().isoformat()}
     with _running_lock:
         _forced_releases.append(entry)
         del _forced_releases[:-_FORCED_RELEASE_HISTORY]
     try:
-        path = _get_hermes_home() / "cron" / "inflight_forced_releases.jsonl"
+        path = _get_zeloo_home() / "cron" / "inflight_forced_releases.jsonl"
         _ensure_cron_dir(path.parent)
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry) + "\n")
@@ -853,7 +853,7 @@ def mark_running_jobs_interrupted(
         registered_ids = {job_id for _t, job_id, _o, _p in active_fires}
         if only_owners is None:
             active_fires.extend(
-                (None, job_id, None, _get_hermes_home())
+                (None, job_id, None, _get_zeloo_home())
                 for job_id in (
                     _running_job_ids - registered_ids - restart_safe_waiters
                 )
@@ -933,16 +933,16 @@ def _inactivity_watchdog_loop(
 
 
 def _cron_inactivity_seconds() -> float:
-    """Parse HERMES_CRON_TIMEOUT (seconds). 0 = unlimited; bad input = 600. Shared by the
+    """Parse ZELOO_CRON_TIMEOUT (seconds). 0 = unlimited; bad input = 600. Shared by the
     inactivity monitor and the cwd-lock bound so they can't drift: the lock bound must stay >= the
     inactivity limit or waiters fail while a healthy holder runs."""
-    raw = os.getenv("HERMES_CRON_TIMEOUT", "").strip()
+    raw = os.getenv("ZELOO_CRON_TIMEOUT", "").strip()
     if not raw:
         return 600.0
     try:
         return float(raw)
     except (ValueError, TypeError):
-        logger.warning("Invalid HERMES_CRON_TIMEOUT=%r; using default 600s", raw)
+        logger.warning("Invalid ZELOO_CRON_TIMEOUT=%r; using default 600s", raw)
         return 600.0
 
 
@@ -968,9 +968,9 @@ def _shutdown_parallel_pool() -> None:
 
 
 atexit.register(_shutdown_parallel_pool)
-# Per-fire usage audit log; resolves via _get_hermes_home() so profile-scoped paths work.
+# Per-fire usage audit log; resolves via _get_zeloo_home() so profile-scoped paths work.
 def _usage_audit_path() -> Path:
-    return _get_hermes_home() / "cron" / "usage_audit.jsonl"
+    return _get_zeloo_home() / "cron" / "usage_audit.jsonl"
 
 
 def _utcnow_iso_ms() -> str:
@@ -997,7 +997,7 @@ def _interpreter_shutting_down(exc: Optional[BaseException] = None) -> bool:
     futures/asyncio refuse new work, so delivery attempts only pollute errors.log — callers skip
     with a warning. ``exc`` lets an already-raised scheduling error count as a shutdown signal.
 
-    A cron tick can fire while the gateway is tearing down — SIGTERM from ``hermes update`` / ``hermes
+    A cron tick can fire while the gateway is tearing down — SIGTERM from ``Zeloo update`` / ``Zeloo
     gateway stop`` / systemd restart, or an OOM-kill. Once finalization starts, ``concurrent.futures``
     refuses new work with ``RuntimeError: cannot schedule new futures after interpreter shutdown`` and
     asyncio's default executor is gone, so *any* attempt to schedule delivery (live-adapter,
@@ -1010,24 +1010,24 @@ def _interpreter_shutting_down(exc: Optional[BaseException] = None) -> bool:
 
 
 # Module override hook for tests / emergency monkeypatches.
-_hermes_home: Path | None = None
+_zeloo_home: Path | None = None
 
 
-def _get_hermes_home() -> Path:
-    """Hermes home at call time (honouring the test override). Cron is per-profile: never freeze
+def _get_zeloo_home() -> Path:
+    """Zeloo home at call time (honouring the test override). Cron is per-profile: never freeze
     this at import or anchor it at the shared default root — either breaks profile isolation.
 
     Cron is per-profile by design (#4707): the in-process ticker runs inside a profile-scoped gateway, so
-    resolving the active HERMES_HOME at call time means a profile's jobs are stored AND executed under that
+    resolving the active ZELOO_HOME at call time means a profile's jobs are stored AND executed under that
     profile's home (its .env, config.yaml, scripts, skills).
     """
-    return _hermes_home or get_hermes_home()
+    return _zeloo_home or get_zeloo_home()
 
 
 def _get_lock_paths() -> tuple[Path, Path]:
     """Resolve cron lock paths at call time so profile/env changes are honored."""
-    hermes_home = _get_hermes_home()
-    lock_dir = hermes_home / "cron"
+    zeloo_home = _get_zeloo_home()
+    lock_dir = zeloo_home / "cron"
     return lock_dir, lock_dir / ".tick.lock"
 
 
@@ -1076,7 +1076,7 @@ def _reclaim_fds_best_effort() -> None:
 
         gc.collect()
     with contextlib.suppress(Exception):
-        from hermes_cli.resource_limits import apply_nofile_soft_limit
+        from zeloo_cli.resource_limits import apply_nofile_soft_limit
 
         apply_nofile_soft_limit(None)
 
@@ -1112,7 +1112,7 @@ def _cron_cleanup_timeout_seconds() -> float:
     """Return the wall-clock bound for cron post-run cleanup."""
     default = 10.0
     try:
-        from hermes_cli.config import load_config
+        from zeloo_cli.config import load_config
 
         cfg = load_config() or {}
         cron_cfg = cfg.get("cron", {}) if isinstance(cfg, dict) else {}
@@ -1239,9 +1239,9 @@ def _run_no_agent_job(
     # Load .env first so auto-delivery can resolve *_HOME_CHANNEL: the agent path's per-run dotenv
     # reload never runs for no_agent jobs. Does not override existing values.
     try:
-        from hermes_cli.env_loader import load_hermes_dotenv
+        from zeloo_cli.env_loader import load_zeloo_dotenv
 
-        load_hermes_dotenv(hermes_home=_get_hermes_home())
+        load_zeloo_dotenv(zeloo_home=_get_zeloo_home())
     except Exception:
         logger.debug("Job '%s': no_agent .env reload failed", job_id, exc_info=True)
 
@@ -1261,7 +1261,7 @@ def _run_no_agent_job(
         logger.exception("Job '%s': script execution raised unexpectedly", job_id)
         ok, output = False, f"Script execution failed: {exc}"
 
-    now_iso = _hermes_now().strftime("%Y-%m-%d %H:%M:%S")
+    now_iso = _zeloo_now().strftime("%Y-%m-%d %H:%M:%S")
     header = _job_doc_header(job_name, job_id, now_iso, "no_agent (script)")
 
     if not ok:
@@ -1297,7 +1297,7 @@ def _apply_monitor_gate(
     if not job_has_monitor(job):
         return None, extra_prompt
     _mon = check_monitor(job)
-    _mon_now = _hermes_now().strftime("%Y-%m-%d %H:%M:%S")
+    _mon_now = _zeloo_now().strftime("%Y-%m-%d %H:%M:%S")
     header = _job_doc_header(job_name, job_id, _mon_now, "monitor")
     if not _mon.ok:
         # Source failure is an ERROR, never a change: alert so a broken monitor can't silently
@@ -1345,7 +1345,7 @@ def _snapshot_pin(job: dict, axis: str, current: str, job_id: str) -> str:
     if snapshot and current and snapshot.lower() != current.lower():
         logger.info(
             "Job '%s': running on creation-snapshot %s %r (global default is now %r); "
-            "`hermes cron edit %s --%s <value>` or cron.%s in config.yaml moves it.",
+            "`Zeloo cron edit %s --%s <value>` or cron.%s in config.yaml moves it.",
             job_id, axis, snapshot, current, job_id, axis,
             "model" if axis == "model" else "model_provider")
     return snapshot
@@ -1353,20 +1353,20 @@ def _snapshot_pin(job: dict, axis: str, current: str, job_id: str) -> str:
 
 def _load_cron_job_config(job: dict, job_id: str, job_name: str) -> _CronJobConfig:
     """Load config.yaml and resolve the run's model: per-job override > cron.model (fleet default) >
-    creation snapshot > HERMES_MODEL > config ``model:``. Re-read every tick (no cache) so
-    ``hermes cron edit --model`` applies next tick."""
-    model = job.get("model") or os.getenv("HERMES_MODEL") or ""
+    creation snapshot > ZELOO_MODEL > config ``model:``. Re-read every tick (no cache) so
+    ``Zeloo cron edit --model`` applies next tick."""
+    model = job.get("model") or os.getenv("ZELOO_MODEL") or ""
     _cron_default_provider = ""
     _cfg: dict = {}
     _model_cfg: Any = {}
     try:
-        from hermes_cli.config import read_user_config_raw
-        _cfg_path = str(_get_hermes_home() / "config.yaml")
+        from zeloo_cli.config import read_user_config_raw
+        _cfg_path = str(_get_zeloo_home() / "config.yaml")
         if os.path.exists(_cfg_path):
             _cfg = read_user_config_raw(Path(_cfg_path))
             # Honor administrator-pinned managed scope (fail-open; no-op without managed scope).
             with contextlib.suppress(Exception):
-                from hermes_cli import managed_scope
+                from zeloo_cli import managed_scope
                 _cfg = managed_scope.apply_managed_overlay(_cfg)
             _cfg = _expand_env_vars(_cfg)
             # Coerce null to {} so a falsy default never clobbers a resolved env value.
@@ -1391,15 +1391,15 @@ def _load_cron_job_config(job: dict, job_id: str, job_name: str) -> _CronJobConf
         raise RuntimeError(
             f"Cron job '{job_name}' has no model configured "
             f"(job.model={job.get('model')!r}, "
-            f"HERMES_MODEL={os.getenv('HERMES_MODEL', '')!r}, "
+            f"ZELOO_MODEL={os.getenv('ZELOO_MODEL', '')!r}, "
             "config.yaml model.default missing or empty). "
             f"Set a per-job model via "
-            f"`hermes cron edit {job_id} --model <name>` or set a "
-            "default with `hermes model <name>`."
+            f"`Zeloo cron edit {job_id} --model <name>` or set a "
+            "default with `Zeloo model <name>`."
         )
 
     with contextlib.suppress(Exception):
-        from hermes_constants import apply_ipv4_preference
+        from zeloo_constants import apply_ipv4_preference
         _net_cfg = _cfg.get("network", {})
         if isinstance(_net_cfg, dict) and _net_cfg.get("force_ipv4"):
             apply_ipv4_preference(force=True)
@@ -1410,7 +1410,7 @@ def _load_prefill_messages(cfg: dict, job_id: str) -> Optional[list]:
     """Prefill messages from env or config.yaml (top-level key canonical; agent.* is legacy)."""
     agent_cfg = cfg.get("agent", {}) if isinstance(cfg.get("agent", {}), dict) else {}
     prefill_file = (
-        os.getenv("HERMES_PREFILL_MESSAGES_FILE", "")
+        os.getenv("ZELOO_PREFILL_MESSAGES_FILE", "")
         or cfg.get("prefill_messages_file", "")
         or agent_cfg.get("prefill_messages_file", "")
     )
@@ -1418,7 +1418,7 @@ def _load_prefill_messages(cfg: dict, job_id: str) -> Optional[list]:
         return None
     pfpath = Path(prefill_file).expanduser()
     if not pfpath.is_absolute():
-        pfpath = _get_hermes_home() / pfpath
+        pfpath = _get_zeloo_home() / pfpath
     if not pfpath.exists():
         return None
     try:
@@ -1472,7 +1472,7 @@ def _preflight_or_block(job: dict, job_id: str, job_name: str, cfg: dict) -> Opt
     blocked_doc = (
         f"# Cron Job: {job_name}\n\n"
         f"**Job ID:** {job_id}\n"
-        f"**Run Time:** {_hermes_now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"**Run Time:** {_zeloo_now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"**Status:** BLOCKED (configuration)\n\n"
         "Pre-dispatch validation found a configuration problem and "
         "the agent was NOT run (no tokens spent).\n\n"
@@ -1489,9 +1489,9 @@ def _resolve_job_runtime(job: dict, job_id: str, jc: _CronJobConfig) -> tuple[di
     ``(runtime, model)``; provider+model swap atomically (never swap only the provider while keeping
     a paid primary model). Provider precedence: per-job pin > cron.model_provider > creation
     snapshot > persisted global config."""
-    from hermes_cli.runtime_provider import (
+    from zeloo_cli.runtime_provider import (
         resolve_runtime_provider, format_runtime_provider_error)
-    from hermes_cli.auth import AuthError
+    from zeloo_cli.auth import AuthError
 
     model = jc.model
     requested = job.get("provider") or jc.cron_default_provider or None
@@ -1502,7 +1502,7 @@ def _resolve_job_runtime(job: dict, job_id: str, jc: _CronJobConfig) -> tuple[di
         # config exactly as before.
         requested = _snapshot_pin(job, "provider", global_provider, job_id) or None
     try:
-        # Do NOT pass HERMES_INFERENCE_PROVIDER as `requested`: it would override persisted config
+        # Do NOT pass ZELOO_INFERENCE_PROVIDER as `requested`: it would override persisted config
         # and resurrect stale providers for unpinned jobs.
         runtime_kwargs = {
             "requested": requested,
@@ -1531,7 +1531,7 @@ def _resolve_job_runtime(job: dict, job_id: str, jc: _CronJobConfig) -> tuple[di
             if not fb_provider or not fb_model:
                 continue
             try:
-                from hermes_cli.fallback_config import resolve_entry_api_key
+                from zeloo_cli.fallback_config import resolve_entry_api_key
 
                 fb_kwargs = {"requested": fb_provider, "target_model": fb_model}
                 if entry.get("base_url"):
@@ -1584,20 +1584,20 @@ def _init_cron_mcp_tools(job_id: str) -> None:
 
 
 def _open_cron_session_db(job: dict):
-    """Open the SQLite session store under its own timeout (HERMES_CRON_TIMEOUT only watches
+    """Open the SQLite session store under its own timeout (ZELOO_CRON_TIMEOUT only watches
     run_conversation). A wedged sqlite3.connect returns None (no session store) instead of
     wedging the worker thread."""
     # Initialize the SQLite session store so cron job messages are persisted and discoverable via
     # session_search (same pattern as gateway/run.py) — only now, after every early-return path (wake-gate,
     # prompt validation, drift skip) has passed, so a gated run never opens state.db just to abandon the
-    # handle (#96290). Bounded with its own timeout (separate from HERMES_CRON_TIMEOUT, which only watches
+    # handle (#96290). Bounded with its own timeout (separate from ZELOO_CRON_TIMEOUT, which only watches
     # the agent's run_conversation below): SessionDB.__init__ opens/migrates state.db synchronously and has
     # no timeout of its own against a wedged sqlite3.connect (e.g. a stale flock left by a crashed sibling
     # process). An unbounded hang here would wedge the job's worker thread, so the init is bounded and a
     # timeout proceeds without a session store instead of blocking the run forever.
     _session_db_timeout = _get_session_db_timeout()
     try:
-        from hermes_state_registry import acquire
+        from zeloo_state_registry import acquire
 
         if _session_db_timeout <= 0:
             return acquire()
@@ -1655,7 +1655,7 @@ def _run_agent_with_watchdog(
     worker_state: Optional[dict] = None,
 ) -> dict:
     """Run ``agent.run_conversation`` on a worker thread under the inactivity (not wall-clock)
-    watchdog: default 600s, override HERMES_CRON_TIMEOUT, 0 = unlimited."""
+    watchdog: default 600s, override ZELOO_CRON_TIMEOUT, 0 = unlimited."""
     _cron_timeout = _cron_inactivity_seconds()
     _cron_inactivity_limit = _cron_timeout if _cron_timeout > 0 else None
     _POLL_INTERVAL = 5.0
@@ -1800,7 +1800,7 @@ def _final_response_from_result(result: dict, job_id: str, job_name: str, AIAgen
         # Render every persistence-cause variant or cause-refined text slips through.
         _explainer_variants = []
         try:
-            from hermes_state_errors import PERSISTENCE_ERROR_CAUSES as _causes
+            from zeloo_state_errors import PERSISTENCE_ERROR_CAUSES as _causes
         except Exception:
             _causes = ("locked", "disk", "unknown")
         for _cause in (None, *_causes):
@@ -1838,7 +1838,7 @@ def _finalize_cron_session(session_db, agent, job_id: str, job_name: str, cron_s
         with contextlib.suppress((Exception, KeyboardInterrupt)):
             _agent_session_id = getattr(agent, "session_id", None)
             # CLI (single-process) path: the approval contextvar is only bound during gateway/TUI turns and
-            # HERMES_SESSION_KEY is not in the CLI environment, so the key resolves empty here. Since #64240
+            # ZELOO_SESSION_KEY is not in the CLI environment, so the key resolves empty here. Since #64240
             # the CLI drains completions through a positive-ownership filter keyed on the durable
             # AIAgent.session_id — an empty session_key would fail closed and the CLI could never claim its
             # own completions, while a restored foreign event with an empty key could leak into any
@@ -1853,7 +1853,7 @@ def _finalize_cron_session(session_db, agent, job_id: str, job_name: str, cron_s
         # Title the cron session from the job (name -> id) and PERSIST it BEFORE end_session()/close() tear
         # the connection down, so the close can never run over an in-flight title write (#50536).
         _title_base = " ".join(job_name.split())[:60].strip() or f"cron {job_id}"
-        _cron_title = f"{_title_base} · {_hermes_now().strftime('%b %d %H:%M')}"
+        _cron_title = f"{_title_base} · {_zeloo_now().strftime('%b %d %H:%M')}"
         if not _set_cron_session_title(_session_db, _final_cron_session_id, _cron_title):
             _set_cron_session_title(_session_db, _final_cron_session_id, f"cron {job_id}")
     except (Exception, KeyboardInterrupt) as e:
@@ -1877,7 +1877,7 @@ def _finalize_cron_session(session_db, agent, job_id: str, job_name: str, cron_s
     # mid-API-wait, or without any assistant text leaves the last row as a tool result / pending call / user
     # prompt and must not surface as a healthy run. session_lifecycle_statuses is the existing cost-bounded
     # classifier for exactly this shape. Only a POSITIVELY recognized pathological status (see the status
-    # vocabulary in hermes_state's session_lifecycle_statuses docstring — keep the tuple below in sync when
+    # vocabulary in zeloo_state's session_lifecycle_statuses docstring — keep the tuple below in sync when
     # it grows) downgrades the booking: an unknown value (newer classifier shape, test doubles) keeps the
     # historical reason, and so does a failed probe — the booking itself is FAIL-OPEN on probe errors,
     # because classification is best-effort metadata and must not mislabel a healthy run.
@@ -1906,7 +1906,7 @@ def _finalize_cron_session(session_db, agent, job_id: str, job_name: str, cron_s
     except (Exception, KeyboardInterrupt) as e:
         logger.debug("Job '%s': failed to end session: %s", job_id, e)
     try:
-        from hermes_state_registry import release_or_close
+        from zeloo_state_registry import release_or_close
         release_or_close(_session_db)
     except (Exception, KeyboardInterrupt) as e:
         logger.debug("Job '%s': failed to close SQLite session store: %s", job_id, e)
@@ -1917,7 +1917,7 @@ def _run_doc_header(job: dict, title: str, job_id: str, prompt: str) -> str:
     return (
         f"# Cron Job: {title}\n\n"
         f"**Job ID:** {job_id}\n"
-        f"**Run Time:** {_hermes_now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"**Run Time:** {_zeloo_now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"**Schedule:** {job.get('schedule_display', 'N/A')}\n\n"
         f"## Prompt\n\n{prompt}\n\n"
     )
@@ -1933,9 +1933,9 @@ def _prepare_job_prompt(
     result short-circuits ``run_job`` (no_agent job, empty payload, monitor gate, wake gate,
     injection block, empty prompt); otherwise ``prompt`` is set."""
     # Fail closed on a corrupt config.yaml: defaults would let auto-detection bill a provider the
-    # user never chose. no_agent jobs are exempt. Escape hatch: HERMES_IGNORE_USER_CONFIG=1.
+    # user never chose. no_agent jobs are exempt. Escape hatch: ZELOO_IGNORE_USER_CONFIG=1.
     if not job.get("no_agent"):
-        from hermes_cli.config import InvalidUserConfigError, require_parseable_user_config
+        from zeloo_cli.config import InvalidUserConfigError, require_parseable_user_config
 
         try:
             require_parseable_user_config()
@@ -1974,7 +1974,7 @@ def _prepare_job_prompt(
             silent_doc = (
                 f"# Cron Job: {job_name}\n\n"
                 f"**Job ID:** {job_id}\n"
-                f"**Run Time:** {_hermes_now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                f"**Run Time:** {_zeloo_now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
                 "Script gate returned `wakeAgent=false` — agent skipped.\n"
             )
             return (True, silent_doc, SILENT_MARKER, None), None
@@ -1989,7 +1989,7 @@ def _prepare_job_prompt(
         blocked_doc = (
             f"# Cron Job: {job_name}\n\n"
             f"**Job ID:** {job_id}\n"
-            f"**Run Time:** {_hermes_now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"**Run Time:** {_zeloo_now().strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"**Status:** BLOCKED\n\n"
             "The assembled prompt (user prompt + loaded skill content) tripped "
             "the cron injection scanner and the agent was NOT run.\n\n"
@@ -2007,9 +2007,9 @@ def _prepare_job_prompt(
 
 
 _CRON_DELIVERY_VARS = (
-    "HERMES_CRON_AUTO_DELIVER_PLATFORM",
-    "HERMES_CRON_AUTO_DELIVER_CHAT_ID",
-    "HERMES_CRON_AUTO_DELIVER_THREAD_ID")
+    "ZELOO_CRON_AUTO_DELIVER_PLATFORM",
+    "ZELOO_CRON_AUTO_DELIVER_CHAT_ID",
+    "ZELOO_CRON_AUTO_DELIVER_THREAD_ID")
 
 
 class _CronRunScope:
@@ -2017,9 +2017,9 @@ class _CronRunScope:
     parallel jobs don't clobber each other). Construct before the try, ``enter()`` as its first
     statement, ``exit()`` in the finally — every setter here has a matching reset there.
 
-    HERMES_SESSION_* are deliberately NOT seeded from job["origin"]: it is delivery metadata, not
+    ZELOO_SESSION_* are deliberately NOT seeded from job["origin"]: it is delivery metadata, not
     a sender, and terminal/tts/skills/send_message tools would act as if the origin user were
-    driving the agent. Delivery reads job["origin"] / HERMES_CRON_AUTO_DELIVER_* directly.
+    driving the agent. Delivery reads job["origin"] / ZELOO_CRON_AUTO_DELIVER_* directly.
     """
 
     def __init__(self, job: dict, job_id: str, execution_id: Optional[str]):
@@ -2035,12 +2035,12 @@ class _CronRunScope:
             chat_name="",
             # Cron can't receive completions after its turn; async delegation output could
             # otherwise route to an unrelated chat via the ambient session key => inline delegation.
-            # We clear the HERMES_SESSION_* routing keys just below, so an async delegation's completion
+            # We clear the ZELOO_SESSION_* routing keys just below, so an async delegation's completion
             # event carries session_key="" — _enrich_async_delegation_routing cannot resolve it and
             # _inject_watch_notification drops it ("no routing metadata"). And by the time a child finishes,
             # run_job has already shipped the job's final response via _deliver_result; there is no turn
             # left to re-enter. (Worse, get_current_session_key() can fall back to the ambient os.environ
-            # HERMES_SESSION_KEY, which risks routing a cron subagent's output into an unrelated user chat.)
+            # ZELOO_SESSION_KEY, which risks routing a cron subagent's output into an unrelated user chat.)
             # Declaring the channel stateless routes delegate_task to its existing inline/synchronous path,
             # so results return within the job's own turn. See declare_stateless_channel(). Upstream:
             # #53027, #63142.
@@ -2054,7 +2054,7 @@ class _CronRunScope:
         self.task_id = f"cron:{job_id}:{execution_id or job.get('execution_id') or uuid.uuid4().hex}"
         if self.workdir:
             record_session_cwd(self.task_id, self.workdir)
-        self._cron_session_var = _VAR_MAP["HERMES_CRON_SESSION"]
+        self._cron_session_var = _VAR_MAP["ZELOO_CRON_SESSION"]
         self._cron_session_token = None
         self._non_dispatcher_token = None
 
@@ -2063,7 +2063,7 @@ class _CronRunScope:
         # os.environ fallback used by standalone entrypoints/tests).
         self._cron_session_token = self._cron_session_var.set("1")
         # Mark NOT the kanban worker: a worker's cronjob(action="run") lands here with
-        # HERMES_KANBAN_TASK in env, and an unrelated job could close the worker's task. Must be a
+        # ZELOO_KANBAN_TASK in env, and an unrelated job could close the worker's task. Must be a
         # ContextVar, NOT an os.environ clear (env is shared with the worker heartbeat and
         # concurrent jobs); copy_context() carries it into the agent thread.
         self._non_dispatcher_token = enter_non_dispatcher_owned_context()
@@ -2086,17 +2086,17 @@ def _reload_dotenv_and_publish_delivery_target(job: dict) -> None:
     """Re-read .env for this run and publish the auto-deliver target into the session ContextVars."""
     # Reset the secret-source cache FIRST or a Bitwarden/BSM-backed secret is never re-resolved
     # (only the placeholder reloads -> 401s).
-    from hermes_cli.env_loader import load_hermes_dotenv, reset_secret_source_cache
+    from zeloo_cli.env_loader import load_zeloo_dotenv, reset_secret_source_cache
     from gateway.session_context import _VAR_MAP
 
-    reset_secret_source_cache(_get_hermes_home())
-    load_hermes_dotenv(hermes_home=_get_hermes_home())
+    reset_secret_source_cache(_get_zeloo_home())
+    load_zeloo_dotenv(zeloo_home=_get_zeloo_home())
 
     delivery_target = _resolve_delivery_target(job)
     if delivery_target:
-        _VAR_MAP["HERMES_CRON_AUTO_DELIVER_PLATFORM"].set(delivery_target["platform"])
-        _VAR_MAP["HERMES_CRON_AUTO_DELIVER_CHAT_ID"].set(str(delivery_target["chat_id"]))
-        _VAR_MAP["HERMES_CRON_AUTO_DELIVER_THREAD_ID"].set(
+        _VAR_MAP["ZELOO_CRON_AUTO_DELIVER_PLATFORM"].set(delivery_target["platform"])
+        _VAR_MAP["ZELOO_CRON_AUTO_DELIVER_CHAT_ID"].set(str(delivery_target["chat_id"]))
+        _VAR_MAP["ZELOO_CRON_AUTO_DELIVER_THREAD_ID"].set(
             "" if delivery_target.get("thread_id") is None else str(delivery_target["thread_id"])
         )
 
@@ -2122,7 +2122,7 @@ def _resolve_cron_agent_setup(job: dict, job_id: str, job_name: str, jc) -> _Cro
     setup.prefill_messages = _load_prefill_messages(_cfg, job_id)
 
     # resolve_turn_limit() honors none/unlimited (sys.maxsize) and explicit 0 / null.
-    from hermes_cli.config import resolve_turn_limit as _resolve_turn_limit
+    from zeloo_cli.config import resolve_turn_limit as _resolve_turn_limit
     _mt = _cfg.get("agent", {}).get("max_turns")
     if _mt is None:
         _mt = _cfg.get("max_turns")
@@ -2235,7 +2235,7 @@ def run_job(
         return early
     from run_agent import AIAgent
 
-    _cron_session_id = f"cron_{job_id}_{_hermes_now().strftime('%Y%m%d_%H%M%S')}"
+    _cron_session_id = f"cron_{job_id}_{_zeloo_now().strftime('%Y%m%d_%H%M%S')}"
     logger.info("Running job '%s' (ID: %s)", job_name, job_id)
     logger.info("Prompt: %s", prompt[:100])
 
@@ -2433,7 +2433,7 @@ def run_one_job(
         job["execution_id"] = execution["id"]
 
     execution_id = str(job["execution_id"])
-    external_owner = os.environ.get("_HERMES_CRON_EXTERNAL_WORKER") == execution_id
+    external_owner = os.environ.get("_ZELOO_CRON_EXTERNAL_WORKER") == execution_id
     if not external_owner:
         try:
             if _launch_external_cron_worker(job):
@@ -2462,7 +2462,7 @@ def run_one_job(
     claim = job.get("fire_claim")
     fire_owner = str(claim.get("by") or "") if isinstance(claim, dict) else ""
     execution_token = object()
-    profile_home = _get_hermes_home().resolve()
+    profile_home = _get_zeloo_home().resolve()
     with _running_lock:
         _running_fire_owners.setdefault(job["id"], {})[execution_token] = (
             fire_owner or None, profile_home)
@@ -2818,14 +2818,14 @@ def _run_one_job_body(
         # Claimed durably before dispatch; becomes running only right before the actual run.
         # Detached workers transition to running while adopting; in-process paths must win the
         # claimed->running CAS here before any user script or agent side effect may begin.
-        external_owner = os.environ.get("_HERMES_CRON_EXTERNAL_WORKER") == execution_id
+        external_owner = os.environ.get("_ZELOO_CRON_EXTERNAL_WORKER") == execution_id
         if not external_owner and mark_execution_running(execution_id) is None:
             logger.warning("Cron job %s lost execution ownership before start; skipping", job["id"])
             return True
 
         # get_secret() fails closed outside a scope; the ticker thread has none. Delivery adapters
         # resolve credentials, so the scope must span delivery too (reset in the outer finally).
-        _scope_token = set_secret_scope(build_profile_secret_scope(_get_hermes_home()))
+        _scope_token = set_secret_scope(build_profile_secret_scope(_get_zeloo_home()))
         # Same for terminal policy (gateway/run.py _profile_runtime_scope): else the ticker reads
         # process-global TERMINAL_* env a concurrent profile pinned. Resolution failure installs a
         # refusal scope — terminal execution raises instead of using the launch process's policy.
@@ -2845,7 +2845,7 @@ def _run_one_job_body(
         from tools.terminal_scope import (
             install_profile_terminal_scope)
 
-        _terminal_scope_token = install_profile_terminal_scope(_get_hermes_home())
+        _terminal_scope_token = install_profile_terminal_scope(_get_zeloo_home())
         # Defer agent teardown until AFTER delivery; closing first races the live send against a
         # torn-down async client. run_job hands the agent back via this list.
         # Defer the cron agent's async-resource teardown until AFTER delivery. run_job normally closes the
@@ -3052,7 +3052,7 @@ def _launch_external_cron_worker(job: dict) -> bool:
     """
     execution_id = str(job["execution_id"])
     job_id = str(job["id"])
-    handoff_dir = _get_hermes_home() / "cron" / "external-workers"
+    handoff_dir = _get_zeloo_home() / "cron" / "external-workers"
     payload_path = handoff_dir / f"{execution_id}.json"
     ack_path = handoff_dir / f"{execution_id}.ready"
     command = [
@@ -3071,7 +3071,7 @@ def _launch_external_cron_worker(job: dict) -> bool:
         reset_secret_scope,
         set_secret_scope,
     )
-    from hermes_cli.env_loader import hydrate_profile_secret_sources
+    from zeloo_cli.env_loader import hydrate_profile_secret_sources
     from tools.environments.local import build_subprocess_env
     from tools.process_registry import (
         restart_safe_gateway_child_argv,
@@ -3102,7 +3102,7 @@ def _launch_external_cron_worker(job: dict) -> bool:
             json.dump(
                 {
                     "job": job,
-                    "profile_home": str(_get_hermes_home().resolve()),
+                    "profile_home": str(_get_zeloo_home().resolve()),
                     "multiplex_active": multiplex_active,
                 },
                 payload_file,
@@ -3113,14 +3113,14 @@ def _launch_external_cron_worker(job: dict) -> bool:
         payload_path.unlink(missing_ok=True)
         raise
 
-    profile_home = _get_hermes_home().resolve()
+    profile_home = _get_zeloo_home().resolve()
     hydrate_profile_secret_sources(profile_home)
     secret_token = set_secret_scope(build_profile_secret_scope(profile_home))
     try:
         worker_env = build_subprocess_env(
             scrub_secrets=multiplex_active,
             inherit_profile_home=True,
-            extra={"HERMES_HOME": str(profile_home)},
+            extra={"ZELOO_HOME": str(profile_home)},
         )
     finally:
         reset_secret_scope(secret_token)
@@ -3246,13 +3246,13 @@ def _run_external_worker_payload(payload_path: Path, ack_path: Path) -> bool:
         set_secret_scope,
     )
     from cron.executions import adopt_claimed_execution
-    from hermes_cli.env_loader import hydrate_profile_secret_sources
-    from hermes_constants import (
-        reset_hermes_home_override,
-        set_hermes_home_override,
+    from zeloo_cli.env_loader import hydrate_profile_secret_sources
+    from zeloo_constants import (
+        reset_zeloo_home_override,
+        set_zeloo_home_override,
     )
 
-    home_token = set_hermes_home_override(profile_home)
+    home_token = set_zeloo_home_override(profile_home)
     previous_multiplex = is_multiplex_active()
     multiplex_active = bool(payload.get("multiplex_active", False))
     set_multiplex_active(multiplex_active)
@@ -3280,19 +3280,19 @@ def _run_external_worker_payload(payload_path: Path, ack_path: Path) -> bool:
                     execution_id,
                 )
                 return False
-            old_external_execution = os.environ.get("_HERMES_CRON_EXTERNAL_WORKER")
-            os.environ["_HERMES_CRON_EXTERNAL_WORKER"] = execution_id
+            old_external_execution = os.environ.get("_ZELOO_CRON_EXTERNAL_WORKER")
+            os.environ["_ZELOO_CRON_EXTERNAL_WORKER"] = execution_id
             try:
                 return run_one_job(job, adapters=None, loop=None, verbose=False)
             finally:
                 if old_external_execution is None:
-                    os.environ.pop("_HERMES_CRON_EXTERNAL_WORKER", None)
+                    os.environ.pop("_ZELOO_CRON_EXTERNAL_WORKER", None)
                 else:
-                    os.environ["_HERMES_CRON_EXTERNAL_WORKER"] = old_external_execution
+                    os.environ["_ZELOO_CRON_EXTERNAL_WORKER"] = old_external_execution
     finally:
         reset_secret_scope(secret_token)
         set_multiplex_active(previous_multiplex)
-        reset_hermes_home_override(home_token)
+        reset_zeloo_home_override(home_token)
 
 
 def _notify_provider_jobs_changed() -> None:
@@ -3366,11 +3366,11 @@ _worktree_maintenance_lock = threading.Lock()
 
 
 def _worktree_maintenance_repos() -> List[str]:
-    """Repos whose ``.worktrees/`` to keep pruned: the hermes checkout plus job workdir repo roots,
+    """Repos whose ``.worktrees/`` to keep pruned: the Zeloo checkout plus job workdir repo roots,
     filtered to those that actually have a ``.worktrees/`` dir."""
     repos: set = set()
 
-    # Hermes source checkout (git installs only; wheel installs have no .git).
+    # Zeloo source checkout (git installs only; wheel installs have no .git).
     with contextlib.suppress(Exception):
         install_root = Path(__file__).resolve().parent.parent
         if (install_root / ".git").exists():
@@ -3398,7 +3398,7 @@ def _worktree_maintenance_repos() -> List[str]:
 
 def _maybe_run_worktree_maintenance() -> None:
     """Throttled worktree prune from the cron tick, on a daemon thread so the tick never waits on
-    git. Same conservative pruner as ``hermes -w`` startup (dirty/unpushed/locked trees untouched).
+    git. Same conservative pruner as ``Zeloo -w`` startup (dirty/unpushed/locked trees untouched).
     Errors never propagate: GC is hygiene, not scheduling."""
     global _last_worktree_maintenance_at
     now = time.monotonic()
@@ -3479,7 +3479,7 @@ def _maybe_reap_dead_owners() -> None:
     """Dead-owner reclaim: a run that died mid-flight would leave its row 'claimed' forever. Only
     rows whose owner process is proved gone are touched (_owner_is_live). Throttled."""
     # Dead-owner claim reclaim (#86721): execution rows carry their owner pid + process start time, but
-    # recovery previously ran only at scheduler STARTUP. A one-shot `hermes cron run` that claimed a job and
+    # recovery previously ran only at scheduler STARTUP. A one-shot `Zeloo cron run` that claimed a job and
     # died mid-run (its runner thread lived in the exiting CLI process) left the row 'claimed' forever while
     # the long-lived gateway ticker kept running — blocking every future run of that job. Reap provably-dead
     # owners periodically so stale claims auto-clear without a gateway restart. Throttled so idle 60s ticks
@@ -3525,13 +3525,13 @@ def _sweep_stale_inflight_for_tick(due_jobs: list) -> None:
 
 
 def _resolve_max_parallel_workers() -> Optional[int]:
-    """Max workers: env > config.yaml > unbounded (HERMES_CRON_MAX_PARALLEL=1 restores serial)."""
+    """Max workers: env > config.yaml > unbounded (ZELOO_CRON_MAX_PARALLEL=1 restores serial)."""
     try:
-        _env_par = os.getenv("HERMES_CRON_MAX_PARALLEL", "").strip()
+        _env_par = os.getenv("ZELOO_CRON_MAX_PARALLEL", "").strip()
         if _env_par:
             return int(_env_par) or None
     except (ValueError, TypeError):
-        logger.warning("Invalid HERMES_CRON_MAX_PARALLEL value; defaulting to unbounded")
+        logger.warning("Invalid ZELOO_CRON_MAX_PARALLEL value; defaulting to unbounded")
     with contextlib.suppress(Exception):
         _ucfg = load_config() or {}
         _cfg_par = (_ucfg.get("cron", {}) if isinstance(_ucfg, dict) else {}).get("max_parallel_jobs")
@@ -3695,7 +3695,7 @@ def tick(
         return 0
 
     try:
-        # `hermes pause` ESTOP: skip dispatch, never touch in-flight runs; check_paused logs once.
+        # `Zeloo pause` ESTOP: skip dispatch, never touch in-flight runs; check_paused logs once.
         with contextlib.suppress(ImportError):
             from agent.estop import check_paused as _estop_check_paused
             if _estop_check_paused("cron", logger):
@@ -3723,12 +3723,12 @@ def tick(
                 # load_config()). Still run the post-tick MCP orphan sweep: main intentionally sweeps on
                 # idle ticks so orphaned stdio children from crashed jobs are reaped even when nothing is
                 # due.
-                logger.info("%s - No jobs due", _hermes_now().strftime('%H:%M:%S'))
+                logger.info("%s - No jobs due", _zeloo_now().strftime('%H:%M:%S'))
             _sweep_mcp_orphans()
             return 0
 
         if verbose:
-            logger.info("%s - %s job(s) due", _hermes_now().strftime('%H:%M:%S'), len(due_jobs))
+            logger.info("%s - %s job(s) due", _zeloo_now().strftime('%H:%M:%S'), len(due_jobs))
 
         # Advance next_run_at for recurring jobs FIRST, under the lock, before any execution
         # (at-most-once). Re-advancing running jobs keeps the grace window alive; mark_job_run
@@ -3807,9 +3807,9 @@ if __name__ == "__main__":
         # The gateway spawns this worker with stdout/stderr on DEVNULL; without
         # a handler every adoption/ack failure below would be invisible.
         try:
-            from hermes_logging import setup_logging
+            from zeloo_logging import setup_logging
 
-            setup_logging(hermes_home=_get_hermes_home(), mode="cron")
+            setup_logging(zeloo_home=_get_zeloo_home(), mode="cron")
         except Exception:
             pass
         raise SystemExit(
@@ -3840,7 +3840,7 @@ def __getattr__(name):  # PEP 562 — lazy so no import cycles
     if target is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     import importlib
-    from hermes_cli.plugin_compat import warn_once
+    from zeloo_cli.plugin_compat import warn_once
     warn_once(__name__, name, *target)
     return getattr(importlib.import_module(target[0]), target[1])
 # ---- END PLUGIN-COMPAT ----

@@ -2,7 +2,7 @@
 
 Providers register via ``PluginContext.register_video_gen_provider()`` and live
 in ``<repo>/plugins/video_gen/<name>/`` (built-in) or
-``~/.hermes/plugins/video_gen/<name>/``; mirrors ``agent/image_gen_provider.py``.
+``~/.Zeloo/plugins/video_gen/<name>/``; mirrors ``agent/image_gen_provider.py``.
 One tool covers text-to-video and image-to-video: ``image_url`` present routes to
 the provider's image-to-video endpoint. Video edit/extend are deliberately NOT
 exposed — backends are too inconsistent for one unified tool.
@@ -68,7 +68,7 @@ class VideoGenProvider(CatalogProviderBase):
 
 
 def save_b64_video(b64_data: str,*, prefix: str="video", extension: str="mp4") -> Path:
-    """Decode base64 video data into ``$HERMES_HOME/cache/videos/``; return the path."""
+    """Decode base64 video data into ``$ZELOO_HOME/cache/videos/``; return the path."""
     return provider_media.save_b64("videos", b64_data, prefix=prefix, extension=extension)
 
 
@@ -85,7 +85,7 @@ _URL_VIDEO_CONTENT_TYPES = {
 def save_url_video(
     url: str, *, prefix: str = "video", timeout: float = 180.0, max_bytes: int = 200 * 1024 * 1024
 ) -> Path:
-    """Download an (often ephemeral) video URL into ``$HERMES_HOME/cache/videos/``;
+    """Download an (often ephemeral) video URL into ``$ZELOO_HOME/cache/videos/``;
     raises on network / HTTP / oversize / empty errors so callers can fall back to the URL."""
     return provider_media.save_url(
         "videos", url, prefix=prefix, timeout=timeout, max_bytes=max_bytes,

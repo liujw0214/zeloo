@@ -3,7 +3,7 @@
 Persistent memory via the ByteRover CLI (``brv``): hierarchical context tree with tiered retrieval
 (fuzzy text → LLM-driven search), local-first with optional cloud sync (BRV_API_KEY). Requires the
 ``brv`` CLI (npm install -g byterover-cli, or byterover.dev/install.sh). Working directory is
-$HERMES_HOME/byterover/ (profile-scoped); ``memory.byterover.auto_extract: false`` disables curate hooks.
+$ZELOO_HOME/byterover/ (profile-scoped); ``memory.byterover.auto_extract: false`` disables curate hooks.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
 def _load_plugin_config() -> Dict[str, Any]:
     """Read ``memory.byterover``; fall back to legacy ``memory.provider_config`` (early docs used it)."""
     try:
-        from hermes_cli.config import load_config
+        from zeloo_cli.config import load_config
         memory_config = load_config().get("memory", {})
     except Exception:
         return {}
@@ -53,8 +53,8 @@ def _load_plugin_config() -> Dict[str, Any]:
 
 def _get_brv_cwd() -> Path:
     """Profile-scoped working directory for the brv context tree."""
-    from hermes_constants import get_hermes_home
-    return get_hermes_home() / "byterover"
+    from zeloo_constants import get_zeloo_home
+    return get_zeloo_home() / "byterover"
 
 
 # brv binary resolution (cached, thread-safe): None = unresolved, "" = resolved-missing

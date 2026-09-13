@@ -160,13 +160,13 @@ def _parse_tool_arguments(raw_arguments: Any) -> tuple[dict, Optional[str]]:
 
 def _resolve_concurrent_tool_timeout() -> float | None:
     """Per-batch concurrent deadline: ``timeouts.tools.concurrent_batch`` wins,
-    ``HERMES_CONCURRENT_TOOL_TIMEOUT_S`` is the legacy bridge, ``0``/negative disables."""
+    ``ZELOO_CONCURRENT_TOOL_TIMEOUT_S`` is the legacy bridge, ``0``/negative disables."""
     from agent.deadline import resolve_timeout
 
     return resolve_timeout(
         "tools.concurrent_batch",
         default=_DEFAULT_CONCURRENT_TOOL_TIMEOUT_S,
-        env_var="HERMES_CONCURRENT_TOOL_TIMEOUT_S",
+        env_var="ZELOO_CONCURRENT_TOOL_TIMEOUT_S",
     )
 
 
@@ -190,7 +190,7 @@ def _flush_session_db_after_tool_progress(agent, messages: list, *, stage: str) 
         return persisted
     except Exception as exc:
         agent._incremental_persistence_failed = True
-        from hermes_state import classify_persistence_error
+        from zeloo_state import classify_persistence_error
         agent._last_persistence_error_cause = classify_persistence_error(exc)
         logger.warning("Incremental tool-call persistence failed after %s: %s", stage, exc)
         return False
@@ -199,7 +199,7 @@ def _flush_session_db_after_tool_progress(agent, messages: list, *, stage: str) 
 def _image_generate_parallel_limit() -> int:
     """Configured image-generation parallelism cap (conservative: backend bursts hit rate limits)."""
     try:
-        from hermes_cli.config import load_config
+        from zeloo_cli.config import load_config
 
         cfg = load_config() or {}
         image_gen = cfg.get("image_gen") if isinstance(cfg, dict) else None
@@ -510,7 +510,7 @@ class _ConcurrentToolAuthorizationGate:
             # (#65673). Auth failures park here too rather than returning. Returning ends the run task, and
             # with it the only listener on ``_reconnect_event`` — so a 401 on the very first connect left
             # the server unrevivable for the life of the process, even after the user re-authenticated with
-            # ``hermes mcp login``. Parking keeps the task alive so the 300s self-probe (and an explicit
+            # ``Zeloo mcp login``. Parking keeps the task alive so the 300s self-probe (and an explicit
             # /mcp refresh) can pick up fresh tokens.
             logger.warning(
                 "authorization gate lock not acquired after %.1fs "
@@ -623,7 +623,7 @@ def _pre_tool_block(agent, ref: _ToolCallRef):
     """Run ``pre_tool_call`` plugin hooks; returns ``(block_message, final_args)`` with any
     hook-modified args applied. Hook failures never block."""
     try:
-        from hermes_cli.plugins import _dispatch_pre_tool_call_hooks
+        from zeloo_cli.plugins import _dispatch_pre_tool_call_hooks
 
         block_msg, modified_args = _dispatch_pre_tool_call_hooks(
             ref.name,
@@ -647,7 +647,7 @@ def _dispatch_authorized_once(
     begin_execution,
     authorization_gate: _ConcurrentToolAuthorizationGate | None,
 ) -> Any:
-    """Hermes policy (scope → plugin pre-hooks → guardrails) then the one real dispatch.
+    """Zeloo policy (scope → plugin pre-hooks → guardrails) then the one real dispatch.
 
     Plugin ``modify`` hooks may rewrite ``ref.args`` (mirrored into ``state.args``).
     ``begin_execution`` (concurrent start-order gate) is advanced exactly once on every
@@ -703,9 +703,9 @@ def _run_agent_tool_execution_middleware(
     begin_execution=None,
     authorization_gate: _ConcurrentToolAuthorizationGate | None = None,
 ) -> _ManagedToolResult:
-    """Run Relay rewrites before Hermes policy and dispatch exactly once."""
+    """Run Relay rewrites before Zeloo policy and dispatch exactly once."""
     from agent import relay_tools
-    from hermes_cli.middleware import (
+    from zeloo_cli.middleware import (
         apply_tool_request_middleware,
         run_tool_execution_middleware,
     )
@@ -717,7 +717,7 @@ def _run_agent_tool_execution_middleware(
     def _authorized_dispatch(final_args: dict[str, Any]) -> Any:
         with dispatch_lock:
             if state.dispatched:
-                raise RuntimeError("Hermes tool execution callback invoked more than once")
+                raise RuntimeError("Zeloo tool execution callback invoked more than once")
             state.dispatched = True
             state.blocked = False
             state.args = final_args
@@ -732,7 +732,7 @@ def _run_agent_tool_execution_middleware(
             authorization_gate=authorization_gate,
         )
 
-    def _hermes_pipeline(relay_args: dict[str, Any]) -> Any:
+    def _zeloo_pipeline(relay_args: dict[str, Any]) -> Any:
         request_result = apply_tool_request_middleware(
             function_name,
             relay_args,
@@ -753,7 +753,7 @@ def _run_agent_tool_execution_middleware(
     state.result, _relay_args = relay_tools.execute(
         function_name,
         function_args,
-        _hermes_pipeline,
+        _zeloo_pipeline,
         session_id=str(getattr(agent, "session_id", "") or ""),
         tool_call_id=tool_call_id or None,
         metadata={

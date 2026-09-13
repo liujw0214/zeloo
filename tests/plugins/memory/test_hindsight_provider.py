@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from hermes_cli.memory_setup import _CANCELLED
+from zeloo_cli.memory_setup import _CANCELLED
 from plugins.memory.hindsight import (
     HindsightMemoryProvider,
     RECALL_SCHEMA,
@@ -111,11 +111,11 @@ def _provider_for_mode(tmp_path, monkeypatch, mode: str):
     config_path.write_text(json.dumps(config))
 
     monkeypatch.setattr(
-        "plugins.memory.hindsight.get_hermes_home", lambda: tmp_path
+        "plugins.memory.hindsight.get_zeloo_home", lambda: tmp_path
     )
 
     provider = HindsightMemoryProvider()
-    provider.initialize(session_id="test-session", hermes_home=str(tmp_path), platform="cli")
+    provider.initialize(session_id="test-session", zeloo_home=str(tmp_path), platform="cli")
     return provider
 
 
@@ -180,11 +180,11 @@ def provider(tmp_path, monkeypatch):
     config_path.write_text(json.dumps(config))
 
     monkeypatch.setattr(
-        "plugins.memory.hindsight.get_hermes_home", lambda: tmp_path
+        "plugins.memory.hindsight.get_zeloo_home", lambda: tmp_path
     )
 
     p = HindsightMemoryProvider()
-    p.initialize(session_id="test-session", hermes_home=str(tmp_path), platform="cli")
+    p.initialize(session_id="test-session", zeloo_home=str(tmp_path), platform="cli")
     p._client = _make_mock_client()
     return p
 
@@ -207,20 +207,20 @@ def provider_with_config(tmp_path, monkeypatch):
         config_path.write_text(json.dumps(config))
 
         monkeypatch.setattr(
-            "plugins.memory.hindsight.get_hermes_home", lambda: tmp_path
+            "plugins.memory.hindsight.get_zeloo_home", lambda: tmp_path
         )
 
         p = HindsightMemoryProvider()
-        p.initialize(session_id="test-session", hermes_home=str(tmp_path), platform="cli")
+        p.initialize(session_id="test-session", zeloo_home=str(tmp_path), platform="cli")
         p._client = _make_mock_client()
         return p
     return _make
 
 
 def test_normalize_retain_tags_accepts_csv_and_dedupes():
-    assert _normalize_retain_tags("agent:fakeassistantname, source_system:hermes-agent, agent:fakeassistantname") == [
+    assert _normalize_retain_tags("agent:fakeassistantname, source_system:Zeloo-agent, agent:fakeassistantname") == [
         "agent:fakeassistantname",
-        "source_system:hermes-agent",
+        "source_system:Zeloo-agent",
     ]
 
 
@@ -273,7 +273,7 @@ class TestConfig:
         assert provider._recall_types == ["observation"]
         assert provider._bank_mission == ""
         assert provider._bank_retain_mission is None
-        assert provider._retain_context == "conversation between Hermes Agent and the User"
+        assert provider._retain_context == "conversation between Zeloo Agent and the User"
 
     def test_recall_types_default_is_observation_only(self, provider):
         """Auto-recall must filter to observation by default."""
@@ -288,7 +288,7 @@ class TestConfig:
     def test_custom_config_values(self, provider_with_config):
         p = provider_with_config(
             retain_tags=["tag1", "tag2"],
-            retain_source="hermes",
+            retain_source="Zeloo",
             retain_user_prefix="User (fakeusername)",
             retain_assistant_prefix="Assistant (fakeassistantname)",
             recall_tags=["recall-tag"],
@@ -306,7 +306,7 @@ class TestConfig:
         )
         assert p._tags == ["tag1", "tag2"]
         assert p._retain_tags == ["tag1", "tag2"]
-        assert p._retain_source == "hermes"
+        assert p._retain_source == "Zeloo"
         assert p._retain_user_prefix == "User (fakeusername)"
         assert p._retain_assistant_prefix == "Assistant (fakeassistantname)"
         assert p._recall_tags == ["recall-tag"]
@@ -360,7 +360,7 @@ class TestConfig:
         p = HindsightMemoryProvider()
         p._mode = "local_embedded"
         p._config = {
-            "profile": "hermes",
+            "profile": "Zeloo",
             "llm_provider": "openai_compatible",
             "llm_api_key": "test-key",
             "llm_model": "test-model",
@@ -376,58 +376,58 @@ class TestConfig:
 
 class TestPostSetup:
     def test_setup_cancel_at_mode_picker_writes_nothing(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / "hermes-home"
+        zeloo_home = tmp_path / "Zeloo-home"
         user_home = tmp_path / "user-home"
         user_home.mkdir()
         monkeypatch.setenv("HOME", str(user_home))
-        monkeypatch.setattr("plugins.memory.hindsight.get_hermes_home", lambda: hermes_home)
+        monkeypatch.setattr("plugins.memory.hindsight.get_zeloo_home", lambda: zeloo_home)
 
         save_config = MagicMock()
         which = MagicMock(return_value="/usr/bin/uv")
         run = MagicMock()
-        monkeypatch.setattr("hermes_cli.memory_setup._curses_select", lambda *args, **kwargs: _CANCELLED)
+        monkeypatch.setattr("zeloo_cli.memory_setup._curses_select", lambda *args, **kwargs: _CANCELLED)
         monkeypatch.setattr("shutil.which", which)
         monkeypatch.setattr("subprocess.run", run)
         monkeypatch.setattr("builtins.input", MagicMock(side_effect=AssertionError("prompt should not run")))
         monkeypatch.setattr("getpass.getpass", MagicMock(side_effect=AssertionError("prompt should not run")))
-        monkeypatch.setattr("hermes_cli.config.save_config", save_config)
+        monkeypatch.setattr("zeloo_cli.config.save_config", save_config)
 
         provider = HindsightMemoryProvider()
-        provider.post_setup(str(hermes_home), {"memory": {"provider": "builtin"}})
+        provider.post_setup(str(zeloo_home), {"memory": {"provider": "builtin"}})
 
         save_config.assert_not_called()
         which.assert_not_called()
         run.assert_not_called()
-        assert not (hermes_home / ".env").exists()
-        assert not (hermes_home / "hindsight" / "config.json").exists()
-        assert not (user_home / ".hindsight" / "profiles" / "hermes.env").exists()
+        assert not (zeloo_home / ".env").exists()
+        assert not (zeloo_home / "hindsight" / "config.json").exists()
+        assert not (user_home / ".hindsight" / "profiles" / "Zeloo.env").exists()
 
 
     def test_local_embedded_setup_materializes_profile_env(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / "hermes-home"
+        zeloo_home = tmp_path / "Zeloo-home"
         user_home = tmp_path / "user-home"
         user_home.mkdir()
         monkeypatch.setenv("HOME", str(user_home))
 
         selections = iter([1, 0])  # local_embedded, openai
-        monkeypatch.setattr("hermes_cli.memory_setup._curses_select", lambda *args, **kwargs: next(selections))
+        monkeypatch.setattr("zeloo_cli.memory_setup._curses_select", lambda *args, **kwargs: next(selections))
         monkeypatch.setattr("shutil.which", lambda name: None)
         monkeypatch.setattr("builtins.input", lambda prompt="": "")
         monkeypatch.setattr("sys.stdin.isatty", lambda: True)
         monkeypatch.setattr("getpass.getpass", lambda prompt="": "sk-local-test")
         saved_configs = []
-        monkeypatch.setattr("hermes_cli.config.save_config", lambda cfg: saved_configs.append(cfg.copy()))
+        monkeypatch.setattr("zeloo_cli.config.save_config", lambda cfg: saved_configs.append(cfg.copy()))
 
         provider = HindsightMemoryProvider()
-        provider.post_setup(str(hermes_home), {"memory": {}})
+        provider.post_setup(str(zeloo_home), {"memory": {}})
 
         assert saved_configs[-1]["memory"]["provider"] == "hindsight"
-        env_text = (hermes_home / ".env").read_text()
+        env_text = (zeloo_home / ".env").read_text()
         assert "HINDSIGHT_LLM_API_KEY=sk-local-test\n" in env_text
         assert "HINDSIGHT_TIMEOUT=120\n" in env_text
         assert "HINDSIGHT_IDLE_TIMEOUT=300\n" in env_text
 
-        profile_env = user_home / ".hindsight" / "profiles" / "hermes.env"
+        profile_env = user_home / ".hindsight" / "profiles" / "Zeloo.env"
         assert profile_env.exists()
         assert profile_env.read_text() == (
             "HINDSIGHT_API_LLM_PROVIDER=openai\n"
@@ -460,7 +460,7 @@ class TestToolHandlers:
 
     def test_retain_defaults_item_timestamp_when_no_occurred_at(self, provider, monkeypatch):
         event_time = datetime(2026, 8, 24, 9, 30, tzinfo=ZoneInfo("America/Los_Angeles"))
-        monkeypatch.setattr("plugins.memory.hindsight._hermes_now", lambda: event_time)
+        monkeypatch.setattr("plugins.memory.hindsight._zeloo_now", lambda: event_time)
         result = json.loads(provider.handle_tool_call(
             "hindsight_retain", {"content": "user likes dark mode"}
         ))
@@ -481,7 +481,7 @@ class TestToolHandlers:
 
     def test_retain_ignores_blank_occurred_at(self, provider, monkeypatch):
         event_time = datetime(2026, 8, 24, 9, 30, tzinfo=ZoneInfo("America/Los_Angeles"))
-        monkeypatch.setattr("plugins.memory.hindsight._hermes_now", lambda: event_time)
+        monkeypatch.setattr("plugins.memory.hindsight._zeloo_now", lambda: event_time)
         json.loads(provider.handle_tool_call(
             "hindsight_retain", {"content": "hello", "occurred_at": "   "}
         ))
@@ -894,10 +894,10 @@ class TestRecallStatus:
 class TestSyncTurn:
     def test_sync_turn_retains_metadata_rich_turn(self, provider_with_config, monkeypatch):
         event_time = datetime(2026, 8, 10, 11, 9, tzinfo=ZoneInfo("Asia/Shanghai"))
-        monkeypatch.setattr("plugins.memory.hindsight._hermes_now", lambda: event_time)
+        monkeypatch.setattr("plugins.memory.hindsight._zeloo_now", lambda: event_time)
         p = provider_with_config(
             retain_tags=["conv", "session1"],
-            retain_source="hermes",
+            retain_source="Zeloo",
             retain_user_prefix="User (fakeusername)",
             retain_assistant_prefix="Assistant (fakeassistantname)",
         )
@@ -924,7 +924,7 @@ class TestSyncTurn:
         assert call_kwargs["retain_async"] is True
         assert len(call_kwargs["items"]) == 1
         item = call_kwargs["items"][0]
-        assert item["context"] == "conversation between Hermes Agent and the User"
+        assert item["context"] == "conversation between Zeloo Agent and the User"
         assert item["tags"] == ["conv", "session1", "session:session-1"]
         content = json.loads(item["content"])
         assert len(content) == 1
@@ -932,7 +932,7 @@ class TestSyncTurn:
         assert content[0][0]["content"] == "User (fakeusername): hello"
         assert content[0][1]["role"] == "assistant"
         assert content[0][1]["content"] == "Assistant (fakeassistantname): hi there"
-        assert item["metadata"]["source"] == "hermes"
+        assert item["metadata"]["source"] == "Zeloo"
         assert item["metadata"]["session_id"] == "session-1"
         assert item["metadata"]["platform"] == "discord"
         assert item["metadata"]["user_id"] == "fakeusername-123"
@@ -951,7 +951,7 @@ class TestSyncTurn:
 
     def test_retain_timestamp_normalizes_a_naive_clock(self, provider, monkeypatch):
         event_time = datetime(2026, 8, 10, 11, 9)
-        monkeypatch.setattr("plugins.memory.hindsight._hermes_now", lambda: event_time)
+        monkeypatch.setattr("plugins.memory.hindsight._zeloo_now", lambda: event_time)
 
         timestamp = provider._build_retain_kwargs("hello")["timestamp"]
         parsed = datetime.fromisoformat(timestamp)
@@ -989,17 +989,17 @@ class TestSyncTurn:
         config_path = tmp_path / "hindsight" / "config.json"
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(config))
-        monkeypatch.setattr("plugins.memory.hindsight.get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr("plugins.memory.hindsight.get_zeloo_home", lambda: tmp_path)
 
         p1 = HindsightMemoryProvider()
-        p1.initialize(session_id="resumed-session", hermes_home=str(tmp_path), platform="cli")
+        p1.initialize(session_id="resumed-session", zeloo_home=str(tmp_path), platform="cli")
 
         # Sleep just enough that the microsecond timestamp differs
         import time
         time.sleep(0.001)
 
         p2 = HindsightMemoryProvider()
-        p2.initialize(session_id="resumed-session", hermes_home=str(tmp_path), platform="cli")
+        p2.initialize(session_id="resumed-session", zeloo_home=str(tmp_path), platform="cli")
 
         # Same session, but each process gets its own document_id
         assert p1._document_id != p2._document_id
@@ -1059,7 +1059,7 @@ class TestRetainIndicator:
     def test_status_callback_wired_from_initialize(self, tmp_path, monkeypatch):
         cb = lambda _m: None
         p = _provider_for_mode(tmp_path, monkeypatch, "cloud")
-        p.initialize(session_id="s", hermes_home=str(tmp_path), status_callback=cb)
+        p.initialize(session_id="s", zeloo_home=str(tmp_path), status_callback=cb)
         assert p._status_callback is cb
 
 
@@ -1339,20 +1339,20 @@ class TestConfigSchema:
 
 class TestBankIdTemplate:
     def test_sanitize_bank_segment_passthrough(self):
-        assert _sanitize_bank_segment("hermes") == "hermes"
+        assert _sanitize_bank_segment("Zeloo") == "Zeloo"
         assert _sanitize_bank_segment("my-agent_1") == "my-agent_1"
 
 
     def test_resolve_empty_template_uses_fallback(self):
         result = _resolve_bank_id_template(
-            "", fallback="hermes", profile="coder"
+            "", fallback="Zeloo", profile="coder"
         )
-        assert result == "hermes"
+        assert result == "Zeloo"
 
 
     def test_resolve_sanitizes_placeholder_values(self):
         result = _resolve_bank_id_template(
-            "user-{user}", fallback="hermes",
+            "user-{user}", fallback="Zeloo",
             profile="", workspace="", platform="",
             user="josh@example.com", session="",
         )
@@ -1365,23 +1365,23 @@ class TestBankIdTemplate:
             "apiKey": "k",
             "api_url": "http://x",
             "bank_id": "fallback-bank",
-            "bank_id_template": "hermes-{profile}",
+            "bank_id_template": "Zeloo-{profile}",
         }
         config_path = tmp_path / "hindsight" / "config.json"
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(config))
-        monkeypatch.setattr("plugins.memory.hindsight.get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr("plugins.memory.hindsight.get_zeloo_home", lambda: tmp_path)
 
         p = HindsightMemoryProvider()
         p.initialize(
             session_id="s1",
-            hermes_home=str(tmp_path),
+            zeloo_home=str(tmp_path),
             platform="cli",
             agent_identity="coder",
-            agent_workspace="hermes",
+            agent_workspace="Zeloo",
         )
-        assert p._bank_id == "hermes-coder"
-        assert p._bank_id_template == "hermes-{profile}"
+        assert p._bank_id == "Zeloo-coder"
+        assert p._bank_id_template == "Zeloo-{profile}"
 
 
 # ---------------------------------------------------------------------------
@@ -1392,7 +1392,7 @@ class TestBankIdTemplate:
 class TestAvailability:
     def test_available_with_api_key(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            "plugins.memory.hindsight.get_hermes_home",
+            "plugins.memory.hindsight.get_zeloo_home",
             lambda: tmp_path / "nonexistent",
         )
         monkeypatch.setenv("HINDSIGHT_API_KEY", "test-key")
@@ -1402,7 +1402,7 @@ class TestAvailability:
 
     def test_local_mode_unavailable_when_runtime_import_fails(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            "plugins.memory.hindsight.get_hermes_home",
+            "plugins.memory.hindsight.get_zeloo_home",
             lambda: tmp_path / "nonexistent",
         )
         monkeypatch.setenv("HINDSIGHT_MODE", "local")
@@ -1425,7 +1425,7 @@ class TestAvailability:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(config))
         monkeypatch.setattr(
-            "plugins.memory.hindsight.get_hermes_home", lambda: tmp_path
+            "plugins.memory.hindsight.get_zeloo_home", lambda: tmp_path
         )
 
         def _raise(_name):
@@ -1437,7 +1437,7 @@ class TestAvailability:
         )
 
         p = HindsightMemoryProvider()
-        p.initialize(session_id="test-session", hermes_home=str(tmp_path), platform="cli")
+        p.initialize(session_id="test-session", zeloo_home=str(tmp_path), platform="cli")
         assert p._mode == "disabled"
 
 
@@ -1555,9 +1555,9 @@ class TestPostSetupEnvEncoding:
         """Drive post_setup through the cloud path with piped stdin."""
         import io
 
-        monkeypatch.setattr("hermes_cli.memory_setup._curses_select",
+        monkeypatch.setattr("zeloo_cli.memory_setup._curses_select",
                             lambda *a, **kw: 0)  # cloud mode
-        monkeypatch.setattr("hermes_cli.config.save_config", lambda c: None)
+        monkeypatch.setattr("zeloo_cli.config.save_config", lambda c: None)
         # Skip the dependency install (now routed through lazy_deps, NS-605).
         import tools.lazy_deps as lazy_deps_mod
         monkeypatch.setattr(
@@ -1600,7 +1600,7 @@ class TestClientAutoUpgradeRoutesThroughLazyDeps:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps({"mode": "cloud"}))
         monkeypatch.setattr(
-            "plugins.memory.hindsight.get_hermes_home", lambda: tmp_path
+            "plugins.memory.hindsight.get_zeloo_home", lambda: tmp_path
         )
 
         # Simulate an installed-but-outdated client.
@@ -1618,7 +1618,7 @@ class TestClientAutoUpgradeRoutesThroughLazyDeps:
         monkeypatch.setattr(subprocess_mod, "run", _no_subprocess)
 
         provider = HindsightMemoryProvider()
-        provider.initialize(session_id="s", hermes_home=str(tmp_path), platform="cli")
+        provider.initialize(session_id="s", zeloo_home=str(tmp_path), platform="cli")
         return calls
 
     def test_upgrade_uses_install_specs_not_subprocess(self, tmp_path, monkeypatch):
@@ -1658,7 +1658,7 @@ class TestMultiplexBackgroundScope:
         from agent.secret_scope import (
             build_profile_secret_scope, reset_secret_scope, set_multiplex_active, set_secret_scope,
         )
-        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+        from zeloo_constants import reset_zeloo_home_override, set_zeloo_home_override
 
         created = []
 
@@ -1682,19 +1682,19 @@ class TestMultiplexBackgroundScope:
         ))
         # Enter the profile scope the way gateway _profile_runtime_scope does.
         set_multiplex_active(True)
-        monkeypatch.setattr("plugins.memory.hindsight.get_hermes_home", lambda: home)
-        home_tok = set_hermes_home_override(str(home))
+        monkeypatch.setattr("plugins.memory.hindsight.get_zeloo_home", lambda: home)
+        home_tok = set_zeloo_home_override(str(home))
         scope_tok = set_secret_scope(build_profile_secret_scope(home))
         yield created, home
         set_multiplex_active(False)
         reset_secret_scope(scope_tok)
-        reset_hermes_home_override(home_tok)
+        reset_zeloo_home_override(home_tok)
 
     def test_writer_thread_resolves_profile_secret(self, scoped_embedded):
         created, home = scoped_embedded
         p = HindsightMemoryProvider()
         p._mode = "local_embedded"
-        p._config = {"profile": "hermes", "llm_provider": "openai", "llm_model": "m"}
+        p._config = {"profile": "Zeloo", "llm_provider": "openai", "llm_model": "m"}
         p._ensure_writer()
         p._retain_queue.put(p._get_client)   # real body: get_secret(HINDSIGHT_LLM_API_KEY)
         p._retain_queue.put(_WRITER_SENTINEL)
@@ -1704,7 +1704,7 @@ class TestMultiplexBackgroundScope:
     def test_daemon_start_thread_resolves_profile_secret(self, scoped_embedded):
         created, home = scoped_embedded
         p = HindsightMemoryProvider()
-        p.initialize(session_id="s1", hermes_home=str(home), platform="cli")
+        p.initialize(session_id="s1", zeloo_home=str(home), platform="cli")
         for t in threading.enumerate():
             if t.name == "hindsight-daemon-start":
                 t.join(timeout=5)

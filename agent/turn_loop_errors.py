@@ -81,7 +81,7 @@ def handle_outer_loop_error(
         except Exception:
             pass
         _turn_exit_reason = "interpreter_shutdown"
-        final_response = "Session is shutting down. Your conversation can be resumed with: hermes --resume <session-id>"
+        final_response = "Session is shutting down. Your conversation can be resumed with: Zeloo --resume <session-id>"
         return _verdict("break")
 
     # Deterministic local post-processing bugs (traceback via local helpers, never API

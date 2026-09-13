@@ -8,7 +8,7 @@ import type {
   SessionMessage,
   SessionMessagesResponse,
   SessionSearchResponse
-} from '@/types/hermes'
+} from '@/types/Zeloo'
 
 import {
   ambientOwnerConnectionId,
@@ -16,7 +16,7 @@ import {
   connectionScoped,
   getApiRequestConnection,
   getApiRequestProfile,
-  hermesApi,
+  ZELOOApi,
   type ProfileScope,
   profileScoped
 } from './client'
@@ -87,7 +87,7 @@ export async function listSessions(
   archived: 'exclude' | 'include' | 'only' = 'exclude',
   order: 'created' | 'recent' = 'recent'
 ): Promise<PaginatedSessions> {
-  const result = await hermesApi<PaginatedSessions>({
+  const result = await ZELOOApi<PaginatedSessions>({
     ...profileScoped(),
     path:
       `/api/sessions?limit=${limit}&offset=0&min_messages=${Math.max(0, minMessages)}` +
@@ -129,7 +129,7 @@ export async function listAllProfileSessions(
     ? `&exclude_sources=${encodeURIComponent(filter.excludeSources.join(','))}`
     : ''
 
-  const result = await hermesApi<PaginatedSessions>({
+  const result = await ZELOOApi<PaginatedSessions>({
     ...profileScoped(),
     path:
       `/api/profiles/sessions?limit=${limit}&offset=0&min_messages=${Math.max(0, minMessages)}` +
@@ -258,7 +258,7 @@ async function listSidebarSessionsLegacy(req: SidebarSessionsRequest): Promise<S
 export function scanSessionPullRequests(
   ids: string[]
 ): Promise<{ pull_requests: Record<string, { number: number; url: string }>; scanned: string[] }> {
-  return hermesApi<{
+  return ZELOOApi<{
     pull_requests: Record<string, { number: number; url: string }>
     scanned: string[]
   }>({
@@ -291,7 +291,7 @@ export async function listSidebarSessions(req: SidebarSessionsRequest): Promise<
   let result: SidebarSessionsResponse
 
   try {
-    result = await hermesApi<SidebarSessionsResponse>({
+    result = await ZELOOApi<SidebarSessionsResponse>({
       ...profileScoped(),
       path: `/api/profiles/sessions/sidebar?${params.toString()}`,
       timeoutMs: SESSION_LIST_REQUEST_TIMEOUT_MS
@@ -338,7 +338,7 @@ export function setSessionArchived(id: string, archived: boolean, profile?: stri
   // remote gateway with no remoteProfile alias: the archive lands on the wrong
   // (default) state.db, no-ops on a missing row, and the archived/unarchived
   // state silently fails to stick — the same class as the unscoped DELETE.
-  return hermesApi<{ ok: boolean }>({
+  return ZELOOApi<{ ok: boolean }>({
     ...(profile ? { profile } : {}),
     path: `/api/sessions/${encodeURIComponent(id)}`,
     method: 'PATCH',
@@ -354,7 +354,7 @@ export function setSessionPinnedRemote(id: string, pinned: boolean, profile?: st
   // Owning profile in the PATCH body (see setSessionArchived / renameSession):
   // the handler reads its target DB from body.profile, so a remote/foreign
   // profile's pin must travel in the body or it no-ops on the wrong state.db.
-  return hermesApi<{ ok: boolean }>({
+  return ZELOOApi<{ ok: boolean }>({
     ...(profile ? { profile } : {}),
     path: `/api/sessions/${encodeURIComponent(id)}`,
     method: 'PATCH',
@@ -371,7 +371,7 @@ export function setSessionUnreadRemote(id: string, unread: boolean, profile?: st
   // the handler reads its target DB from body.profile, so a remote/foreign
   // profile's unread toggle must travel in the body or it no-ops on the wrong
   // state.db.
-  return hermesApi<{ ok: boolean }>({
+  return ZELOOApi<{ ok: boolean }>({
     ...(profile ? { profile } : {}),
     path: `/api/sessions/${encodeURIComponent(id)}`,
     method: 'PATCH',
@@ -380,7 +380,7 @@ export function setSessionUnreadRemote(id: string, unread: boolean, profile?: st
 }
 
 export function searchSessions(query: string): Promise<SessionSearchResponse> {
-  return hermesApi<SessionSearchResponse>({
+  return ZELOOApi<SessionSearchResponse>({
     path: `/api/sessions/search?q=${encodeURIComponent(query)}`
   })
 }
@@ -392,7 +392,7 @@ export function searchSessions(query: string): Promise<SessionSearchResponse> {
 export function getSession(id: string, profile?: ProfileScope): Promise<SessionInfo> {
   const suffix = sessionScopeQuery(profile)
 
-  return hermesApi<SessionInfo>({
+  return ZELOOApi<SessionInfo>({
     ...sessionScoped(profile),
     path: `/api/sessions/${encodeURIComponent(id)}${suffix}`
   })
@@ -434,7 +434,7 @@ export function getSessionMessages(
 
   const suffix = query.size ? `?${query.toString()}` : ''
 
-  return hermesApi<SessionMessagesResponse>({
+  return ZELOOApi<SessionMessagesResponse>({
     ...sessionScope,
     path: `/api/sessions/${encodeURIComponent(id)}/messages${suffix}`,
     ...(options.passive ? { passive: true } : {})
@@ -615,7 +615,7 @@ export function deleteSession(id: string, profile?: ProfileScope): Promise<{ ok:
   // override + global-remote routing (both re-read/re-append the param).
   const suffix = sessionScopeQuery(profile)
 
-  return hermesApi<{ ok: boolean }>({
+  return ZELOOApi<{ ok: boolean }>({
     ...sessionScoped(profile),
     path: `/api/sessions/${encodeURIComponent(id)}${suffix}`,
     method: 'DELETE'
@@ -627,7 +627,7 @@ export function renameSession(
   title: string,
   profile?: string | null
 ): Promise<{ ok: boolean; title: string }> {
-  return hermesApi<{ ok: boolean; title: string }>({
+  return ZELOOApi<{ ok: boolean; title: string }>({
     ...(profile ? { profile } : {}),
     path: `/api/sessions/${encodeURIComponent(id)}`,
     method: 'PATCH',

@@ -30,8 +30,8 @@ from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
-_THREAD_NAME = "hermes-periodic-scheduler"
-_CALLBACK_THREAD_PREFIX = "hermes-periodic-callback"
+_THREAD_NAME = "Zeloo-periodic-scheduler"
+_CALLBACK_THREAD_PREFIX = "Zeloo-periodic-callback"
 
 
 class ScheduledHandle:

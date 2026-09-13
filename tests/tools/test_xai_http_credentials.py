@@ -2,8 +2,8 @@ import pytest
 
 
 def _set_xai_oauth_unavailable(monkeypatch):
-    from hermes_cli import auth
-    import hermes_cli.auth_xai as auth_xai
+    from zeloo_cli import auth
+    import zeloo_cli.auth_xai as auth_xai
 
     monkeypatch.setattr(auth, "resolve_xai_oauth_runtime_credentials", lambda **_: {})
     monkeypatch.setattr(auth_xai, "resolve_xai_oauth_runtime_credentials", lambda **_: {})
@@ -11,10 +11,10 @@ def _set_xai_oauth_unavailable(monkeypatch):
 
 def test_xai_credentials_fail_closed_without_profile_scope(tmp_path, monkeypatch):
     from agent import secret_scope
-    from hermes_cli.config import invalidate_env_cache
+    from zeloo_cli.config import invalidate_env_cache
     from tools.xai_http import resolve_xai_http_credentials
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZELOO_HOME", str(tmp_path))
     monkeypatch.setenv("XAI_API_KEY", "foreign-xai-key")
     monkeypatch.setenv("XAI_BASE_URL", "https://foreign.example/v1")
     _set_xai_oauth_unavailable(monkeypatch)
@@ -35,10 +35,10 @@ def test_xai_credentials_do_not_fall_back_to_environ_when_scope_has_no_key(
     tmp_path, monkeypatch
 ):
     from agent import secret_scope
-    from hermes_cli.config import invalidate_env_cache
+    from zeloo_cli.config import invalidate_env_cache
     from tools.xai_http import resolve_xai_http_credentials
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZELOO_HOME", str(tmp_path))
     monkeypatch.setenv("XAI_API_KEY", "foreign-xai-key")
     monkeypatch.setenv("XAI_BASE_URL", "https://foreign.example/v1")
     _set_xai_oauth_unavailable(monkeypatch)
@@ -127,9 +127,9 @@ def test_prefer_api_key_falls_back_to_oauth_without_explicit_key(monkeypatch):
     assert creds["api_key"] == "oauth-token-x1"
 
 
-def test_prefer_api_key_honors_hermes_xai_base_url_with_validation(monkeypatch):
+def test_prefer_api_key_honors_zeloo_xai_base_url_with_validation(monkeypatch):
     """The preferred-key path reads the same override pair as the OAuth
-    branch (HERMES_XAI_BASE_URL first, then XAI_BASE_URL) behind the same
+    branch (ZELOO_XAI_BASE_URL first, then XAI_BASE_URL) behind the same
     origin-pinning validation: an *.x.ai override is honored, a foreign
     origin is rejected in favor of the default."""
     from tools.xai_http import resolve_xai_http_credentials
@@ -139,7 +139,7 @@ def test_prefer_api_key_honors_hermes_xai_base_url_with_validation(monkeypatch):
         "tools.xai_http.get_env_value",
         lambda name, default=None: {
             "XAI_API_KEY": "paid-key-x1",
-            "HERMES_XAI_BASE_URL": "https://staging.x.ai/v1",
+            "ZELOO_XAI_BASE_URL": "https://staging.x.ai/v1",
             "XAI_BASE_URL": "https://ignored.x.ai/v1",
         }.get(name, default),
     )
@@ -164,13 +164,13 @@ def test_prefer_api_key_honors_profile_scope_only_key(tmp_path, monkeypatch):
     os.environ / .env) is honored on the preferred path — the read goes
     through resolve_provider_secret, not a raw env lookup."""
     from agent import secret_scope
-    from hermes_cli.config import invalidate_env_cache
+    from zeloo_cli.config import invalidate_env_cache
     from tools.xai_http import resolve_xai_http_credentials
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZELOO_HOME", str(tmp_path))
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.delenv("XAI_BASE_URL", raising=False)
-    monkeypatch.delenv("HERMES_XAI_BASE_URL", raising=False)
+    monkeypatch.delenv("ZELOO_XAI_BASE_URL", raising=False)
     invalidate_env_cache()
     previous_multiplex = secret_scope.is_multiplex_active()
     token = secret_scope.set_secret_scope({"XAI_API_KEY": "scoped-key-x1"})

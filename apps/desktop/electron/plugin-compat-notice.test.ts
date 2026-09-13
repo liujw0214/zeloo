@@ -8,7 +8,7 @@ import { test } from 'vitest'
 import { DISMISSED_FILE, pendingNotice, recordDismissed, REPORT_FILE, reportKey } from './plugin-compat-notice'
 
 function tmp() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-compat-'))
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'Zeloo-compat-'))
 }
 
 const REPORT = {
@@ -24,18 +24,18 @@ const REPORT = {
       }
     ],
     beta: [
-      { file: 'a.py', line: 1, old: 'hermes_cli.kanban_db.connect', new: 'hermes_cli.kanban_db_connect.connect' },
+      { file: 'a.py', line: 1, old: 'zeloo_cli.kanban_db.connect', new: 'zeloo_cli.kanban_db_connect.connect' },
       {
         file: 'a.py',
         line: 9,
-        old: 'hermes_cli.kanban_db.connect_closing',
-        new: 'hermes_cli.kanban_db_connect.connect_closing'
+        old: 'zeloo_cli.kanban_db.connect_closing',
+        new: 'zeloo_cli.kanban_db_connect.connect_closing'
       }
     ]
   },
   lines: [
     '2 plugins use import paths that stop working on 2026-09-14 (10 days): alpha (1), beta (2)',
-    'Details: hermes plugins compat'
+    'Details: Zeloo plugins compat'
   ]
 }
 
@@ -55,7 +55,7 @@ test('report → one notice naming plugins, date and the CLI command', () => {
     /• alpha — 1 import \(e\.g\. tools\.web_tools\.prefers_gateway → tools\.tool_backend_helpers\.prefers_gateway\)/
   )
   assert.match(n.detail, /• beta — 2 imports/)
-  assert.match(n.detail, /hermes plugins compat/)
+  assert.match(n.detail, /Zeloo plugins compat/)
 })
 
 test('dismissal is remembered for the same report and forgotten for a different one', () => {

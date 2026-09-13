@@ -659,8 +659,8 @@ async def _standalone_send(pconfig, chat_id: str, message: str, *, thread_id: Op
 
 def interactive_setup() -> None:
     """Guide the user through Mattermost bot setup (URL + token, allowlist, home channel)."""
-    from hermes_cli.config import get_env_value, remove_env_value, save_env_value
-    from hermes_cli.cli_output import prompt, prompt_yes_no, print_header, print_info, print_success
+    from zeloo_cli.config import get_env_value, remove_env_value, save_env_value
+    from zeloo_cli.cli_output import prompt, prompt_yes_no, print_header, print_info, print_success
 
     def info(*lines: str) -> None:
         for line in lines:
@@ -693,7 +693,7 @@ def interactive_setup() -> None:
     else:
         print_info("⚠️  No allowlist set - anyone who can message the bot can use it!")
     print()
-    info("📬 Home Channel: where Hermes delivers cron job results and notifications.",
+    info("📬 Home Channel: where Zeloo delivers cron job results and notifications.",
          "   To get a channel ID: click channel name → View Info → copy the ID",
          "   You can also set this later by typing /set-home in a Mattermost channel.")
     home_channel = prompt("Home channel ID (leave empty to set later with /set-home)").strip()
@@ -701,7 +701,7 @@ def interactive_setup() -> None:
         save_env_value("MATTERMOST_HOME_CHANNEL", home_channel)
     elif remove_env_value("MATTERMOST_HOME_CHANNEL"):
         print_info("Home channel cleared.")
-    print_info("   Open config in your editor:  hermes config edit")
+    print_info("   Open config in your editor:  Zeloo config edit")
 
 
 # --- YAML → env config bridge (apply_yaml_config_fn) ---
@@ -738,7 +738,7 @@ def _apply_yaml_config(yaml_cfg: dict, mattermost_cfg: dict) -> dict | None:
 def _is_connected(config) -> bool:
     """Connected when BOTH MATTERMOST_TOKEN and MATTERMOST_URL are set (``get_env_value`` looked up at
     call time so tests patching ``gateway_mod.get_env_value`` can suppress ambient env vars)."""
-    import hermes_cli.gateway as gateway_mod
+    import zeloo_cli.gateway as gateway_mod
     return bool(
         (gateway_mod.get_env_value("MATTERMOST_TOKEN") or "").strip()
         and (gateway_mod.get_env_value("MATTERMOST_URL") or "").strip())
@@ -747,7 +747,7 @@ def _is_connected(config) -> bool:
 # --- Plugin registration entry point ---
 
 def register(ctx) -> None:
-    """Plugin entry point — called by the Hermes plugin system."""
+    """Plugin entry point — called by the Zeloo plugin system."""
     ctx.register_platform(
         name="mattermost", label="Mattermost", adapter_factory=MattermostAdapter,
         check_fn=check_mattermost_requirements, validate_config=validate_mattermost_config,

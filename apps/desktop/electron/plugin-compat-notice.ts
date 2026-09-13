@@ -1,8 +1,8 @@
 /**
  * One-time Desktop notice for plugins that import pre-decomposition module paths (PR #102117).
  *
- * The Python side (hermes_cli/plugin_compat.py) statically scans the user's enabled external plugins on
- * every CLI/gateway/TUI start and writes HERMES_HOME/.plugin-compat-report.json when any plugin imports a
+ * The Python side (zeloo_cli/plugin_compat.py) statically scans the user's enabled external plugins on
+ * every CLI/gateway/TUI start and writes ZELOO_HOME/.plugin-compat-report.json when any plugin imports a
  * path scheduled for removal on 2026-09-14 (deleting the file when none do). Desktop reads that file at
  * boot and shows ONE modal, then records the dismissal in userData so the same set of affected plugins is
  * never shown again. A *different* set (a new affected plugin, or the removal date passing so the plugins
@@ -41,9 +41,9 @@ export function reportKey(report: PluginCompatReport): string {
   return `${report.in_effect ? 'disabled' : 'pending'}|${parts.join(',')}`
 }
 
-export function readReport(hermesHome: string): PluginCompatReport | null {
+export function readReport(ZELOOHome: string): PluginCompatReport | null {
   try {
-    const raw = fs.readFileSync(path.join(hermesHome, REPORT_FILE), 'utf8')
+    const raw = fs.readFileSync(path.join(ZELOOHome, REPORT_FILE), 'utf8')
     const parsed = JSON.parse(raw)
 
     if (!parsed || typeof parsed !== 'object' || !parsed.plugins || !Array.isArray(parsed.lines)) {
@@ -100,8 +100,8 @@ export interface PendingNotice {
 }
 
 /** The modal to show this boot, or null (no report, or this exact report already dismissed). */
-export function pendingNotice(hermesHome: string, userData: string): PendingNotice | null {
-  const report = readReport(hermesHome)
+export function pendingNotice(ZELOOHome: string, userData: string): PendingNotice | null {
+  const report = readReport(ZELOOHome)
 
   if (!report) {
     return null
@@ -131,8 +131,8 @@ export function pendingNotice(hermesHome: string, userData: string): PendingNoti
     : `${names.length} plugin${names.length === 1 ? '' : 's'} import${names.length === 1 ? 's' : ''} module paths that stop working on ${report.removal_date}.`
 
   const detail = report.in_effect
-    ? `${list}\n\nUpdate the plugin(s), or force-load them with plugins.allow_deprecated_imports: true in config.yaml (they will still break once the compatibility layer is removed).\n\nFull list: hermes plugins compat`
-    : `${list}\n\nCheck for plugin updates or notify the author before ${report.removal_date}. After that date these plugins are not loaded.\n\nFull list: hermes plugins compat`
+    ? `${list}\n\nUpdate the plugin(s), or force-load them with plugins.allow_deprecated_imports: true in config.yaml (they will still break once the compatibility layer is removed).\n\nFull list: Zeloo plugins compat`
+    : `${list}\n\nCheck for plugin updates or notify the author before ${report.removal_date}. After that date these plugins are not loaded.\n\nFull list: Zeloo plugins compat`
 
   return { key, title, message, detail }
 }

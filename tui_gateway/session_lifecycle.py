@@ -15,14 +15,14 @@ from .method_ctx import bind_module
 def _notify_session_boundary(event_type: str, session_id: str | None, platform: str | None = None) -> None:
     """Fire session lifecycle hooks with CLI parity."""
     with contextlib.suppress(Exception):
-        from hermes_cli.lifecycle import finalize_session, invoke_hook
+        from zeloo_cli.lifecycle import finalize_session, invoke_hook
         if event_type == "on_session_finalize":
             finalize_session(session_id=session_id, platform=_resolve_agent_platform(platform))
         else:
             invoke_hook(event_type, session_id=session_id, platform=_resolve_agent_platform(platform))
 
 
-_SESSION_OWNERSHIP_UNAVAILABLE = "Hermes could not safely reserve this session. Try again."
+_SESSION_OWNERSHIP_UNAVAILABLE = "Zeloo could not safely reserve this session. Try again."
 _AUTOMATIC_SESSION_END_REASONS = frozenset({"ws_orphan_reap", "ws_disconnect", "idle_timeout", "lru_evict", "tui_shutdown"})
 
 
@@ -30,7 +30,7 @@ def _claim_active_session_slot(
     session_key: str, *, live_session_id: str, surface: str = "tui", profile_home: str | Path | None = None
 ) -> tuple[Any, str | None]:
     try:
-        from hermes_cli.active_sessions import try_acquire_active_session
+        from zeloo_cli.active_sessions import try_acquire_active_session
         return try_acquire_active_session(
             session_id=session_key, surface=surface, config=_load_cfg(), registry_home=profile_home,
             metadata={"live_session_id": live_session_id, "bot_live_delivery_consumer": True},
@@ -101,7 +101,7 @@ def _other_runtime_lease_guard(session_id: str, session: dict):
     the lifecycle -> preserve) when the guard can't be loaded/entered in 3 tries: unknown ownership never ends a row."""
     lease = session.get("active_session_lease")
     try:
-        from hermes_cli.active_sessions import active_session_liveness_guard, release_active_session_liveness_guard
+        from zeloo_cli.active_sessions import active_session_liveness_guard, release_active_session_liveness_guard
     except Exception as exc:
         logger.warning("Failed to load active session ownership guard; preserving session %s: %s", session_id, exc)
         yield True
@@ -139,7 +139,7 @@ def _transfer_active_session_slot(sid: str, session: dict, *, new_session_id: st
     if lease is None:
         return True
     try:
-        from hermes_cli.active_sessions import transfer_active_session
+        from zeloo_cli.active_sessions import transfer_active_session
         if transfer_active_session(lease, session_id=new_session_id, metadata={
                 "live_session_id": sid, "bot_live_delivery_consumer": True}):
             return True
@@ -235,7 +235,7 @@ def _finalize_session(session: dict | None, end_reason: str = "tui_close") -> No
     # interrupted=True so crash-recovery plugins can flush state (mirrors cli.py atexit).
     if agent is not None:
         with contextlib.suppress(Exception):
-            from hermes_cli.lifecycle import invoke_hook
+            from zeloo_cli.lifecycle import invoke_hook
             invoke_hook(
                 "on_session_end", completed=False, interrupted=True,
                 session_id=getattr(agent, "session_id", None) or session.get("session_key", ""),
@@ -335,9 +335,9 @@ def _pop_session_by_id(sid: str) -> dict | None:
     with _sessions_lock:
         session = _sessions.pop(sid, None)
         if session is not None:
-            from hermes_constants import get_hermes_home
+            from zeloo_constants import get_zeloo_home
 
-            home = str(Path(session.get("profile_home") or get_hermes_home()).resolve())
+            home = str(Path(session.get("profile_home") or get_zeloo_home()).resolve())
             last_active = time.time() if session.get("running") else float(session.get("last_active") or 0)
             _closed_session_activity[home] = max(_closed_session_activity.get(home, 0), last_active)
             session["_closing"] = True
@@ -642,7 +642,7 @@ def _close_sessions_for_transport(transport, *, end_reason: str = "ws_disconnect
                 claimed_for_teardown = _pop_session_by_id(sid)
             else:
                 # Point at the drop sentinel (NOT real stdio) so _ws_session_is_orphaned recognizes it; standalone
-                # `hermes --tui` keeps real _stdio. UNLESS another window (pop-out viewer) still shows the session:
+                # `Zeloo --tui` keeps real _stdio. UNLESS another window (pop-out viewer) still shows the session:
                 # re-bind to the most recent surviving viewer instead.
                 viewers = current.get("viewers") or {}
                 # See #83716.

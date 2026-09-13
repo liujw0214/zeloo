@@ -41,11 +41,11 @@ class BrokenThenHealedDb:
 
 @pytest.fixture()
 def spool_home(tmp_path, monkeypatch):
-    """Point the pending spool at an isolated HERMES_HOME."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    import hermes_constants
+    """Point the pending spool at an isolated ZELOO_HOME."""
+    monkeypatch.setenv("ZELOO_HOME", str(tmp_path))
+    import zeloo_constants
     monkeypatch.setattr(
-        hermes_constants, "get_hermes_home", lambda: tmp_path, raising=True
+        zeloo_constants, "get_zeloo_home", lambda: tmp_path, raising=True
     )
     return tmp_path
 

@@ -6,7 +6,7 @@ request that carries it, so the cost is observable: with a fresh usage anchor (r
 the previous response), the residual between the next real ``prompt_tokens`` and
 ``anchor + text-only delta`` is the price of the N images that delta introduced (#70328).
 
-The learned value is kept per ``model@host`` in ``~/.hermes/cache/image_token_costs.json`` so a new
+The learned value is kept per ``model@host`` in ``~/.Zeloo/cache/image_token_costs.json`` so a new
 session starts calibrated, and bound per turn through a ContextVar so every estimator
 (preflight trigger, tail-budget walk, gateway hygiene) prices images the same way.
 """
@@ -25,7 +25,7 @@ DEFAULT_IMAGE_TOKEN_COST = 1500
 _MIN_PLAUSIBLE, _MAX_PLAUSIBLE = 64, 32_768
 _EMA_ALPHA = 0.5
 
-_image_cost_var: ContextVar[Optional[int]] = ContextVar("hermes_image_token_cost", default=None)
+_image_cost_var: ContextVar[Optional[int]] = ContextVar("zeloo_image_token_cost", default=None)
 _LEARNED: Dict[str, int] = {}
 _LOADED = False
 

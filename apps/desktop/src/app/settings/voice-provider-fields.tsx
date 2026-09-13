@@ -1,12 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { getElevenLabsVoices, getHermesConfigSchema, saveHermesConfig } from '@/hermes'
+import { getElevenLabsVoices, getZELOOConfigSchema, saveZELOOConfig } from '@/Zeloo'
 import { useI18n } from '@/i18n'
 import { notifyError } from '@/store/notifications'
-import type { HermesConfigRecord } from '@/types/hermes'
+import type { ZELOOConfigRecord } from '@/types/Zeloo'
 
-import { setHermesConfigCache, useHermesConfigRecord } from '../hooks/use-config-record'
+import { setZELOOConfigCache, useZELOOConfigRecord } from '../hooks/use-config-record'
 
 import { ConfigField } from './config-field'
 import { SECTIONS } from './constants'
@@ -33,18 +33,18 @@ export function voiceProviderKeys(section: 'tts' | 'stt', providerKey: string): 
 export function VoiceProviderFields({ section, providerKey }: { section: 'tts' | 'stt'; providerKey: string }) {
   const { t } = useI18n()
   const keys = useMemo(() => voiceProviderKeys(section, providerKey), [section, providerKey])
-  const { data: loadedConfig } = useHermesConfigRecord()
+  const { data: loadedConfig } = useZELOOConfigRecord()
 
   const { data: schemaResponse } = useQuery({
-    queryKey: ['hermes-config-schema'],
-    queryFn: () => getHermesConfigSchema(),
+    queryKey: ['Zeloo-config-schema'],
+    queryFn: () => getZELOOConfigSchema(),
     staleTime: 5 * 60 * 1000
   })
 
   // Local editable draft, seeded once from the shared cache (background
   // refetches must not clobber in-progress edits) — the same shape as
   // config-settings.tsx's autosave loop.
-  const [config, setConfig] = useState<HermesConfigRecord | null>(null)
+  const [config, setConfig] = useState<ZELOOConfigRecord | null>(null)
   const seeded = useRef(false)
 
   // eslint-disable-next-line no-restricted-syntax -- one-shot config seed flag, not an atom mirror
@@ -64,8 +64,8 @@ export function VoiceProviderFields({ section, providerKey }: { section: 'tts' |
     }
 
     const timeout = window.setTimeout(() => {
-      void saveHermesConfig(config)
-        .then(() => setHermesConfigCache(config))
+      void saveZELOOConfig(config)
+        .then(() => setZELOOConfigCache(config))
         .catch(err => notifyError(err, t.settings.config.autosaveFailed))
     }, 550)
 
@@ -111,7 +111,7 @@ export function VoiceProviderFields({ section, providerKey }: { section: 'tts' |
 
   const schema = schemaResponse?.fields ?? {}
 
-  const updateConfig = (next: HermesConfigRecord) => {
+  const updateConfig = (next: ZELOOConfigRecord) => {
     saveVersionRef.current += 1
     setConfig(next)
     setSaveVersion(saveVersionRef.current)

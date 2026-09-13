@@ -2,7 +2,7 @@
 
 Cross-session user modeling with dialectic Q&A, semantic search, peer cards and
 persistent conclusions; five tools (profile, search, reasoning, context, conclude).
-Config chain: $HERMES_HOME/honcho.json -> ~/.honcho/config.json -> env vars.
+Config chain: $ZELOO_HOME/honcho.json -> ~/.honcho/config.json -> env vars.
 """
 
 from __future__ import annotations
@@ -165,12 +165,12 @@ class HonchoMemoryProvider(DialecticMixin, MemoryProvider):
         except Exception:
             return False
 
-    def save_config(self, values, hermes_home):
-        """Merge ``values`` into $HERMES_HOME/honcho.json (Honcho SDK native format)."""
+    def save_config(self, values, zeloo_home):
+        """Merge ``values`` into $ZELOO_HOME/honcho.json (Honcho SDK native format)."""
         from pathlib import Path
         from utils import atomic_json_write
         from plugins.memory.honcho.client import _read_config
-        config_path = Path(hermes_home) / "honcho.json"
+        config_path = Path(zeloo_home) / "honcho.json"
         try:
             existing = _read_config(config_path)
         except Exception:
@@ -183,7 +183,7 @@ class HonchoMemoryProvider(DialecticMixin, MemoryProvider):
             {"key": "baseUrl", "description": "Honcho base URL (for self-hosted)"},
         ]
 
-    def post_setup(self, hermes_home: str, config: dict) -> None:
+    def post_setup(self, zeloo_home: str, config: dict) -> None:
         """Run the full Honcho setup wizard after provider selection."""
         import types
         from plugins.memory.honcho.cli import cmd_setup
@@ -249,7 +249,7 @@ class HonchoMemoryProvider(DialecticMixin, MemoryProvider):
         return cfg.resolve_session_name(
             session_title=kwargs.get("session_title"), session_id=session_id,
             gateway_session_key=kwargs.get("gateway_session_key"),
-        ) or session_id or "hermes-default"
+        ) or session_id or "Zeloo-default"
 
     def _can_start_init(self) -> bool:
         return not (self._cron_skipped or self._session_initialized) and bool(self._config) and self._lazy_init_kwargs is not None
@@ -263,7 +263,7 @@ class HonchoMemoryProvider(DialecticMixin, MemoryProvider):
         if init_kwargs is None:  # another init path already consumed the deferred kwargs
             return self._manager is not None
         try:
-            self._do_session_init(self._config, self._lazy_init_session_id or "hermes-default", **dict(init_kwargs))
+            self._do_session_init(self._config, self._lazy_init_session_id or "Zeloo-default", **dict(init_kwargs))
         except Exception as e:
             self._manager = None
             self._session_initialized = False
@@ -333,8 +333,8 @@ class HonchoMemoryProvider(DialecticMixin, MemoryProvider):
                          self._session_key)
         elif not session.messages:
             try:
-                from hermes_constants import get_hermes_home
-                self._manager.migrate_memory_files(self._session_key, str(get_hermes_home() / "memories"))
+                from zeloo_constants import get_zeloo_home
+                self._manager.migrate_memory_files(self._session_key, str(get_zeloo_home() / "memories"))
                 logger.debug("Honcho memory file migration attempted for new session: %s", self._session_key)
             except Exception as e:
                 logger.debug("Honcho memory file migration skipped: %s", e)
@@ -505,7 +505,7 @@ class HonchoMemoryProvider(DialecticMixin, MemoryProvider):
             msg = self._init_auth_failure
         return ("[Honcho memory status] Authentication with the Honcho memory backend has expired and automatic "
                 f"token refresh failed, so memory sync and recall are paused. Reason: {msg}\n"
-                "Tell the user (once) that Honcho memory is paused and that running 'hermes honcho setup' "
+                "Tell the user (once) that Honcho memory is paused and that running 'Zeloo honcho setup' "
                 "to re-authenticate will restore it.")
 
     def _truncate_to_budget(self, text: str) -> str:
@@ -1135,7 +1135,7 @@ def __getattr__(name):  # PEP 562 — lazy so no import cycles
     if target is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     import importlib
-    from hermes_cli.plugin_compat import warn_once
+    from zeloo_cli.plugin_compat import warn_once
     warn_once(__name__, name, *target)
     return getattr(importlib.import_module(target[0]), target[1])
 # ---- END PLUGIN-COMPAT ----

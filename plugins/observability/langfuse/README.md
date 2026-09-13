@@ -1,6 +1,6 @@
 # Langfuse Observability Plugin
 
-This plugin ships bundled with Hermes but is **opt-in** — it only loads when
+This plugin ships bundled with Zeloo but is **opt-in** — it only loads when
 you explicitly enable it.
 
 ## Enable
@@ -9,21 +9,21 @@ Pick one:
 
 ```bash
 # Interactive: walks you through credentials + SDK install + enable
-hermes tools  # → Langfuse Observability
+Zeloo tools  # → Langfuse Observability
 
 # Manual
 pip install langfuse
-hermes plugins enable observability/langfuse
+Zeloo plugins enable observability/langfuse
 ```
 
 ## Required credentials
 
-Set these in `~/.hermes/.env` (or via `hermes tools`):
+Set these in `~/.Zeloo/.env` (or via `Zeloo tools`):
 
 ```bash
-HERMES_LANGFUSE_PUBLIC_KEY=pk-lf-...
-HERMES_LANGFUSE_SECRET_KEY=sk-lf-...
-HERMES_LANGFUSE_BASE_URL=https://cloud.langfuse.com   # or your self-hosted URL
+ZELOO_LANGFUSE_PUBLIC_KEY=pk-lf-...
+ZELOO_LANGFUSE_SECRET_KEY=sk-lf-...
+ZELOO_LANGFUSE_BASE_URL=https://cloud.langfuse.com   # or your self-hosted URL
 ```
 
 Without the SDK or credentials the hooks no-op silently — the plugin fails
@@ -32,28 +32,28 @@ open.
 ## Verify
 
 ```bash
-hermes plugins list                 # observability/langfuse should show "enabled"
-hermes chat -q "hello"              # then check Langfuse for a "Hermes turn" trace
+Zeloo plugins list                 # observability/langfuse should show "enabled"
+Zeloo chat -q "hello"              # then check Langfuse for a "Zeloo turn" trace
 ```
 
-Generation observations include the Hermes system prompt when the provider
+Generation observations include the Zeloo system prompt when the provider
 uses a separate `system` param (Anthropic Messages API). Open an **LLM call**
-child span to inspect `role: system` (truncated via `HERMES_LANGFUSE_MAX_CHARS`).
+child span to inspect `role: system` (truncated via `ZELOO_LANGFUSE_MAX_CHARS`).
 
 ## Optional tuning
 
 ```bash
-HERMES_LANGFUSE_ENV=production       # environment tag
-HERMES_LANGFUSE_RELEASE=v1.0.0       # release tag
-HERMES_LANGFUSE_SAMPLE_RATE=0.5      # sample 50% of traces
-HERMES_LANGFUSE_MAX_CHARS=12000      # max chars per field (default: 12000)
-HERMES_LANGFUSE_CAPTURE=sanitized    # content capture mode (see below)
-HERMES_LANGFUSE_DEBUG=true           # verbose plugin logging
+ZELOO_LANGFUSE_ENV=production       # environment tag
+ZELOO_LANGFUSE_RELEASE=v1.0.0       # release tag
+ZELOO_LANGFUSE_SAMPLE_RATE=0.5      # sample 50% of traces
+ZELOO_LANGFUSE_MAX_CHARS=12000      # max chars per field (default: 12000)
+ZELOO_LANGFUSE_CAPTURE=sanitized    # content capture mode (see below)
+ZELOO_LANGFUSE_DEBUG=true           # verbose plugin logging
 ```
 
 ## Capture modes
 
-`HERMES_LANGFUSE_CAPTURE` controls how much *content* (prompts, responses,
+`ZELOO_LANGFUSE_CAPTURE` controls how much *content* (prompts, responses,
 tool arguments/results) is exported. Structural metadata — IDs, roles, tool
 names, token usage, cost, timing — is always captured in every mode.
 
@@ -79,5 +79,5 @@ For personal sessions or shared Langfuse projects, prefer `metadata`.
 ## Disable
 
 ```bash
-hermes plugins disable observability/langfuse
+Zeloo plugins disable observability/langfuse
 ```

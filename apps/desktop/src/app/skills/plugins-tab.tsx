@@ -16,7 +16,7 @@ import { Switch } from '@/components/ui/switch'
 import { Tip } from '@/components/ui/tooltip'
 import { $pluginRecords, type PluginRecord, setPluginEnabled } from '@/contrib/plugins-store'
 import { discoverRuntimePlugins } from '@/contrib/runtime-loader'
-import type { ProfileScope } from '@/hermes'
+import type { ProfileScope } from '@/Zeloo'
 import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { FolderOpen, Loader2, Monitor, Package, RefreshCw } from '@/lib/icons'
@@ -46,12 +46,12 @@ import { mergePluginPackages, type PackageKind, type PluginPackage } from './plu
 // The REAL Plugin Catalog page (docs site) embedded as a one-click picker —
 // the same pattern as the Skills tab's EmbeddedHubPicker. `?embed=picker`
 // hides the docs chrome and adds "+ Add to this Agent" per card, which posts
-//   { type: 'hermes-plugin-pick', name, repo, sha, subdir, tier, installCmd }
+//   { type: 'Zeloo-plugin-pick', name, repo, sha, subdir, tier, installCmd }
 // to the parent window. We validate the origin and open the shared
 // dual-target install modal (agent half → catalog-pinned install into the
 // scoped profile; desktop half → this app), so unified packages install both
 // halves in one flow.
-const CATALOG_ORIGIN = 'https://hermes-agent.nousresearch.com'
+const CATALOG_ORIGIN = 'https://Zeloo-agent.nousresearch.com'
 const CATALOG_PICKER_URL = `${CATALOG_ORIGIN}/docs/plugins?embed=picker`
 
 // Catalog viewport: persisted through the shared pane store, dragged from the
@@ -88,14 +88,14 @@ function profileParam(scope: ProfileScope): null | string {
 }
 
 function reveal(file: string) {
-  void window.hermesDesktop?.revealPath?.(file)?.catch(() => undefined)
+  void window.ZELOODesktop?.revealPath?.(file)?.catch(() => undefined)
 }
 
 async function revealPluginsDir() {
   try {
     // Electron owns the app-level plugin root — deriving it from the backend's
-    // hermes_home breaks against a remote backend (#66899).
-    const dir = await window.hermesDesktop?.desktopPluginsRoot?.()
+    // zeloo_home breaks against a remote backend (#66899).
+    const dir = await window.ZELOODesktop?.desktopPluginsRoot?.()
 
     if (!dir) {
       notifyError('Desktop plugins are unavailable', 'Could not resolve the plugins folder')
@@ -103,7 +103,7 @@ async function revealPluginsDir() {
       return
     }
 
-    const result = await window.hermesDesktop?.openDir?.(dir)
+    const result = await window.ZELOODesktop?.openDir?.(dir)
 
     if (result && !result.ok) {
       notifyError(result.error ?? 'unknown error', 'Could not open the plugins folder')
@@ -116,7 +116,7 @@ async function revealPluginsDir() {
 /** Copy any changed unified desktop halves into the app root FIRST, then
  *  rescan the root — a concurrent scan would read the pre-copy state. */
 async function rescanAll(requestGateway: GatewayRequest, scope: null | string) {
-  await window.hermesDesktop?.reconcileDesktopPlugins?.().catch(() => undefined)
+  await window.ZELOODesktop?.reconcileDesktopPlugins?.().catch(() => undefined)
   await discoverRuntimePlugins()
   await loadAgentPlugins(requestGateway, scope)
 }
@@ -448,7 +448,7 @@ export const PluginsTab = memo(function PluginsTab({
 
       const data = event.data as null | PluginPickMessage
 
-      if (!data || data.type !== 'hermes-plugin-pick' || !data.name || !data.repo) {
+      if (!data || data.type !== 'Zeloo-plugin-pick' || !data.name || !data.repo) {
         return
       }
 

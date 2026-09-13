@@ -1,6 +1,6 @@
 """Wire models for the tool gateway's connector routes.
 
-Hand-written pydantic v2 models for the four routes hermes-agent consumes
+Hand-written pydantic v2 models for the four routes Zeloo-agent consumes
 (search, schemas, execute, connections), mirroring the gateway's frozen
 contract. Field names are snake_case attributes with camelCase wire aliases;
 requests serialize with ``model_dump(by_alias=True)``.
@@ -30,7 +30,7 @@ CONNECTOR_EXECUTE_PATH = f"{CONNECTORS_PATH}/execute"
 CONNECTOR_CONNECTIONS_PATH = f"{CONNECTORS_PATH}/connections"
 
 # The gateway refuses execute/connections batches larger than this. Unreachable
-# in practice: the hermes-side dispatch cap (config.MAX_CALLS_PER_DISPATCH) is
+# in practice: the Zeloo-side dispatch cap (config.MAX_CALLS_PER_DISPATCH) is
 # lower by design, so there is deliberately no chunking code.
 WIRE_BATCH_MAX = 25
 

@@ -1,1 +1,1 @@
-# Hermes plugins package
+# Zeloo plugins package

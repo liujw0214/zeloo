@@ -1,9 +1,9 @@
-# Hermes Plugin Catalog
+# Zeloo Plugin Catalog
 
-Curated, Nous-approved Hermes plugins. Each YAML file in this directory
+Curated, Nous-approved Zeloo plugins. Each YAML file in this directory
 (except `removed.yaml`) is one catalog entry, discoverable via
-`hermes plugins catalog` / `hermes plugins search` and installable with
-`hermes plugins install <name>`.
+`Zeloo plugins catalog` / `Zeloo plugins search` and installable with
+`Zeloo plugins install <name>`.
 
 ## Admission policy
 
@@ -11,7 +11,7 @@ Presence in this directory **is** the trust signal. The rules that keep it
 meaningful:
 
 1. **Human-merged gate.** Entries are added *only* via a PR to the
-   `hermes-agent` repository, reviewed and merged by a maintainer. There is
+   `Zeloo-agent` repository, reviewed and merged by a maintainer. There is
    no self-serve registry, no automated ingestion.
 2. **Exact SHA pins are mandatory.** Every entry pins a full 40-character
    commit SHA. Branches, tags, and short SHAs are rejected by the loader.
@@ -19,7 +19,7 @@ meaningful:
 3. **Pin maturity.** The pinned release should be **at least 2 weeks old**
    at pin time, mirroring the supply-chain policy used for `optional-mcps/`
    and pyproject dependencies. This gives the community time to notice a
-   compromised release before Hermes ships a pointer to it.
+   compromised release before Zeloo ships a pointer to it.
 4. **SHA bumps are new PRs.** Updating an entry's pin is a new PR whose diff
    (old SHA → new SHA) is re-reviewed like any other change — reviewers are
    expected to look at the upstream commit range being adopted.
@@ -41,7 +41,7 @@ subdir: ""                  # optional path within the repo
 description: One-line description.
 maintainer: OwnerName
 tier: official              # official | community (default community)
-requires_hermes: ">=0.19"   # optional
+requires_ZELOO: ">=0.19"   # optional
 docs_url: ""                # optional
 platforms: []               # optional, e.g. [linux, macos]; empty = all
 capabilities:

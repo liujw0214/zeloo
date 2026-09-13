@@ -21,20 +21,20 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 @pytest.fixture
 def cron_env(tmp_path, monkeypatch):
-    """Isolated cron environment with temp HERMES_HOME."""
-    hermes_home = tmp_path / ".hermes"
-    hermes_home.mkdir()
-    (hermes_home / "cron").mkdir()
-    (hermes_home / "cron" / "output").mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    """Isolated cron environment with temp ZELOO_HOME."""
+    zeloo_home = tmp_path / ".Zeloo"
+    zeloo_home.mkdir()
+    (zeloo_home / "cron").mkdir()
+    (zeloo_home / "cron" / "output").mkdir()
+    monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
     import cron.jobs as jobs_mod
-    monkeypatch.setattr(jobs_mod, "HERMES_DIR", hermes_home)
-    monkeypatch.setattr(jobs_mod, "CRON_DIR", hermes_home / "cron")
-    monkeypatch.setattr(jobs_mod, "JOBS_FILE", hermes_home / "cron" / "jobs.json")
-    monkeypatch.setattr(jobs_mod, "OUTPUT_DIR", hermes_home / "cron" / "output")
+    monkeypatch.setattr(jobs_mod, "ZELOO_DIR", zeloo_home)
+    monkeypatch.setattr(jobs_mod, "CRON_DIR", zeloo_home / "cron")
+    monkeypatch.setattr(jobs_mod, "JOBS_FILE", zeloo_home / "cron" / "jobs.json")
+    monkeypatch.setattr(jobs_mod, "OUTPUT_DIR", zeloo_home / "cron" / "output")
 
-    return hermes_home
+    return zeloo_home
 
 
 class TestRewriteSkillRefsNoop:

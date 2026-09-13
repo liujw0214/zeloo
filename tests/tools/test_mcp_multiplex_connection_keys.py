@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from hermes_constants import hermes_home_key, reset_hermes_home_override, set_hermes_home_override
+from zeloo_constants import zeloo_home_key, reset_zeloo_home_override, set_zeloo_home_override
 
 
 def _tool():
@@ -45,15 +45,15 @@ def two_profiles(tmp_path, monkeypatch):
     tokens = []
 
     def enter(which):
-        tokens.append(set_hermes_home_override(homes[which]))
-        return hermes_home_key(homes[which])
+        tokens.append(set_zeloo_home_override(homes[which]))
+        return zeloo_home_key(homes[which])
 
     yield enter
     for tool_name in list(registry.get_tool_names_for_toolset("mcp-x")):
         for home in homes.values():
-            registry.deregister(tool_name, scope=hermes_home_key(home))
+            registry.deregister(tool_name, scope=zeloo_home_key(home))
     for token in reversed(tokens):
-        reset_hermes_home_override(token)
+        reset_zeloo_home_override(token)
     for n in ledgers:
         getattr(core, n).clear()
         getattr(core, n).update(saved[n])

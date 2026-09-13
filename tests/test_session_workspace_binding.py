@@ -1,13 +1,13 @@
-"""Session <-> workspace grouping key (hermes_state_sessions.workspace_key).
+"""Session <-> workspace grouping key (zeloo_state_sessions.workspace_key).
 
-The key is what `hermes sessions list --workspace` groups/filters on. It is a
+The key is what `Zeloo sessions list --workspace` groups/filters on. It is a
 coarse workspace identity derived from fields already recorded on sessions
 (git_repo_root, cwd) — no git shelling, no new columns. Branch is deliberately
 NOT part of the key.
 """
 
-import hermes_state_sessions
-from hermes_state_sessions import workspace_key
+import zeloo_state_sessions
+from zeloo_state_sessions import workspace_key
 
 
 def test_repo_root_is_the_key_when_known():

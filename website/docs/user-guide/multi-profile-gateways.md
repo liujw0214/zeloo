@@ -10,14 +10,14 @@ covers the operational concerns: starting them all together, viewing logs
 across profiles, preventing the host from sleeping, and recovering from common
 launchd/systemd quirks.
 
-If you only run one Hermes agent, you don't need this page — see
+If you only run one Zeloo agent, you don't need this page — see
 [Profiles](./profiles.md) for the basics. And if your instances live on
 *different* machines that one desktop app should reach simultaneously, see
-[Connecting Desktop to Many Hermes Instances](./multi-connection-desktop.md).
+[Connecting Desktop to Many Zeloo Instances](./multi-connection-desktop.md).
 
 ## When to use this
 
-You want this setup when you have two or more Hermes agents that should all
+You want this setup when you have two or more Zeloo agents that should all
 be online at the same time. Common reasons:
 
 - A personal assistant on one Telegram bot and a coding agent on another
@@ -27,17 +27,17 @@ be online at the same time. Common reasons:
   memory and skills
 
 Every profile already gets its own per-platform LaunchAgent
-(`ai.hermes.gateway-<name>.plist`) or systemd user service
-(`hermes-gateway-<name>.service`). This guide adds the patterns for managing
+(`ai.Zeloo.gateway-<name>.plist`) or systemd user service
+(`Zeloo-gateway-<name>.service`). This guide adds the patterns for managing
 them collectively.
 
 ## Quick start
 
 ```bash
 # Create profiles (once)
-hermes profile create coder
-hermes profile create personal-bot
-hermes profile create research
+Zeloo profile create coder
+Zeloo profile create personal-bot
+Zeloo profile create research
 
 # Configure each
 coder setup
@@ -87,11 +87,11 @@ Set the flag on the **default profile** (it owns the multiplexer) and restart
 its gateway:
 
 ```bash
-hermes config set gateway.multiplex_profiles true
-hermes gateway restart
+Zeloo config set gateway.multiplex_profiles true
+Zeloo gateway restart
 ```
 
-Equivalently, in the default profile's `~/.hermes/config.yaml`:
+Equivalently, in the default profile's `~/.Zeloo/config.yaml`:
 
 ```yaml
 gateway:
@@ -105,7 +105,7 @@ credentials, and routes each inbound message to the profile it belongs to. Each
 turn resolves the routed profile's config, skills, memory, SOUL, **and provider
 keys** — credentials are never shared across profiles.
 
-You do **not** run `hermes gateway start` for the secondary profiles — the
+You do **not** run `Zeloo gateway start` for the secondary profiles — the
 default gateway serves them. See the contract changes below.
 
 ### What changes when multiplexing is on
@@ -115,7 +115,7 @@ moment the flag is off.
 
 #### 1. Secondary profiles must not start their own gateway
 
-With a multiplexer running, a named-profile `hermes gateway run`, `start`,
+With a multiplexer running, a named-profile `Zeloo gateway run`, `start`,
 `install` or `restart` is a **hard error** (exit code 78), pointing you back at
 the multiplexer:
 
@@ -174,7 +174,7 @@ Authentication follows the profile named in the URL. Unprefixed endpoints keep
 using the default listener's existing credentials.
 
 - `/p/coder/...` API-server requests must use `API_SERVER_KEY` from
-  `~/.hermes/profiles/coder/.env`; the default listener key is rejected. Under
+  `~/.Zeloo/profiles/coder/.env`; the default listener key is rejected. Under
   the multiplexer that key only authenticates the prefix — it does not turn on a
   second `api_server` listener in the secondary profile (which would otherwise be
   the port-binding conflict described below), so you do not need to pin
@@ -243,9 +243,9 @@ parent conversation.
 #### 5. One PID/lock and one status surface
 
 There is a single process-level PID and lock (the multiplexer, under the default
-home). `hermes status` on the default profile reports the multiplexer and lists
-the profiles it serves (`Serves: coder, research`); `hermes -p coder status`,
-`hermes -p coder gateway status` and `hermes -p coder cron status` all report
+home). `Zeloo status` on the default profile reports the multiplexer and lists
+the profiles it serves (`Serves: coder, research`); `Zeloo -p coder status`,
+`Zeloo -p coder gateway status` and `Zeloo -p coder cron status` all report
 "running via the default-profile multiplexer" instead of "stopped". The single
 `gateway_state.json` lives under the default home: secondary adapters appear
 there as `<profile>:<platform>` entries beside `served_profiles`; nothing is
@@ -300,14 +300,14 @@ Tool and memory-provider credentials follow the same rule. Hosted OCR
 (`FIRECRAWL_API_KEY`), Modal / Browser Use cloud gates, the mem0 OSS OpenAI
 key, xAI video, and every memory-provider identity (`MEM0_USER_ID`,
 `SUPERMEMORY_CONTAINER_TAG`, `RETAINDB_PROJECT`, `OPENVIKING_ACCOUNT/USER`,
-`HINDSIGHT_BANK_ID`, `HERMES_HONCHO_HOST`) are read from the routed profile's
+`HINDSIGHT_BANK_ID`, `ZELOO_HONCHO_HOST`) are read from the routed profile's
 `.env`, so a secondary profile's memories land in **its** account/bank/project
 (or the provider's per-profile default), never the default profile's. Custom
 endpoints travel with their keys — `OPENAI_BASE_URL`, `XAI_BASE_URL`,
 `NOUS_INFERENCE_BASE_URL`, `GATEWAY_PROXY_URL`, Firecrawl / Browserbase /
 RetainDB / Supermemory / Honcho / Hindsight URLs — so a profile's key is never
 sent to another profile's proxy or self-hosted server. `WEIXIN_HOME_CHANNEL`,
-`HERMES_LANGUAGE` and `display.language`, and `hooks.outbound[].secret_env` are
+`ZELOO_LANGUAGE` and `display.language`, and `hooks.outbound[].secret_env` are
 likewise per profile, and end-of-session memory extraction for an evicted
 secondary session runs under that profile's scope.
 
@@ -321,7 +321,7 @@ launched under. The same holds for per-profile state files (`processes.json`,
 `checkpoints/`, sandbox snapshot stores, Feishu comment rules/pairing) and for
 gateway hooks: each profile's `hooks/` directory is loaded on its own and fires
 only for that profile's events. Shell hooks run with the routed profile's
-`HERMES_HOME`, without the default profile's secrets in their environment, and
+`ZELOO_HOME`, without the default profile's secrets in their environment, and
 their stdin payload carries a `profile` field naming the profile that fired them.
 
 #### What is isolated per profile
@@ -369,13 +369,13 @@ The resulting served set also controls `/p/<profile>/` API and webhook prefixes,
 runtime status, profile-route eligibility, and which profiles the in-process
 cron scheduler ticks (the Desktop backend's ticker follows the same allowlist and
 stands down for any profile a running multiplexer already serves). A multiplexer
-started as `hermes -p <name> gateway run` always ticks its own profile's cron store
+started as `Zeloo -p <name> gateway run` always ticks its own profile's cron store
 as well. A named profile outside the allowlist may still run its own standalone
 gateway.
 
 One caveat: the served set is a **start-time snapshot**. A profile created or
 added to the allowlist while the multiplexer is running is not picked up until
-`hermes gateway restart` (profiles deleted at runtime are dropped from cron
+`Zeloo gateway restart` (profiles deleted at runtime are dropped from cron
 ticking automatically).
 
 ### Routing shared-bot chats to profiles (`profile_routes`)
@@ -478,7 +478,7 @@ authorization comes from the route, not from the satellite's config.
 
 The CLI ships with single-profile lifecycle commands. To act across every
 profile, wrap them in a shell loop. Put the snippet below in
-`~/.local/bin/hermes-gateways` and `chmod +x` it:
+`~/.local/bin/Zeloo-gateways` and `chmod +x` it:
 
 ```sh
 #!/bin/sh
@@ -488,16 +488,16 @@ set -eu
 profiles="default coder personal-bot research"
 
 usage() {
-  echo "Usage: hermes-gateways {start|stop|restart|status|list}"
+  echo "Usage: Zeloo-gateways {start|stop|restart|status|list}"
 }
 
 run_for_profile() {
   profile="$1"
   action="$2"
   if [ "$profile" = "default" ]; then
-    hermes gateway "$action"
+    Zeloo gateway "$action"
   else
-    hermes -p "$profile" gateway "$action"
+    Zeloo -p "$profile" gateway "$action"
   fi
 }
 
@@ -510,7 +510,7 @@ case "$action" in
     done
     ;;
   list)
-    hermes gateway list
+    Zeloo gateway list
     ;;
   *)
     usage
@@ -522,16 +522,16 @@ esac
 Then:
 
 ```bash
-hermes-gateways start      # start every configured profile
-hermes-gateways stop       # stop every configured profile
-hermes-gateways restart    # restart all
-hermes-gateways status     # status across all
-hermes-gateways list       # delegates to `hermes gateway list`
+Zeloo-gateways start      # start every configured profile
+Zeloo-gateways stop       # stop every configured profile
+Zeloo-gateways restart    # restart all
+Zeloo-gateways status     # status across all
+Zeloo-gateways list       # delegates to `Zeloo gateway list`
 ```
 
 :::tip
-The `default` profile is targeted with `hermes gateway <action>` (no `-p`),
-not `hermes -p default gateway <action>`. The wrapper above handles both forms.
+The `default` profile is targeted with `Zeloo gateway <action>` (no `-p`),
+not `Zeloo -p default gateway <action>`. The wrapper above handles both forms.
 :::
 
 ## Manage one profile
@@ -548,7 +548,7 @@ coder gateway install    # create the LaunchAgent / systemd unit
 coder gateway uninstall  # remove the service file
 ```
 
-These are equivalent to `hermes -p coder gateway <action>` — useful if a
+These are equivalent to `Zeloo -p coder gateway <action>` — useful if a
 profile alias is not on `PATH` or if you target profiles dynamically from a
 script.
 
@@ -559,11 +559,11 @@ never clash:
 
 | Platform | Path                                                              |
 | -------- | ----------------------------------------------------------------- |
-| macOS    | `~/Library/LaunchAgents/ai.hermes.gateway-<profile>.plist`        |
-| Linux    | `~/.config/systemd/user/hermes-gateway-<profile>.service`         |
+| macOS    | `~/Library/LaunchAgents/ai.Zeloo.gateway-<profile>.plist`        |
+| Linux    | `~/.config/systemd/user/Zeloo-gateway-<profile>.service`         |
 
-The default profile keeps the historical names: `ai.hermes.gateway.plist` /
-`hermes-gateway.service`.
+The default profile keeps the historical names: `ai.Zeloo.gateway.plist` /
+`Zeloo-gateway.service`.
 
 ## Viewing logs
 
@@ -571,35 +571,35 @@ Each profile writes to its own log files:
 
 ```bash
 # Default profile
-tail -f ~/.hermes/logs/gateway.log
-tail -f ~/.hermes/logs/gateway.error.log
+tail -f ~/.Zeloo/logs/gateway.log
+tail -f ~/.Zeloo/logs/gateway.error.log
 
 # Named profile
-tail -f ~/.hermes/profiles/<name>/logs/gateway.log
-tail -f ~/.hermes/profiles/<name>/logs/gateway.error.log
+tail -f ~/.Zeloo/profiles/<name>/logs/gateway.log
+tail -f ~/.Zeloo/profiles/<name>/logs/gateway.error.log
 ```
 
 Stream every profile's log simultaneously:
 
 ```bash
-tail -f ~/.hermes/logs/gateway.log ~/.hermes/profiles/*/logs/gateway.log
+tail -f ~/.Zeloo/logs/gateway.log ~/.Zeloo/profiles/*/logs/gateway.log
 ```
 
 The CLI also has a structured log viewer:
 
 ```bash
-hermes logs -f                  # follow default profile
-hermes -p coder logs -f         # follow one profile
-hermes logs --help              # filters, levels, JSON output
+Zeloo logs -f                  # follow default profile
+Zeloo -p coder logs -f         # follow one profile
+Zeloo logs --help              # filters, levels, JSON output
 ```
 
 ## Identify what's actually running
 
 ```bash
-hermes profile list             # profiles + model + gateway state
-hermes-gateways status          # full status across every profile
-launchctl list | grep hermes    # macOS — PIDs and labels
-systemctl --user list-units 'hermes-gateway-*'   # Linux — units
+Zeloo profile list             # profiles + model + gateway state
+Zeloo-gateways status          # full status across every profile
+launchctl list | grep Zeloo    # macOS — PIDs and labels
+systemctl --user list-units 'Zeloo-gateway-*'   # Linux — units
 ```
 
 ## Editing configuration
@@ -607,18 +607,18 @@ systemctl --user list-units 'hermes-gateway-*'   # Linux — units
 Every profile keeps its config inside its own directory:
 
 ```
-~/.hermes/profiles/<name>/
+~/.Zeloo/profiles/<name>/
 ├── .env              # API keys, bot tokens (chmod 600)
 ├── config.yaml       # model, provider, toolsets, gateway settings
 └── SOUL.md           # personality / system prompt
 ```
 
-The default profile uses `~/.hermes/` directly with the same three files.
+The default profile uses `~/.Zeloo/` directly with the same three files.
 
 Edit them with any editor or via the CLI:
 
 ```bash
-hermes config set model.model anthropic/claude-sonnet-4    # default profile
+Zeloo config set model.model anthropic/claude-sonnet-4    # default profile
 coder config set model.model openai/gpt-5                  # named profile
 ```
 
@@ -627,7 +627,7 @@ After editing `.env` or `config.yaml`, restart the affected gateway:
 ```bash
 coder gateway restart
 # or, for everything:
-hermes-gateways restart
+Zeloo-gateways restart
 ```
 
 ## Keeping the host awake
@@ -642,7 +642,7 @@ to sleep when idle. Two patterns:
 ```bash
 caffeinate -dis                    # block display, idle, and system sleep
 caffeinate -dis -t 28800           # same, auto-exit after 8 hours
-caffeinate -i -w $(cat ~/.hermes/gateway.pid) &   # awake while default gateway runs
+caffeinate -i -w $(cat ~/.Zeloo/gateway.pid) &   # awake while default gateway runs
 
 # Persistent: run in background and forget
 nohup caffeinate -dis >/dev/null 2>&1 &
@@ -673,7 +673,7 @@ use a third-party tool.
 
 ```bash
 # Inhibit suspend while a command runs
-systemd-inhibit --what=idle:sleep --who=hermes --why="gateways running" \
+systemd-inhibit --what=idle:sleep --who=Zeloo --why="gateways running" \
   sleep infinity &
 
 # Allow user services to keep running after logout (recommended)
@@ -681,7 +681,7 @@ sudo loginctl enable-linger "$USER"
 ```
 
 After enabling lingering, your systemd user units (including
-`hermes-gateway-<profile>.service`) continue running across SSH disconnects
+`Zeloo-gateway-<profile>.service`) continue running across SSH disconnects
 and reboots.
 
 ## Token-conflict safety
@@ -697,17 +697,17 @@ To audit:
 
 ```bash
 grep -H 'TELEGRAM_BOT_TOKEN\|DISCORD_BOT_TOKEN' \
-     ~/.hermes/.env ~/.hermes/profiles/*/.env
+     ~/.Zeloo/.env ~/.Zeloo/profiles/*/.env
 ```
 
 ## Updating the code
 
-`hermes update` pulls the latest code once and syncs new bundled skills into
+`Zeloo update` pulls the latest code once and syncs new bundled skills into
 every profile:
 
 ```bash
-hermes update
-hermes-gateways restart
+Zeloo update
+Zeloo-gateways restart
 ```
 
 User-modified skills are never overwritten.
@@ -716,7 +716,7 @@ User-modified skills are never overwritten.
 
 ### "Could not find service in domain for user gui: 501"
 
-You ran `hermes gateway start` after a previous `hermes gateway stop`. The
+You ran `Zeloo gateway start` after a previous `Zeloo gateway stop`. The
 CLI's `stop` does a full `launchctl unload`, which removes the service from
 launchd's registry. The CLI catches this specific error on `start` and
 automatically re-loads the plist (`↻ launchd job was unloaded; reloading
@@ -727,8 +727,8 @@ service definition`). The service starts normally. Nothing to fix.
 If a profile's gateway shows `not running` but a process is still alive:
 
 ```bash
-ps -ef | grep "hermes_cli.*-p <profile>"
-cat ~/.hermes/profiles/<profile>/gateway.pid
+ps -ef | grep "zeloo_cli.*-p <profile>"
+cat ~/.Zeloo/profiles/<profile>/gateway.pid
 kill -TERM <pid>          # graceful
 kill -KILL <pid>          # if that fails after a few seconds
 <profile> gateway start
@@ -738,16 +738,16 @@ kill -KILL <pid>          # if that fails after a few seconds
 
 ```bash
 # macOS
-launchctl unload ~/Library/LaunchAgents/ai.hermes.gateway-<profile>.plist
-launchctl load   ~/Library/LaunchAgents/ai.hermes.gateway-<profile>.plist
+launchctl unload ~/Library/LaunchAgents/ai.Zeloo.gateway-<profile>.plist
+launchctl load   ~/Library/LaunchAgents/ai.Zeloo.gateway-<profile>.plist
 
 # Linux
-systemctl --user restart hermes-gateway-<profile>.service
+systemctl --user restart Zeloo-gateway-<profile>.service
 ```
 
 ### Health check
 
 ```bash
-hermes doctor                  # default profile
-hermes -p <profile> doctor     # one profile
+Zeloo doctor                  # default profile
+Zeloo -p <profile> doctor     # one profile
 ```

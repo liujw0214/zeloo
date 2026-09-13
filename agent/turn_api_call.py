@@ -112,7 +112,7 @@ def perform_api_call(
             defer_logical_completion=True,
         )
 
-    from hermes_cli.middleware import run_llm_execution_middleware
+    from zeloo_cli.middleware import run_llm_execution_middleware
 
     # The ``_model_request_active`` bracket is taken under the redirect lock when one exists,
     # so redirect() can't observe a half-toggled flag.
@@ -222,7 +222,7 @@ def nous_rate_limit_guard(
         # A gateway ``x-nous-model-switch`` recorded on the previous response moves this session
         # (and the config default, when it still names the free tier's model) before the next call.
         try:
-            from hermes_cli.anon_auth import apply_model_switch
+            from zeloo_cli.anon_auth import apply_model_switch
             apply_model_switch(agent)
         except Exception:
             pass
@@ -232,7 +232,7 @@ def nous_rate_limit_guard(
             )
             _nous_remaining = nous_rate_limit_remaining()
             if _nous_remaining is not None and _nous_remaining > 0:
-                from hermes_cli import anon_auth
+                from zeloo_cli import anon_auth
                 reset = _fmt_nous_remaining(_nous_remaining)
                 if anon_auth.route_is_welcome_host(getattr(agent, "base_url", "")):
                     _nous_msg = anon_auth.FREE_TIER_RATE_LIMIT_CHAT.format(reset=reset)

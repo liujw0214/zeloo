@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from hermes_constants import get_hermes_home
+from zeloo_constants import get_zeloo_home
 
 _SKIP_PARTS = {".archive", ".hub", "node_modules", ".git"}
 _USAGE_TS_KEYS = ("last_activity_at", "last_used_at", "last_viewed_at", "last_patched_at", "created_at")
@@ -36,13 +36,13 @@ class SkillNode:
 
 
 def _fm_field(fm: dict[str, Any], key: str) -> Any:
-    """Top-level ``key`` or ``metadata.hermes.<key>``; tolerant of the string-valued
+    """Top-level ``key`` or ``metadata.Zeloo.<key>``; tolerant of the string-valued
     frontmatter that ``parse_frontmatter``'s malformed-YAML fallback produces."""
     if fm.get(key):
         return fm[key]
     meta = fm.get("metadata")
-    hermes = meta.get("hermes") if isinstance(meta, dict) else None
-    return hermes.get(key) if isinstance(hermes, dict) else None
+    Zeloo = meta.get("Zeloo") if isinstance(meta, dict) else None
+    return Zeloo.get(key) if isinstance(Zeloo, dict) else None
 
 
 def _related(fm: dict[str, Any]) -> list[str]:
@@ -57,7 +57,7 @@ def _load_usage() -> dict[str, dict[str, Any]]:
         return load_usage()
     except Exception:
         try:
-            return json.loads((get_hermes_home() / "skills" / ".usage.json").read_text(encoding="utf-8"))
+            return json.loads((get_zeloo_home() / "skills" / ".usage.json").read_text(encoding="utf-8"))
         except Exception:
             return {}
 
@@ -129,7 +129,7 @@ def density_stats(nodes: dict[str, SkillNode], edges: list[tuple[str, str]]) -> 
 def _memory_cards() -> list[dict[str, Any]]:
     """``MEMORY.md`` / ``USER.md`` prose split on bare ``§`` separators; every
     non-empty chunk becomes one card (MEMORY.md cards first, then USER.md)."""
-    base = get_hermes_home() / "memories"
+    base = get_zeloo_home() / "memories"
     cards: list[dict[str, Any]] = []
     for fname, source in (("MEMORY.md", "memory"), ("USER.md", "profile")):
         path = base / fname
@@ -169,7 +169,7 @@ def _memory_skill_edges(memory_cards: list[dict[str, Any]], skills: list[SkillNo
 def build_learning_graph() -> dict[str, Any]:
     """Full payload for the desktop learning panel: non-base skills with real
     learning signal (agent-created or used) plus memory chunks as graph nodes."""
-    roots = [("base", Path(__file__).resolve().parent.parent / "skills"), ("profile", get_hermes_home() / "skills")]
+    roots = [("base", Path(__file__).resolve().parent.parent / "skills"), ("profile", get_zeloo_home() / "skills")]
     learned_skills = {
         name: node for name, node in build_skill_nodes(roots).items()
         if node.source != "base" and (node.created_by == "agent" or node.use_count > 0)

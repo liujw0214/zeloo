@@ -18,12 +18,12 @@ from gateway.kanban_watchers_common import _board_slugs, _positive_int_setting, 
 
 
 def _kbc():
-    from hermes_cli import kanban_db_connect
+    from zeloo_cli import kanban_db_connect
     return kanban_db_connect
 
 
 def _kbd():
-    from hermes_cli import kanban_db_dispatch
+    from zeloo_cli import kanban_db_dispatch
     return kanban_db_dispatch
 
 _CORRUPT_DB_MARKERS = ("file is not a database", "database disk image is malformed")
@@ -194,7 +194,7 @@ class _KanbanDispatcher:
                     "SQLite database; pausing dispatch for this board until "
                     "the file changes, the gateway restarts, or the "
                     "quarantine timer expires. Move or restore the file, "
-                    "then run `hermes kanban init` if you need a fresh board.",
+                    "then run `Zeloo kanban init` if you need a fresh board.",
                     slug, fingerprint[0],
                 )
                 return None
@@ -241,7 +241,7 @@ class _KanbanDispatcher:
         load from burst-spending the aux LLM. Returns the number decomposed.
         """
         try:
-            from hermes_cli import kanban_decompose as _decomp
+            from zeloo_cli import kanban_decompose as _decomp
         except Exception as exc:  # pragma: no cover
             logger.warning("kanban auto-decompose: import failed (%s); skipping", exc)
             return 0
@@ -252,9 +252,9 @@ class _KanbanDispatcher:
                 break
             # Pin the board via env for the call: the decomposer connects
             # with no board kwarg (same pattern as the dashboard specify endpoint).
-            prev_env = os.environ.get("HERMES_KANBAN_BOARD")
+            prev_env = os.environ.get("ZELOO_KANBAN_BOARD")
             try:
-                os.environ["HERMES_KANBAN_BOARD"] = slug
+                os.environ["ZELOO_KANBAN_BOARD"] = slug
                 try:
                     triage_ids = _decomp.list_triage_ids()
                 except Exception as exc:
@@ -267,9 +267,9 @@ class _KanbanDispatcher:
                     successes += self._decompose_one(_decomp, slug, tid)
             finally:
                 if prev_env is None:
-                    os.environ.pop("HERMES_KANBAN_BOARD", None)
+                    os.environ.pop("ZELOO_KANBAN_BOARD", None)
                 else:
-                    os.environ["HERMES_KANBAN_BOARD"] = prev_env
+                    os.environ["ZELOO_KANBAN_BOARD"] = prev_env
         return successes
 
     @staticmethod

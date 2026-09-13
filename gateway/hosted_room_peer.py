@@ -48,7 +48,7 @@ _ROOM_GRANT_SECRET_FILE = ".room-link-grant-secret"
 @lru_cache(maxsize=32)
 def _gateway_room_grant_secret_for_home(home_value: str) -> bytes:
     """Load one restart-scoped grant secret for an exact installation root."""
-    from hermes_cli.install_identity import _fsync_directory
+    from zeloo_cli.install_identity import _fsync_directory
     (home := Path(home_value)).mkdir(parents=True, exist_ok=True)
     path = home / _ROOM_GRANT_SECRET_FILE
     def _read() -> bytes:
@@ -78,7 +78,7 @@ def _gateway_room_grant_secret_for_home(home_value: str) -> bytes:
                 _fsync_directory(home)
         finally:
             temporary.unlink(missing_ok=True)
-    return hmac.new(material, b"hermes-hosted-room-installation-grant-v1", hashlib.sha256).digest()
+    return hmac.new(material, b"Zeloo-hosted-room-installation-grant-v1", hashlib.sha256).digest()
 
 
 def gateway_room_grant_secret(root: Path | str | None = None) -> bytes:
@@ -89,10 +89,10 @@ def gateway_room_grant_secret(root: Path | str | None = None) -> bytes:
     or capability RPCs, and is shared only by this installation's gateway processes.
     """
     if root is None:
-        from hermes_constants import get_hermes_home
-        # Profile routing uses a context-local HERMES_HOME override; the process environment
+        from zeloo_constants import get_zeloo_home
+        # Profile routing uses a context-local ZELOO_HOME override; the process environment
         # retains the installation root and is the authority here.
-        root = os.environ.get("HERMES_HOME") or get_hermes_home()
+        root = os.environ.get("ZELOO_HOME") or get_zeloo_home()
     return _gateway_room_grant_secret_for_home(str(Path(root).expanduser().resolve()))
 
 
@@ -103,7 +103,7 @@ def derive_room_grant_secret(api_key: str) -> bytes:
     """
     if not isinstance(api_key, str) or len(api_key) < 8:
         raise HostedRoomGrantError("room grants require a strong gateway API key")
-    return hmac.new(api_key.encode("utf-8"), b"hermes-hosted-room-grant-v1", hashlib.sha256).digest()
+    return hmac.new(api_key.encode("utf-8"), b"Zeloo-hosted-room-grant-v1", hashlib.sha256).digest()
 
 
 def _identifier(value: Any, *, field: str) -> str:
@@ -248,8 +248,8 @@ def catalog_mapping(
     execution_policy: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Build a canonical catalog mapping with its digest."""
     # A Desktop-managed gateway exits with the app: the caller's flag is only an upper bound.
-    persistent_process = bool(persistent_process and os.getenv("HERMES_DESKTOP") != "1")
-    profile = str(target_profile or "").strip() or (os.getenv("HERMES_PROFILE") or "default").strip() or "default"
+    persistent_process = bool(persistent_process and os.getenv("ZELOO_DESKTOP") != "1")
+    profile = str(target_profile or "").strip() or (os.getenv("ZELOO_PROFILE") or "default").strip() or "default"
     checked_policy = RoomExecutionPolicy.from_mapping(
         execution_policy or execution_policy_mapping(target_profile=profile))
     # A RoomLink run is initiated by another installation. Process-wide YOLO mode bypasses the scoped
@@ -288,29 +288,29 @@ def local_room_link_endpoint(value: Any | None = None) -> dict[str, Any]:
 def _room_link_url_from_config(home: str) -> str | None:
     """Read the restart-scoped user setting without polling config on probes."""
     from gateway.config import load_gateway_config
-    from hermes_constants import get_hermes_home, reset_hermes_home_override, set_hermes_home_override
-    if str(get_hermes_home()) == home:
+    from zeloo_constants import get_zeloo_home, reset_zeloo_home_override, set_zeloo_home_override
+    if str(get_zeloo_home()) == home:
         value = load_gateway_config().room_link_url
     else:
-        token = set_hermes_home_override(home)
+        token = set_zeloo_home_override(home)
         try:
             value = load_gateway_config().room_link_url
         finally:
-            reset_hermes_home_override(token)
+            reset_zeloo_home_override(token)
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _configured_room_link_url() -> str | None:
     """Resolve the explicit endpoint: env override > profile config > root config."""
-    if (override := os.getenv("HERMES_ROOM_LINK_URL")) is not None:
+    if (override := os.getenv("ZELOO_ROOM_LINK_URL")) is not None:
         return override
-    from hermes_constants import get_default_hermes_root, get_hermes_home
-    home = get_hermes_home()
+    from zeloo_constants import get_default_zeloo_root, get_zeloo_home
+    home = get_zeloo_home()
     if configured := _room_link_url_from_config(str(home)):
         return configured
     # RoomLink is a gateway reachability property, not a Bot personality setting: named profiles may
     # override it but otherwise inherit the process gateway's root endpoint.
-    root = get_default_hermes_root()
+    root = get_default_zeloo_root()
     return _room_link_url_from_config(str(root)) if root != home else None
 
 

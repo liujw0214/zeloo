@@ -22,14 +22,14 @@ it('restores every persisted onboarding phase and rejects unknown phases', async
 
   for (const phase of ONBOARDING_PHASES.filter(phase => phase !== 'idle')) {
     storage.clear()
-    storage.set('hermes-onboarding-phase-v1', phase)
+    storage.set('Zeloo-onboarding-phase-v1', phase)
     vi.resetModules()
     const { $onboardingGate } = await import('./onboarding-gate')
 
     expect($onboardingGate.get().phase).toBe(phase)
   }
 
-  storage.set('hermes-onboarding-phase-v1', 'unknown-phase')
+  storage.set('Zeloo-onboarding-phase-v1', 'unknown-phase')
   vi.resetModules()
   const { $onboardingGate } = await import('./onboarding-gate')
 

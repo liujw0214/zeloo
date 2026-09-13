@@ -61,7 +61,7 @@ def _connector_rpc(rid, params, action):
     try:
         # Bind launch explicitly too: an ambient sibling-profile override must not
         # leak into a session whose profile_home=None means the launch profile.
-        scope = {"profile_home": profile_home or str(_hermes_home)}
+        scope = {"profile_home": profile_home or str(_zeloo_home)}
         with _session_profile_runtime_scope(scope):
             tokens = _set_session_context(owner["session_key"], cwd=_session_cwd(owner), ui_session_id=sid)
             try:

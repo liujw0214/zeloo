@@ -50,9 +50,9 @@ def test_two_queries_never_consume_previous_query_caches(tmp_path, monkeypatch):
     config_provider = HonchoMemoryProvider()
     path = tmp_path / "honcho.json"
     config_provider.save_config({"recallSync": True}, str(tmp_path))
-    assert HonchoClientConfig.from_global_config(host="hermes", config_path=path).recall_sync
-    config_provider.save_config({"hosts": {"hermes": {"recallSync": False}}}, str(tmp_path))
-    assert not HonchoClientConfig.from_global_config(host="hermes", config_path=path).recall_sync
+    assert HonchoClientConfig.from_global_config(host="Zeloo", config_path=path).recall_sync
+    config_provider.save_config({"hosts": {"Zeloo": {"recallSync": False}}}, str(tmp_path))
+    assert not HonchoClientConfig.from_global_config(host="Zeloo", config_path=path).recall_sync
     assert not HonchoClientConfig().recall_sync
     monkeypatch.setattr(cli, "_prompt", lambda label, default=None, **kw: default or "")
     host = {"recallSync": False}

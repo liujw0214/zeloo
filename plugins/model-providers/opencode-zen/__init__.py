@@ -7,16 +7,16 @@ chat_completions reasoning translations (GLM-5.2, Kimi K2, DeepSeek, Ox Alpha).
 from typing import Any
 
 from agent import reasoning_effort as re_
-from hermes_cli import __version__ as _HERMES_VERSION
+from zeloo_cli import __version__ as _ZELOO_VERSION
 from providers import register_provider
 from providers.base import ProviderProfile
 
 # Attribution headers (same values as OpenRouter / Vercel / Fireworks); via
 # default_headers so they survive model switches and credential rotation.
 _ATTRIBUTION_HEADERS = {
-    "HTTP-Referer": "https://hermes-agent.nousresearch.com",
-    "X-Title": "Hermes Agent",
-    "User-Agent": f"HermesAgent/{_HERMES_VERSION}",
+    "HTTP-Referer": "https://Zeloo-agent.nousresearch.com",
+    "X-Title": "Zeloo Agent",
+    "User-Agent": f"ZELOOAgent/{_ZELOO_VERSION}",
 }
 
 

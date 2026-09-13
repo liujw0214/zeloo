@@ -1,30 +1,30 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { HermesReadDirResult } from '@/global'
+import type { ZELOOReadDirResult } from '@/global'
 import { $connection } from '@/store/session'
 import { notifyWorkspaceChanged } from '@/store/workspace-events'
 
 import { clearProjectDirCache, readProjectDir } from './ipc'
 import { resetProjectTreeState, useProjectTree } from './use-project-tree'
 
-const readDir = vi.fn<(path: string) => Promise<HermesReadDirResult>>()
+const readDir = vi.fn<(path: string) => Promise<ZELOOReadDirResult>>()
 
 beforeEach(() => {
   $connection.set(null)
   resetProjectTreeState()
   readDir.mockReset()
-  ;(window as unknown as { hermesDesktop: { readDir: typeof readDir } }).hermesDesktop = { readDir }
+  ;(window as unknown as { ZELOODesktop: { readDir: typeof readDir } }).ZELOODesktop = { readDir }
 })
 
 afterEach(() => {
   cleanup()
   $connection.set(null)
   resetProjectTreeState()
-  delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
+  delete (window as unknown as { ZELOODesktop?: unknown }).ZELOODesktop
 })
 
-function ok(entries: { name: string; path: string; isDirectory: boolean }[]): HermesReadDirResult {
+function ok(entries: { name: string; path: string; isDirectory: boolean }[]): ZELOOReadDirResult {
   return { entries }
 }
 
@@ -70,16 +70,16 @@ describe('useProjectTree', () => {
   })
 
   it('does not fall back after a failed root read from a superseded connection', async () => {
-    let resolveRootFromA: ((result: HermesReadDirResult) => void) | undefined
+    let resolveRootFromA: ((result: ZELOOReadDirResult) => void) | undefined
     const sanitizeWorkspaceCwd = vi.fn(async () => ({ cwd: '/fallback', sanitized: true }))
     readDir.mockImplementationOnce(
       () =>
-        new Promise<HermesReadDirResult>(resolve => {
+        new Promise<ZELOOReadDirResult>(resolve => {
           resolveRootFromA = resolve
         })
     )
     readDir.mockResolvedValueOnce(ok([{ name: 'from-b', path: '/shared/from-b', isDirectory: false }]))
-    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { readDir, sanitizeWorkspaceCwd }
+    ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = { readDir, sanitizeWorkspaceCwd }
     $connection.set({ baseUrl: 'local-a', connectionId: 'connection-a', mode: 'local', profile: 'default' } as never)
 
     const { result } = renderHook(() => useProjectTree('/shared'))
@@ -178,7 +178,7 @@ describe('useProjectTree', () => {
 
       throw new Error(`unexpected path ${path}`)
     })
-    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { gitRoot, readDir, readFileDataUrl }
+    ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = { gitRoot, readDir, readFileDataUrl }
 
     $connection.set({ baseUrl: 'local-a', mode: 'local' } as never)
     await expect(readProjectDir('/repo/src', '/repo')).resolves.toMatchObject({
@@ -244,10 +244,10 @@ describe('useProjectTree', () => {
   it('dedupes concurrent loadChildren calls for the same id', async () => {
     readDir.mockResolvedValueOnce(ok([{ name: 'src', path: '/p/src', isDirectory: true }]))
 
-    let resolveChildren: ((value: HermesReadDirResult) => void) | undefined
+    let resolveChildren: ((value: ZELOOReadDirResult) => void) | undefined
     readDir.mockImplementationOnce(
       () =>
-        new Promise<HermesReadDirResult>(resolve => {
+        new Promise<ZELOOReadDirResult>(resolve => {
           resolveChildren = resolve
         })
     )
@@ -285,11 +285,11 @@ describe('useProjectTree', () => {
   })
 
   it('discards a stale live refresh after the active registered connection changes', async () => {
-    let resolveRefreshFromA: ((result: HermesReadDirResult) => void) | undefined
+    let resolveRefreshFromA: ((result: ZELOOReadDirResult) => void) | undefined
     readDir.mockResolvedValueOnce(ok([{ name: 'from-a', path: '/shared/from-a', isDirectory: false }]))
     readDir.mockImplementationOnce(
       () =>
-        new Promise<HermesReadDirResult>(resolve => {
+        new Promise<ZELOOReadDirResult>(resolve => {
           resolveRefreshFromA = resolve
         })
     )
@@ -328,11 +328,11 @@ describe('useProjectTree', () => {
   })
 
   it('discards a stale child read after the active registered connection changes', async () => {
-    let resolveChildFromA: ((result: HermesReadDirResult) => void) | undefined
+    let resolveChildFromA: ((result: ZELOOReadDirResult) => void) | undefined
     readDir.mockResolvedValueOnce(ok([{ name: 'src', path: '/shared/src', isDirectory: true }]))
     readDir.mockImplementationOnce(
       () =>
-        new Promise<HermesReadDirResult>(resolve => {
+        new Promise<ZELOOReadDirResult>(resolve => {
           resolveChildFromA = resolve
         })
     )
@@ -371,10 +371,10 @@ describe('useProjectTree', () => {
   })
 
   it('discards a stale root read after the active registered connection changes', async () => {
-    let resolveFirst: ((result: HermesReadDirResult) => void) | undefined
+    let resolveFirst: ((result: ZELOOReadDirResult) => void) | undefined
     readDir.mockImplementationOnce(
       () =>
-        new Promise<HermesReadDirResult>(resolve => {
+        new Promise<ZELOOReadDirResult>(resolve => {
           resolveFirst = resolve
         })
     )
@@ -431,7 +431,7 @@ describe('useProjectTree', () => {
 
       throw new Error(`unexpected path ${path}`)
     })
-    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { readDir, sanitizeWorkspaceCwd }
+    ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = { readDir, sanitizeWorkspaceCwd }
 
     const { result } = renderHook(() => useProjectTree('/deleted/worktree'))
 
@@ -446,7 +446,7 @@ describe('useProjectTree', () => {
   it('keeps the root error when sanitize offers no usable fallback', async () => {
     const sanitizeWorkspaceCwd = vi.fn(async () => ({ cwd: '/deleted/worktree', sanitized: false }))
     readDir.mockResolvedValue({ entries: [], error: 'ENOENT' })
-    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { readDir, sanitizeWorkspaceCwd }
+    ;(window as unknown as { ZELOODesktop: unknown }).ZELOODesktop = { readDir, sanitizeWorkspaceCwd }
 
     const { result } = renderHook(() => useProjectTree('/deleted/worktree'))
 
@@ -454,8 +454,8 @@ describe('useProjectTree', () => {
     expect(result.current.effectiveCwd).toBe('/deleted/worktree')
   })
 
-  it('returns no-bridge gracefully when window.hermesDesktop is missing', async () => {
-    delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
+  it('returns no-bridge gracefully when window.ZELOODesktop is missing', async () => {
+    delete (window as unknown as { ZELOODesktop?: unknown }).ZELOODesktop
 
     const { result } = renderHook(() => useProjectTree('/p'))
 
@@ -473,11 +473,11 @@ describe('useProjectTree', () => {
 
     await waitFor(() => expect(result.current.rootError).toBe('ENOENT'))
 
-    let releaseProbe: ((value: HermesReadDirResult) => void) | undefined
+    let releaseProbe: ((value: ZELOOReadDirResult) => void) | undefined
 
     readDir.mockImplementationOnce(
       () =>
-        new Promise<HermesReadDirResult>(resolve => {
+        new Promise<ZELOOReadDirResult>(resolve => {
           releaseProbe = resolve
         })
     )
@@ -503,11 +503,11 @@ describe('useProjectTree', () => {
 
     await waitFor(() => expect(result.current.data.length).toBe(1))
 
-    let releaseRefresh: ((value: HermesReadDirResult) => void) | undefined
+    let releaseRefresh: ((value: ZELOOReadDirResult) => void) | undefined
 
     readDir.mockImplementationOnce(
       () =>
-        new Promise<HermesReadDirResult>(resolve => {
+        new Promise<ZELOOReadDirResult>(resolve => {
           releaseRefresh = resolve
         })
     )
@@ -532,11 +532,11 @@ describe('useProjectTree', () => {
 
     await waitFor(() => expect(result.current.data.map(node => node.name)).toEqual(['from-a']))
 
-    let releaseFromB: ((value: HermesReadDirResult) => void) | undefined
+    let releaseFromB: ((value: ZELOOReadDirResult) => void) | undefined
 
     readDir.mockImplementationOnce(
       () =>
-        new Promise<HermesReadDirResult>(resolve => {
+        new Promise<ZELOOReadDirResult>(resolve => {
           releaseFromB = resolve
         })
     )

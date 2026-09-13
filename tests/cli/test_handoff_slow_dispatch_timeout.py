@@ -5,7 +5,7 @@ Bug shape (live-reproduced on main @1c5ee5815f): /handoff poll-waited a flat
 60s for a TERMINAL state. The gateway watcher claims within seconds, but the
 dispatch is a FULL synthetic agent turn (whole transcript replay + delivery)
 that routinely exceeds 60s. The CLI then printed "Timed out waiting for the
-gateway. Is `hermes gateway` running?" (false diagnosis), called
+gateway. Is `Zeloo gateway` running?" (false diagnosis), called
 fail_handoff() on the RUNNING row (stomping the gateway's claim), and claimed
 "Your CLI session is intact" after switch_session had already re-pointed the
 session. The gateway later overwrote failed -> completed: split-brain.
@@ -26,12 +26,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hermes_state import SessionDB
+from zeloo_state import SessionDB
 
 
 @pytest.fixture()
 def db(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("ZELOO_HOME", str(tmp_path / ".Zeloo"))
     d = SessionDB(db_path=tmp_path / "state.db")
     yield d
     d.close()
@@ -88,7 +88,7 @@ def _run_handoff(db, session_id, monkeypatch, time_budget=30.0):
     compressed so a simulated 60s pending deadline elapses in well under a
     second of wall clock.
     """
-    from hermes_cli.cli_commands_mixin import CLICommandsMixin
+    from zeloo_cli.cli_commands_mixin import CLICommandsMixin
 
     printed: list[str] = []
 
@@ -166,7 +166,7 @@ class TestCLIWaitLoop:
         keep, printed, _ = _run_handoff(db_proxy, "cli-sess-b", monkeypatch)
         out = "\n".join(printed)
         assert keep is True
-        assert "Is `hermes gateway` running?" not in out
+        assert "Is `Zeloo gateway` running?" not in out
         assert "taking unusually long" in out
         # The row is still owned by the gateway — untouched by the CLI.
         assert db.get_handoff_state("cli-sess-b")["state"] == "running"

@@ -1,6 +1,6 @@
 """Regression: the state.db repair-loop guards must survive an mtime change.
 
-Incident (2026-08-17): a malformed-SCHEMA state.db sent Hermes into an
+Incident (2026-08-17): a malformed-SCHEMA state.db sent Zeloo into an
 unbounded repair loop that wrote a fresh 98MB forensic copy every ~10s —
 2.3GB in 20 minutes, disk heading to zero, whole agent fleet at risk.
 
@@ -28,9 +28,9 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-import hermes_state
-import hermes_state_repair
-from hermes_state_repair import _MAX_MALFORMED_BACKUPS, _MAX_PERSISTENT_REPAIR_ATTEMPTS, _REPAIR_BACKUP_MIN_FREE_BYTES, _backup_content_identity, _backup_db_file, _db_fingerprint, _existing_malformed_backups, _persistent_repair_attempts_exhausted, _record_repair_outcome, _repair_backup_headroom_bytes
+import zeloo_state
+import zeloo_state_repair
+from zeloo_state_repair import _MAX_MALFORMED_BACKUPS, _MAX_PERSISTENT_REPAIR_ATTEMPTS, _REPAIR_BACKUP_MIN_FREE_BYTES, _backup_content_identity, _backup_db_file, _db_fingerprint, _existing_malformed_backups, _persistent_repair_attempts_exhausted, _record_repair_outcome, _repair_backup_headroom_bytes
 
 
 def _damaged_db(tmp_path: Path, size: int = 200_000) -> Path:
@@ -245,7 +245,7 @@ def test_repair_aborts_when_backup_refused_for_disk(tmp_path):
         "Usage", (), {"total": 0, "used": 0, "free": _REPAIR_BACKUP_MIN_FREE_BYTES // 2}
     )()
     with patch("shutil.disk_usage", return_value=tight):
-        report = hermes_state_repair.repair_state_db_schema(db)
+        report = zeloo_state_repair.repair_state_db_schema(db)
     assert not report.get("repaired")
     assert "free" in (report.get("error") or "").lower()
 
@@ -267,7 +267,7 @@ def test_fingerprint_takes_no_raw_fd_while_a_connection_is_live(tmp_path):
     """
     import builtins
 
-    from hermes_cli.sqlite_safe_read import connect_tracked
+    from zeloo_cli.sqlite_safe_read import connect_tracked
 
     db = tmp_path / "state.db"
     conn = sqlite3.connect(str(db))
@@ -307,7 +307,7 @@ def test_live_connection_keeps_its_write_lock_across_a_repair_pass(tmp_path):
     makes the test vacuous.
 
     Rollback-journal mode only — WAL coordinates through ``-shm`` rather than
-    POSIX advisory locks, so it is immune. DELETE mode is what Hermes falls
+    POSIX advisory locks, so it is immune. DELETE mode is what Zeloo falls
     back to on NFS/SMB/FUSE/ZFS and on SQLite builds vulnerable to the
     WAL-reset bug, so it is a real deployment shape, not a corner case.
     """
@@ -315,7 +315,7 @@ def test_live_connection_keeps_its_write_lock_across_a_repair_pass(tmp_path):
     import sys
     import textwrap
 
-    from hermes_cli.sqlite_safe_read import connect_tracked
+    from zeloo_cli.sqlite_safe_read import connect_tracked
 
     db = tmp_path / "state.db"
     conn = sqlite3.connect(str(db))
@@ -470,7 +470,7 @@ def test_budget_exhausts_when_liveness_alternates_across_passes(tmp_path):
     peer connecting and disconnecting between passes would reset the counter to
     1 forever — the exact unbounded loop this whole ledger exists to stop.
     """
-    from hermes_cli.sqlite_safe_read import connect_tracked
+    from zeloo_cli.sqlite_safe_read import connect_tracked
 
     db = tmp_path / "state.db"
     conn = sqlite3.connect(str(db))
@@ -502,7 +502,7 @@ def test_budget_exhausts_when_liveness_alternates_across_passes(tmp_path):
 
 def test_fingerprint_returns_none_rather_than_a_mtime_shaped_key(tmp_path):
     """Never mint a second key SHAPE — the ledger compares for equality."""
-    from hermes_cli.sqlite_safe_read import connect_tracked
+    from zeloo_cli.sqlite_safe_read import connect_tracked
 
     db = tmp_path / "state.db"
     conn = sqlite3.connect(str(db))
@@ -614,7 +614,7 @@ def test_genuine_recovery_still_resets_the_budget(tmp_path):
 def test_forensic_backup_includes_the_rollback_journal(tmp_path):
     """DELETE mode leaves a hot -journal, and that file interprets the damage.
 
-    Rollback-journal mode is Hermes's fallback on NFS/SMB/FUSE/ZFS and on
+    Rollback-journal mode is Zeloo's fallback on NFS/SMB/FUSE/ZFS and on
     WAL-reset-vulnerable SQLite builds. A forensic copy without the journal
     cannot be rolled back to a consistent state by hand.
     """

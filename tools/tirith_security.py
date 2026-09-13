@@ -3,7 +3,7 @@ commands for content-level threats (homograph URLs, pipe-to-interpreter, termina
 The exit code is the verdict source of truth (0 allow, 1 block, 2 warn); JSON stdout only
 enriches findings. Operational failures (spawn error, timeout, unknown exit) respect
 ``fail_open``; programming errors propagate. Auto-install: a missing tirith is downloaded from
-GitHub releases to $HERMES_HOME/bin/tirith in a background thread -- SHA-256 always verified,
+GitHub releases to $ZELOO_HOME/bin/tirith in a background thread -- SHA-256 always verified,
 cosign provenance when cosign is on PATH."""
 
 import hashlib
@@ -21,7 +21,7 @@ import time
 import urllib.request
 from contextlib import suppress
 
-from hermes_constants import get_hermes_home
+from zeloo_constants import get_zeloo_home
 
 logger = logging.getLogger(__name__)
 _REPO = "sheeki03/tirith"
@@ -45,7 +45,7 @@ def _env_int(key: str, default: int) -> int:
 def _load_security_config() -> dict:
     """Security settings from config.yaml, with env var overrides."""
     try:
-        from hermes_cli.config import load_config_readonly
+        from zeloo_cli.config import load_config_readonly
         cfg = load_config_readonly().get("security", {}) or {}
     except Exception:
         cfg = {}
@@ -123,7 +123,7 @@ def _set_failed(reason: str) -> None:
 
 # --- Disk failure marker ---
 def _failure_marker_path() -> str:
-    return os.path.join(str(get_hermes_home()), ".tirith-install-failed")
+    return os.path.join(str(get_zeloo_home()), ".tirith-install-failed")
 
 
 def _read_failure_reason() -> str | None:
@@ -175,9 +175,9 @@ def _disk_marker_blocks_install() -> bool:
 
 
 # --- Auto-install ---
-def _hermes_bin_dir() -> str:
-    """$HERMES_HOME/bin, created if needed."""
-    os.makedirs(d := os.path.join(str(get_hermes_home()), "bin"), exist_ok=True)
+def _zeloo_bin_dir() -> str:
+    """$ZELOO_HOME/bin, created if needed."""
+    os.makedirs(d := os.path.join(str(get_zeloo_home()), "bin"), exist_ok=True)
     return d
 
 
@@ -290,7 +290,7 @@ def _extract_tirith_binary(tar: tarfile.TarFile, dest_dir: str, log) -> tuple[st
 
 
 def _install_tirith(*, log_failures: bool = True) -> tuple[str | None, str]:
-    """Download and install tirith to $HERMES_HOME/bin/tirith -> ``(installed_path,
+    """Download and install tirith to $ZELOO_HOME/bin/tirith -> ``(installed_path,
     failure_reason)``; the reason ("" on success) is the disk marker's retryability tag."""
     log = logger.warning if log_failures else logger.debug
     if not (target := _detect_target()):
@@ -321,7 +321,7 @@ def _install_tirith(*, log_failures: bool = True) -> tuple[str | None, str]:
             src, reason = _extract_tirith_binary(tar, tmpdir, log)
         if src is None:
             return None, reason
-        dest = os.path.join(_hermes_bin_dir(), "tirith")
+        dest = os.path.join(_zeloo_bin_dir(), "tirith")
         try:
             shutil.move(src, dest)
         except OSError:
@@ -347,9 +347,9 @@ def _is_executable(path: str) -> bool:
 
 
 def _find_local_tirith() -> str | None:
-    """Cheap local lookup for the default "tirith": PATH, then $HERMES_HOME/bin."""
-    hermes_bin = os.path.join(_hermes_bin_dir(), "tirith")
-    return shutil.which("tirith") or (hermes_bin if _is_executable(hermes_bin) else None)
+    """Cheap local lookup for the default "tirith": PATH, then $ZELOO_HOME/bin."""
+    zeloo_bin = os.path.join(_zeloo_bin_dir(), "tirith")
+    return shutil.which("tirith") or (zeloo_bin if _is_executable(zeloo_bin) else None)
 
 
 def _resolve_locally(configured_path: str, *, warn_missing: bool) -> tuple[str | None, bool]:
@@ -396,7 +396,7 @@ def _record_install_result(installed: str | None, reason: str) -> str | None:
 
 def _resolve_tirith_path(configured_path: str) -> str:
     """Resolve the tirith path, auto-installing synchronously if needed (default "tirith": PATH →
-    $HERMES_HOME/bin/tirith → install; failures cached in-process and on disk for 24h). On a miss
+    $ZELOO_HOME/bin/tirith → install; failures cached in-process and on disk for 24h). On a miss
     the expanded configured path is returned so the spawn fails open via the dedupe'd OSError."""
     if cached := _cached_path():
         return cached

@@ -171,8 +171,8 @@ describe('host.state turn flags', () => {
 })
 
 describe('host.connections', () => {
-  const desktopWindow = window as unknown as { hermesDesktop?: Window['hermesDesktop'] }
-  const originalDesktop = desktopWindow.hermesDesktop
+  const desktopWindow = window as unknown as { ZELOODesktop?: Window['ZELOODesktop'] }
+  const originalDesktop = desktopWindow.ZELOODesktop
 
   const connection = (id: string, label: string) => ({
     id,
@@ -184,14 +184,14 @@ describe('host.connections', () => {
   })
 
   const stubBridge = (list: () => Promise<unknown>) => {
-    desktopWindow.hermesDesktop = {
+    desktopWindow.ZELOODesktop = {
       ...originalDesktop,
       connections: { list }
-    } as unknown as Window['hermesDesktop']
+    } as unknown as Window['ZELOODesktop']
   }
 
   afterEach(() => {
-    desktopWindow.hermesDesktop = originalDesktop
+    desktopWindow.ZELOODesktop = originalDesktop
   })
 
   it('returns the registry rows, not the envelope that carries them (#89823)', async () => {
@@ -230,7 +230,7 @@ describe('host.connections', () => {
   })
 
   it('still rejects on a Desktop build without the connection registry', async () => {
-    desktopWindow.hermesDesktop = undefined
+    desktopWindow.ZELOODesktop = undefined
 
     await expect(host.connections()).rejects.toThrow('This Desktop build has no connection registry')
   })

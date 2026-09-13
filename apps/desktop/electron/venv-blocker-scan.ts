@@ -49,7 +49,7 @@ export type ScanOutcome =
 // hosts. Keep a watchdog for genuinely wedged probes, but leave enough headroom
 // for the scanner's conservative fallback checks.
 const SCAN_TIMEOUT_MS = 60000
-const SCAN_MODULE = 'hermes_cli._scan_venv_blockers'
+const SCAN_MODULE = 'zeloo_cli._scan_venv_blockers'
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -99,7 +99,7 @@ function classifyVenvBlocker(
 
 /**
  * Stop only blockers that the fresh scanner identified as Python static-file
- * preview servers. Unknown Python/Hermes processes are deliberately ignored.
+ * preview servers. Unknown Python/Zeloo processes are deliberately ignored.
  */
 export async function stopSafeVenvBlockers(
   updateRoot: string,
@@ -130,7 +130,7 @@ export async function stopSafeVenvBlockers(
     try {
       await execFn(
         pythonPath,
-        ['-m', 'hermes_cli._scan_venv_blockers', '--terminate-safe', String(process.pid), String(process.createTime)],
+        ['-m', 'zeloo_cli._scan_venv_blockers', '--terminate-safe', String(process.pid), String(process.createTime)],
         { cwd: updateRoot, windowsHide: true, timeout: 10_000, maxBuffer: 256 * 1024 }
       )
       stopped.push(process.pid)
@@ -281,7 +281,7 @@ export function resolveVenvPython(updateRoot: string): string | null {
  */
 export function formatBlockerMessage(result: VenvBlockerScanResult): string {
   const lines = [
-    'Update aborted: another Hermes process is using this installation.',
+    'Update aborted: another Zeloo process is using this installation.',
     '',
     'These processes must be stopped before updating:',
     ''
@@ -314,10 +314,10 @@ export function formatProbeFailedMessage(error?: string): string {
     : ''
 
   return (
-    'Update aborted: Desktop could not verify the Hermes installation is free.' +
+    'Update aborted: Desktop could not verify the Zeloo installation is free.' +
     timeoutDetail +
     '\n\n' +
-    'Close other Hermes windows and terminals, then retry.  If the problem\n' +
-    'persists, run `hermes update` in a terminal for detailed diagnostics.'
+    'Close other Zeloo windows and terminals, then retry.  If the problem\n' +
+    'persists, run `zeloo update` in a terminal for detailed diagnostics.'
   )
 }

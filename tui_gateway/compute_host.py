@@ -76,7 +76,7 @@ class ComputeHost:
         self._transport = _HostTransport(self.emit)
         self._heartbeat_secs = (
             float(heartbeat_secs) if heartbeat_secs is not None
-            else float(os.environ.get("HERMES_COMPUTE_HOST_HEARTBEAT_SECS") or "15"))
+            else float(os.environ.get("ZELOO_COMPUTE_HOST_HEARTBEAT_SECS") or "15"))
         if self._heartbeat_secs > 0:
             for target, name in (
                 (self._heartbeat_loop, "compute-host-heartbeat"),
@@ -229,8 +229,8 @@ class ComputeHost:
             with contextlib.suppress(Exception):
                 server._ensure_session_db_row(session)
             with contextlib.suppress(Exception):
-                import hermes_undo
-                hermes_undo.on_user_message_appended(session["session_key"])
+                import zeloo_undo
+                zeloo_undo.on_user_message_appended(session["session_key"])
             with contextlib.suppress(Exception):
                 server._persist_branch_seed(session)
             server._run_prompt_submit(
@@ -302,10 +302,10 @@ class ComputeHost:
         owns_db = False
         try:
             if profile_home:
-                from hermes_constants import set_hermes_home_override
+                from zeloo_constants import set_zeloo_home_override
                 from agent.secret_scope import build_profile_secret_scope, set_secret_scope
-                from hermes_state_registry import acquire
-                home_token = set_hermes_home_override(profile_home)
+                from zeloo_state_registry import acquire
+                home_token = set_zeloo_home_override(profile_home)
                 secret_token = set_secret_scope(build_profile_secret_scope(Path(profile_home)))
                 # DEDICATED handle — ours only until _make_agent succeeds, then the agent owns
                 # it. A RAISING _make_agent is the one path where nothing takes it (``owns_db``).
@@ -324,13 +324,13 @@ class ComputeHost:
         finally:
             if owns_db and session_db is not None:
                 with contextlib.suppress(Exception):
-                    from hermes_state_registry import release_or_close
+                    from zeloo_state_registry import release_or_close
                     release_or_close(session_db)
             if home_token is not None:
                 with contextlib.suppress(Exception):
-                    from hermes_constants import reset_hermes_home_override
+                    from zeloo_constants import reset_zeloo_home_override
                     from agent.secret_scope import reset_secret_scope
-                    reset_hermes_home_override(home_token)
+                    reset_zeloo_home_override(home_token)
                     reset_secret_scope(secret_token)
         try:
             from tui_gateway.transport import bind_transport, reset_transport
@@ -477,13 +477,13 @@ def _rss_mb(pid: int) -> float:
 
 def _default_workers() -> int:
     try:
-        return max(2, int(os.environ.get("HERMES_TUI_RPC_POOL_WORKERS") or "8"))
+        return max(2, int(os.environ.get("ZELOO_TUI_RPC_POOL_WORKERS") or "8"))
     except (TypeError, ValueError):
         return 8
 
 
 def run_host(stdin: Any = None, stdout: Any = None) -> None:
-    os.environ["HERMES_COMPUTE_HOST_CHILD"] = "1"
+    os.environ["ZELOO_COMPUTE_HOST_CHILD"] = "1"
     stdin = stdin or sys.stdin
     host = ComputeHost(stdout=stdout or sys.stdout)
     shutting_down = threading.Event()
@@ -500,7 +500,7 @@ def run_host(stdin: Any = None, stdout: Any = None) -> None:
     host.emit({
         "type": "hello", "host_pid": os.getpid(), "boot_id": host._boot_id,
         "build_sha": _build_sha(), "cwd": os.getcwd(),
-        "hermes_home": os.environ.get("HERMES_HOME", "")})
+        "zeloo_home": os.environ.get("ZELOO_HOME", "")})
 
     def _reader() -> None:
         for raw in stdin:
@@ -616,7 +616,7 @@ def __getattr__(name):  # PEP 562 — lazy so no import cycles
     if target is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     import importlib
-    from hermes_cli.plugin_compat import warn_once
+    from zeloo_cli.plugin_compat import warn_once
     warn_once(__name__, name, *target)
     return getattr(importlib.import_module(target[0]), target[1])
 # ---- END PLUGIN-COMPAT ----

@@ -28,7 +28,7 @@ def _(rid, params: dict) -> dict:
     A pure read. The identity is created by the boot bootstrap (``free_tier_bootstrap``), never as
     a side effect of a client polling this method (NS-845 Q1.2)."""
     try:
-        from hermes_cli import anon_auth
+        from zeloo_cli import anon_auth
         has_guest = anon_auth.has_guest()
         enabled = anon_auth.guest_enabled()
         return _ok(rid, {
@@ -48,7 +48,7 @@ def _(rid, params: dict) -> dict:
     turned on later) and the user asks again. ``{has_guest, enabled}``; ``error`` when the portal
     refused."""
     try:
-        from hermes_cli import anon_auth
+        from zeloo_cli import anon_auth
         enabled = anon_auth.guest_enabled()
         error = None
         if enabled and not anon_auth.has_guest():
@@ -71,7 +71,7 @@ def _(rid, params: dict) -> dict:
     """Mark the availability notice shown on the free-tier identity. ``acked`` is false when there is
     no free-tier identity to mark (nothing to show again either)."""
     try:
-        from hermes_cli import anon_auth
+        from zeloo_cli import anon_auth
         return _ok(rid, {"acked": bool(anon_auth.mark_guest_notice_shown())})
     except Exception as e:
         return _err(rid, 5091, str(e))

@@ -125,7 +125,7 @@ function reconcileLayout(id: string, tree: LayoutNode): void {
 
   undismissTreePanes(declared)
 
-  // plugins/hermes-bots/plugin.tsx enforces a dock onto Sessions; adoption
+  // plugins/Zeloo-bots/plugin.tsx enforces a dock onto Sessions; adoption
   // otherwise adds its roster and a tab strip to the sidebar. Dismiss every
   // undeclared pane, including registry entries not placed yet, so subsequent
   // adoption cannot bring them back. Their own toggles still can.
@@ -161,7 +161,7 @@ export function assembleChatOnboarding(id: string, tree: LayoutNode): void {
   if (firstPick) {
     const growth = LAYOUT_GROWTH.get(id) ?? { left: 220 }
 
-    window.hermesDesktop?.chatOnboarding?.grow({
+    window.ZELOODesktop?.chatOnboarding?.grow({
       bottom: growth.bottom ?? 0,
       left: growth.left ?? 0,
       right: growth.right ?? 0,

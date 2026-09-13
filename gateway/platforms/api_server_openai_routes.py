@@ -76,7 +76,7 @@ def _finish_reason(completed, is_partial, is_failed, err_msg, agent_error=None) 
     return "stop"
 
 
-def _hermes_extras(completed, is_partial, is_failed, err_msg, finish_reason: str) -> Dict[str, Any]:
+def _zeloo_extras(completed, is_partial, is_failed, err_msg, finish_reason: str) -> Dict[str, Any]:
     return {
         "completed": completed, "partial": is_partial, "failed": is_failed, "error": err_msg,
         "error_code": "output_truncated" if finish_reason == "length" else "agent_error"}
@@ -449,18 +449,18 @@ class OpenAICompatRoutesMixin:
         if not _content_has_visible_payload(user_message):
             return _invalid_request("No user message found in messages")
 
-        # X-Hermes-Session-Key scopes long-term memory per channel; independent of
-        # X-Hermes-Session-Id (the key persists across transcripts, the id rotates on /new).
+        # X-Zeloo-Session-Key scopes long-term memory per channel; independent of
+        # X-Zeloo-Session-Id (the key persists across transcripts, the id rotates on /new).
         gateway_session_key, key_err = self._parse_session_key_header(request)
         if key_err is not None:
             return key_err
-        # X-Hermes-Session-Id continues an existing session (history from state.db, not the body);
+        # X-Zeloo-Session-Id continues an existing session (history from state.db, not the body);
         # requires a configured API key or any client could read history by guessing ids.
-        provided_session_id = request.headers.get("X-Hermes-Session-Id", "").strip()
+        provided_session_id = request.headers.get("X-Zeloo-Session-Id", "").strip()
         if provided_session_id:
             if not self._api_key:
                 logger.warning(
-                    "Session continuation via X-Hermes-Session-Id rejected: "
+                    "Session continuation via X-Zeloo-Session-Id rejected: "
                     "no API key configured.  Set API_SERVER_KEY to enable "
                     "session continuity.")
                 return _error_response("Session continuation requires API key authentication. "
@@ -488,7 +488,7 @@ class OpenAICompatRoutesMixin:
                 history = []
         else:
             # Stable id from the conversation fingerprint so Open WebUI-style clients map onto
-            # one Hermes session.
+            # one Zeloo session.
             first_user = next(
                 (cm.get("content", "") for cm in conversation_messages if cm.get("role") == "user"), "")
             session_id = _derive_chat_session_id(system_prompt, first_user)
@@ -505,7 +505,7 @@ class OpenAICompatRoutesMixin:
             ephemeral_system_prompt=system_prompt, session_id=session_id,
             gateway_session_key=gateway_session_key, **agent_overrides, route=route,
             relay_metadata=relay_metadata,
-            # #98619: only an explicitly provided X-Hermes-Session-Id is wake-capable (the
+            # #98619: only an explicitly provided X-Zeloo-Session-Id is wake-capable (the
             # header is 403-gated on API_SERVER_KEY, so the wake self-post can authenticate
             # and the client can resume the session by sending it again). A fingerprint-derived
             # id from a header-less client is NOT: delegate_task keeps its forced-sync fallback
@@ -518,7 +518,7 @@ class OpenAICompatRoutesMixin:
             _started_tool_call_ids: set[str] = set()
 
             def _on_tool_start(tool_call_id, function_name, function_args):
-                """``hermes.tool.progress`` status=running; ``_``-prefixed tools stay off the wire."""
+                """``Zeloo.tool.progress`` status=running; ``_``-prefixed tools stay off the wire."""
                 if not tool_call_id or function_name.startswith("_"):
                     return
                 _started_tool_call_ids.add(tool_call_id)
@@ -567,21 +567,21 @@ class OpenAICompatRoutesMixin:
         # Same #13437 identity contract as the SSE path: an explicit-header client is echoed
         # the stable id it sent; a fingerprint-derived (header-less) turn keeps reporting the
         # id the agent actually resolved, so headerless clients still learn where the turn went.
-        response_headers = {"X-Hermes-Session-Id": (provided_session_id or result.get("session_id", session_id))}
+        response_headers = {"X-Zeloo-Session-Id": (provided_session_id or result.get("session_id", session_id))}
         if gateway_session_key:
-            response_headers["X-Hermes-Session-Key"] = gateway_session_key
+            response_headers["X-Zeloo-Session-Key"] = gateway_session_key
         # Hard fail (no usable text AND a real failure) -> 502 OpenAI error envelope so SDK
         # clients raise instead of rendering the failure string as message.content.
         if not final_response and (is_failed or is_partial):
             err_body = _openai_error(
                 err_msg or "Agent run did not produce a response.", err_type="server_error",
                 code="agent_incomplete")
-            err_body["error"]["hermes"] = {
+            err_body["error"]["Zeloo"] = {
                 "completed": completed, "partial": is_partial, "failed": is_failed}
-            response_headers["X-Hermes-Completed"] = "false"
-            response_headers["X-Hermes-Partial"] = "true" if is_partial else "false"
+            response_headers["X-Zeloo-Completed"] = "false"
+            response_headers["X-Zeloo-Partial"] = "true" if is_partial else "false"
             return web.json_response(err_body, status=502, headers=response_headers)
-        # Soft partial (some text, run incomplete): 200 + finish_reason="length"/Hermes extras.
+        # Soft partial (some text, run incomplete): 200 + finish_reason="length"/Zeloo extras.
         response_data = {
             "id": completion_id, "object": "chat.completion", "created": created,
             "model": model_name,
@@ -589,12 +589,12 @@ class OpenAICompatRoutesMixin:
                          "finish_reason": finish_reason}],
             "usage": _chat_usage_payload(usage)}
         if is_partial or is_failed or not completed:
-            response_data["hermes"] = _hermes_extras(
+            response_data["Zeloo"] = _zeloo_extras(
                 completed, is_partial, is_failed, err_msg, finish_reason)
-            response_headers["X-Hermes-Completed"] = "false"
-            response_headers["X-Hermes-Partial"] = "true" if is_partial else "false"
+            response_headers["X-Zeloo-Completed"] = "false"
+            response_headers["X-Zeloo-Partial"] = "true" if is_partial else "false"
             if err_msg:
-                response_headers["X-Hermes-Error"] = _redact_api_error_text(err_msg, limit=200)
+                response_headers["X-Zeloo-Error"] = _redact_api_error_text(err_msg, limit=200)
         return web.json_response(response_data, headers=response_headers)
 
     async def _run_idempotent(
@@ -627,9 +627,9 @@ class OpenAICompatRoutesMixin:
         if origin:
             sse_headers.update(self._cors_headers_for_origin(origin) or {})
         if session_id:
-            sse_headers["X-Hermes-Session-Id"] = session_id
+            sse_headers["X-Zeloo-Session-Id"] = session_id
         if gateway_session_key:
-            sse_headers["X-Hermes-Session-Key"] = gateway_session_key
+            sse_headers["X-Zeloo-Session-Key"] = gateway_session_key
         response = web.StreamResponse(status=200, headers=sse_headers)
         await response.prepare(request)
         return response
@@ -655,7 +655,7 @@ class OpenAICompatRoutesMixin:
                     break
                 if isinstance(delta, tuple) and len(delta) == 2 and delta[0] == "__tool_progress__":
                     # Custom event: tool lifecycle for frontends without markers in history.
-                    await response.write(_sse_frame(delta[1], event="hermes.tool.progress"))
+                    await response.write(_sse_frame(delta[1], event="Zeloo.tool.progress"))
                 else:
                     await response.write(_sse_frame(_chunk({"content": delta})))
             # The agent can fail after the queue drains (task raises / result flagged failed or
@@ -679,7 +679,7 @@ class OpenAICompatRoutesMixin:
                     finish_chunk["error"] = {
                         "message": err_msg,
                         "type": type(agent_error).__name__ if agent_error else "agent_error"}
-                finish_chunk["hermes"] = _hermes_extras(
+                finish_chunk["Zeloo"] = _zeloo_extras(
                     completed, is_partial, is_failed, err_msg, finish_reason)
             await response.write(_sse_frame(finish_chunk))
             await response.write(b"data: [DONE]\n\n")
@@ -833,7 +833,7 @@ class OpenAICompatRoutesMixin:
         if body.get("truncation") == "auto":
             conversation_history = _auto_truncate_response_history(conversation_history)
 
-        # Session precedence: previous_response_id chain > declared X-Hermes-Session-Key > fresh
+        # Session precedence: previous_response_id chain > declared X-Zeloo-Session-Key > fresh
         # id. Binding the declared key follows the same precedence: a chain-selected session must
         # not have its routing key rewritten to this header.
         _declared_selected = not stored_session_id and bool(gateway_session_key)
@@ -915,9 +915,9 @@ class OpenAICompatRoutesMixin:
                 "instructions": instructions, "session_id": _effective_session_id})
             if conversation:
                 self._response_store.set_conversation(conversation, response_id)
-        response_headers = {"X-Hermes-Session-Id": _effective_session_id}
+        response_headers = {"X-Zeloo-Session-Id": _effective_session_id}
         if gateway_session_key:
-            response_headers["X-Hermes-Session-Key"] = gateway_session_key
+            response_headers["X-Zeloo-Session-Key"] = gateway_session_key
         return web.json_response(response_data, headers=response_headers)
 
     async def _handle_get_response(self, request: "web.Request") -> "web.Response":

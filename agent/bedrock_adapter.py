@@ -55,7 +55,7 @@ def _require_boto3():
         raise ImportError(
             "The 'boto3' package is required for the AWS Bedrock provider. "
             "Install it with: pip install boto3\n"
-            "Or install Hermes with Bedrock support: pip install -e '.[bedrock]'"
+            "Or install Zeloo with Bedrock support: pip install -e '.[bedrock]'"
         )
     try:
         version = tuple(int(x) for x in boto3.__version__.split(".")[:3])
@@ -292,7 +292,7 @@ def resolve_bedrock_runtime_region(config: Optional[Dict[str, Any]] = None) -> s
     endpoint must use this so auxiliary calls never leave the primary runtime's region. *config* skips disk."""
     if config is None:
         with suppress(Exception):
-            from hermes_cli.config import load_config_readonly
+            from zeloo_cli.config import load_config_readonly
             config = load_config_readonly()
     cfg_region = str(((config or {}).get("bedrock") or {}).get("region") or "").strip()
     return cfg_region or resolve_bedrock_region()
@@ -309,7 +309,7 @@ def bedrock_guardrail_config(config: Optional[Dict[str, Any]] = None) -> Optiona
     if config is None:
         config = {}
         with suppress(Exception):
-            from hermes_cli.config import load_config_readonly
+            from zeloo_cli.config import load_config_readonly
             config = load_config_readonly()
     gr = ((config or {}).get("bedrock") or {}).get("guardrail") or {}
     if not (gr.get("guardrail_identifier") and gr.get("guardrail_version")):

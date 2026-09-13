@@ -17,7 +17,7 @@ const STREAMABLE_MEDIA_EXTENSIONS = [
 
 const FORWARDED_MEDIA_REQUEST_HEADERS = ['accept', 'if-modified-since', 'if-none-match', 'if-range', 'range'] as const
 
-export const MEDIA_PROTOCOL = 'hermes-media'
+export const MEDIA_PROTOCOL = 'Zeloo-media'
 
 type MediaProtocolMode = 'remote' | 'stream'
 
@@ -97,7 +97,7 @@ export function remoteMediaEndpoint(baseUrl: string, filePath: string, profile?:
   const url = new URL(`${normalizedBase}/api/files/stream`)
 
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error(`Unsupported Hermes backend URL protocol: ${url.protocol}`)
+    throw new Error(`Unsupported Zeloo backend URL protocol: ${url.protocol}`)
   }
 
   url.searchParams.set('path', filePath)
@@ -190,7 +190,7 @@ export function createMediaProtocolHandler(dependencies: MediaProtocolDependenci
         return new Response('Remote media authentication unavailable', { status: 401 })
       }
 
-      headers.set('x-hermes-session-token', connection.token)
+      headers.set('x-Zeloo-session-token', connection.token)
 
       return await dependencies.fetchRemote(endpoint, headers, method)
     } catch (error) {

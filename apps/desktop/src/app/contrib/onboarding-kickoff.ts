@@ -77,7 +77,7 @@ async function adoptGuideSession(
   }
 }
 
-/** Seed the runbook and banked greeting on hermes-setup before advancing the phase.
+/** Seed the runbook and banked greeting on Zeloo-setup before advancing the phase.
  * The seeded assistant row opens the chat without a model turn. */
 export function useOnboardingKickoff({
   createBackendSessionForSend,
@@ -115,7 +115,7 @@ export function useOnboardingKickoff({
       await ensureGatewayProfile(SETUP_PROFILE)
 
       startChatOnboardingSolo()
-      window.hermesDesktop?.chatOnboarding?.soloBoot?.()
+      window.ZELOODesktop?.chatOnboarding?.soloBoot?.()
       await loadMachineProfile()
 
       const seedMessages = buildChatOnboardingSeedMessages(pickOnboardingGreeting(), record.free_tier !== true)

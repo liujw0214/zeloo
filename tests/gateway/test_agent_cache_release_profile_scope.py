@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from agent import secret_scope
 from gateway.config import GatewayConfig
 from gateway.run import GatewayRunner
-from hermes_constants import get_hermes_home
+from zeloo_constants import get_zeloo_home
 
 
 def _runner(profile_homes: dict[str, Path]) -> GatewayRunner:
@@ -30,7 +30,7 @@ def _seen_after_release(runner, key, *, wait_scope=None) -> dict:
 
     def target(agent, k):
         seen["scope"] = secret_scope.current_secret_scope()
-        seen["home"] = get_hermes_home()
+        seen["home"] = get_zeloo_home()
         done.set()
 
     runner._spawn_release_thread(target, (None, key), f"t-{key}", inline_fallback=False, session_key=key)
@@ -39,11 +39,11 @@ def _seen_after_release(runner, key, *, wait_scope=None) -> dict:
 
 
 def test_unscoped_housekeeping_sweep_enters_the_owning_profile_scope(tmp_path, monkeypatch):
-    default_home = tmp_path / ".hermes"
+    default_home = tmp_path / ".Zeloo"
     prof_b = default_home / "profiles" / "b"
     prof_b.mkdir(parents=True)
     (prof_b / ".env").write_text("HINDSIGHT_LLM_API_KEY=key-of-b\n")
-    monkeypatch.setenv("HERMES_HOME", str(default_home))
+    monkeypatch.setenv("ZELOO_HOME", str(default_home))
     secret_scope.set_multiplex_active(True)
     try:
         # The housekeeping watcher runs with NO scope installed.
@@ -56,7 +56,7 @@ def test_unscoped_housekeeping_sweep_enters_the_owning_profile_scope(tmp_path, m
 
 
 def test_in_turn_cap_eviction_keeps_the_callers_scope(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZELOO_HOME", str(tmp_path))
     secret_scope.set_multiplex_active(True)
     token = secret_scope.set_secret_scope({"MARKER": "turn-scope"})
     try:

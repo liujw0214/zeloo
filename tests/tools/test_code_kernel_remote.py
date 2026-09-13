@@ -1,4 +1,4 @@
-"""Remote session kernels (tools/code_kernel_remote.py) — hermes-agent#96873.
+"""Remote session kernels (tools/code_kernel_remote.py) — Zeloo-agent#96873.
 
 These tests drive execute_in_remote_kernel against a scripted fake env that
 implements the same contract as docker/ssh/modal envs (run-to-completion
@@ -260,7 +260,7 @@ class TestIdleReapAndCapEviction(RemoteKernelBase):
 
     def test_eviction_skips_kernels_with_a_running_cell(self):
         """Cap eviction must never kill a kernel mid-cell (the local-kernel
-        race from hermes-agent#101861): a busy kernel stays put and a
+        race from Zeloo-agent#101861): a busy kernel stays put and a
         settled one goes instead, even if the busy one is older."""
         import threading
 

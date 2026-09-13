@@ -17,7 +17,7 @@ suite (we patch ``agent.process_bootstrap.OpenAI`` and drive ``agent.client``), 
 pass identically in CI and locally.
 """
 
-import hermes_state_errors
+import zeloo_state_errors
 import os
 import uuid
 from types import SimpleNamespace
@@ -39,7 +39,7 @@ def _make_agent(max_iterations: int = 10, config: dict | None = None) -> AIAgent
     with (
         patch("model_tools.get_tool_definitions", return_value=[]),
         patch("model_tools.check_toolset_requirements", return_value={}),
-        patch("hermes_cli.config.load_config", return_value=config or {}),
+        patch("zeloo_cli.config.load_config", return_value=config or {}),
         patch("agent.process_bootstrap.OpenAI"),
     ):
         agent = AIAgent(
@@ -129,7 +129,7 @@ def test_explanation_persistence_turn_lease_cause_is_specific():
     assert "not saved" in lower
     assert "disk" not in lower
     assert "compression" not in lower
-    assert "hermes doctor" not in lower
+    assert "Zeloo doctor" not in lower
 
 
 def test_explanation_persistence_disk_cause_keeps_disk_wording():
@@ -150,26 +150,26 @@ def test_explanation_persistence_corrupt_cause_never_says_free_space():
     )
     lower = out.lower()
     assert "corrupt" in lower
-    assert "hermes doctor" in lower
+    assert "Zeloo doctor" in lower
     assert "free some space" not in lower
     assert "full disk" not in lower
 
 
-def test_explanation_persistence_corrupt_backups_dir_follows_hermes_home(monkeypatch, tmp_path):
-    """Step 3 must name the backups dir under the ACTIVE home, not ~/.hermes (#104250).
+def test_explanation_persistence_corrupt_backups_dir_follows_zeloo_home(monkeypatch, tmp_path):
+    """Step 3 must name the backups dir under the ACTIVE home, not ~/.Zeloo (#104250).
 
-    Pre-update backups live at ``<hermes_root>/backups`` (``hermes_cli/backup.py``), so a
-    custom-HERMES_HOME deployment told to restore from ``~/.hermes/backups/`` is misdirected
+    Pre-update backups live at ``<zeloo_root>/backups`` (``zeloo_cli/backup.py``), so a
+    custom-ZELOO_HOME deployment told to restore from ``~/.Zeloo/backups/`` is misdirected
     mid data-loss incident: that directory may not exist at all, or may hold an unrelated
     install's backups.
     """
-    custom_home = tmp_path / "custom-hermes-home"
-    monkeypatch.setenv("HERMES_HOME", str(custom_home / "profiles" / "research"))
+    custom_home = tmp_path / "custom-Zeloo-home"
+    monkeypatch.setenv("ZELOO_HOME", str(custom_home / "profiles" / "research"))
     out = AIAgent._format_turn_completion_explanation(
         "session_persistence_failed", "corrupt"
     )
     assert f"{custom_home / 'backups'}" in out
-    assert "~/.hermes/backups" not in out
+    assert "~/.Zeloo/backups" not in out
     assert "{backups_dir}" not in out
 
 
@@ -188,7 +188,7 @@ def test_explanation_persistence_fts_index_never_advises_recovery():
     assert "restore from a backup" not in lower and "backups/" not in lower
     assert "would have been lost" not in lower
     assert "free" not in lower  # never disk-space advice
-    assert "hermes doctor" in lower
+    assert "Zeloo doctor" in lower
     assert "search index" in lower and "not damaged" in lower
     assert "send your message again" in lower  # the handle stays live
 
@@ -205,7 +205,7 @@ def test_explanation_persistence_replaced_cause_forbids_inplace_repair():
 
 
 def test_deleted_wal_cause_is_enumerated_and_points_to_retired_capture():
-    from hermes_state_errors import PERSISTENCE_ERROR_CAUSES
+    from zeloo_state_errors import PERSISTENCE_ERROR_CAUSES
 
     out = AIAgent._format_turn_completion_explanation(
         "session_persistence_failed", "deleted_wal"
@@ -229,7 +229,7 @@ def test_explanation_persistence_unknown_cause_is_neutral():
         assert out.strip() != ""
         assert "disk space" not in lower
         assert "full disk" not in lower
-        assert "hermes doctor" in lower
+        assert "Zeloo doctor" in lower
         assert "again" in lower
 
 
@@ -260,7 +260,7 @@ def test_explanation_cause_ignored_for_other_reasons():
 def test_classify_persistence_error_categories():
     import sqlite3
 
-    from hermes_state import classify_persistence_error
+    from zeloo_state import classify_persistence_error
 
     assert classify_persistence_error(
         sqlite3.OperationalError("database is locked")
@@ -285,7 +285,7 @@ def test_classify_persistence_error_corruption_beats_disk_bucket():
     comment thread, v0.20.0 malformed-DB incident)."""
     import sqlite3
 
-    from hermes_state import classify_persistence_error
+    from zeloo_state import classify_persistence_error
 
     assert classify_persistence_error(
         sqlite3.DatabaseError("database disk image is malformed")
@@ -303,12 +303,12 @@ def test_classify_persistence_error_corruption_beats_disk_bucket():
 
 
 def test_classify_persistence_error_reuses_disk_full_markers():
-    """The disk bucket delegates to hermes_state_errors.is_disk_full_error, so
+    """The disk bucket delegates to zeloo_state_errors.is_disk_full_error, so
     every marker that helper recognizes (ENOSPC, 'not enough space', ...)
     must classify as 'disk' — the two classifiers can never drift apart."""
     import errno
 
-    from hermes_state import classify_persistence_error
+    from zeloo_state import classify_persistence_error
 
     assert classify_persistence_error("ENOSPC writing state.db") == "disk"
     assert classify_persistence_error(
@@ -324,9 +324,9 @@ def test_classify_persistence_error_compression_busy_is_distinct():
     storage damage — but its message contains neither 'locked' nor 'busy',
     so it must classify by exception type (and by phrase for RPC-wrapped
     strings). This is the exact failure mode of issue #81227."""
-    from hermes_state import SessionCompressionInProgressError
-    from hermes_state_errors import CompressionSessionBusyError
-    from hermes_state import classify_persistence_error
+    from zeloo_state import SessionCompressionInProgressError
+    from zeloo_state_errors import CompressionSessionBusyError
+    from zeloo_state import classify_persistence_error
 
     assert classify_persistence_error(
         SessionCompressionInProgressError(
@@ -346,8 +346,8 @@ def test_classify_persistence_error_compression_busy_is_distinct():
 
 
 def test_classify_persistence_error_turn_lease_lost_is_distinct():
-    from hermes_state import classify_persistence_error
-    from hermes_state_errors import SessionTurnLeaseLostError
+    from zeloo_state import classify_persistence_error
+    from zeloo_state_errors import SessionTurnLeaseLostError
 
     assert classify_persistence_error(
         SessionTurnLeaseLostError(
@@ -362,8 +362,8 @@ def test_classify_persistence_error_turn_lease_lost_is_distinct():
 def test_persistence_error_causes_tuple_matches_classifier():
     """PERSISTENCE_ERROR_CAUSES must cover every value the classifier can
     return (consumers like cron suppression iterate it)."""
-    from hermes_state import classify_persistence_error
-    from hermes_state_errors import PERSISTENCE_ERROR_CAUSES
+    from zeloo_state import classify_persistence_error
+    from zeloo_state_errors import PERSISTENCE_ERROR_CAUSES
 
     probes = (
         "database is locked",
@@ -387,8 +387,8 @@ def test_classify_persistence_error_fts_provenance_order():
     "provably FTS-only" (#97794 review)."""
     import sqlite3
 
-    from hermes_state import SessionDB, classify_persistence_error
-    from hermes_state_errors import SQLITE_CORRUPT_VTAB, is_fts_scoped_corruption_error
+    from zeloo_state import SessionDB, classify_persistence_error
+    from zeloo_state_errors import SQLITE_CORRUPT_VTAB, is_fts_scoped_corruption_error
 
     def _err(text, code=None, cls=sqlite3.DatabaseError):
         exc = cls(text)
@@ -444,15 +444,15 @@ def test_classify_persistence_error_fts_provenance_order():
 def test_explainer_enabled_by_default():
     agent = _make_agent()
     with patch.dict(os.environ, {}, clear=False):
-        os.environ.pop("HERMES_TURN_COMPLETION_EXPLAINER", None)
-        with patch("hermes_cli.config.load_config", return_value={}):
+        os.environ.pop("ZELOO_TURN_COMPLETION_EXPLAINER", None)
+        with patch("zeloo_cli.config.load_config", return_value={}):
             assert agent._turn_completion_explainer_enabled() is True
 
 
 def test_explainer_disabled_via_env():
     agent = _make_agent()
     with patch.dict(
-        os.environ, {"HERMES_TURN_COMPLETION_EXPLAINER": "0"}, clear=False
+        os.environ, {"ZELOO_TURN_COMPLETION_EXPLAINER": "0"}, clear=False
     ):
         assert agent._turn_completion_explainer_enabled() is False
 
@@ -475,8 +475,8 @@ def test_explainer_config_read_once_then_cached():
         return {"display": {"turn_completion_explainer": True}}
 
     with patch.dict(os.environ, {}, clear=False):
-        os.environ.pop("HERMES_TURN_COMPLETION_EXPLAINER", None)
-        with patch("hermes_cli.config.load_config", counting_load):
+        os.environ.pop("ZELOO_TURN_COMPLETION_EXPLAINER", None)
+        with patch("zeloo_cli.config.load_config", counting_load):
             # First call reads config and caches the result.
             assert agent._turn_completion_explainer_enabled() is True
             assert calls["n"] == 1
@@ -486,7 +486,7 @@ def test_explainer_config_read_once_then_cached():
             assert calls["n"] == 1
             # Env override stays authoritative even after the cache is warm.
             with patch.dict(
-                os.environ, {"HERMES_TURN_COMPLETION_EXPLAINER": "0"}, clear=False
+                os.environ, {"ZELOO_TURN_COMPLETION_EXPLAINER": "0"}, clear=False
             ):
                 assert agent._turn_completion_explainer_enabled() is False
             assert calls["n"] == 1  # env path never touches config
@@ -553,6 +553,6 @@ def test_run_conversation_partial_stream_recovery_surfaces_explanation():
 
 def test_classify_persistence_error_quarantined_handle_is_corrupt() -> None:
     """A quarantined SessionDB raises the typed error; it stays in the corrupt bucket."""
-    from hermes_state import StateDbCorruptError, classify_persistence_error
+    from zeloo_state import StateDbCorruptError, classify_persistence_error
 
     assert classify_persistence_error(StateDbCorruptError("quarantined")) == "corrupt"

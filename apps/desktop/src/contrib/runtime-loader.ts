@@ -3,16 +3,16 @@
  * build time. The pipeline every non-bundled plugin takes:
  *
  *   source (plain ESM js) -> [integrity check] -> bare-specifier rewrite
- *   (`@hermes/plugin-sdk` / `react*` -> live shim blobs, see sdk/runtime.ts)
- *   -> blob `import()` -> validate default HermesPlugin -> register(ctx)
+ *   (`@Zeloo/plugin-sdk` / `react*` -> live shim blobs, see sdk/runtime.ts)
+ *   -> blob `import()` -> validate default ZELOOPlugin -> register(ctx)
  *
  * Loading the same plugin id again disposes the previous registrations first
  * (agent rewrites a plugin file -> clean reload). Failures toast + log; a
  * broken plugin can never take the app down.
  *
  * Sources today: the in-repo runtime example (`?raw`, proves the pipeline)
- * and the two on-disk doors — `<hermes home>/desktop-plugins/<name>/plugin.js`
- * and the unified agent-plugin half `<hermes home>/plugins/<name>/desktop/
+ * and the two on-disk doors — `<Zeloo home>/desktop-plugins/<name>/plugin.js`
+ * and the unified agent-plugin half `<Zeloo home>/plugins/<name>/desktop/
  * plugin.js` — the doors the agent writes through.
  *
  * SECURITY — this is NOT a capability boundary. A loaded plugin is evaluated
@@ -31,13 +31,13 @@
 import { installPluginSdk, sdkImportMap } from '@/sdk/runtime'
 import { notifyError } from '@/store/notifications'
 
-import { createPluginContext, type HermesPlugin } from './plugin'
+import { createPluginContext, type ZELOOPlugin } from './plugin'
 import { $pluginRecords, dropPlugin, pluginActive, type PluginKind, publishPlugin } from './plugins-store'
 
 interface LoadOptions {
   /** Root-level default-enable CAP: `false` ships the plugin opt-in (inventory
    *  row, off until the user toggles) even if the plugin says otherwise. The
-   *  unified agent-plugin root sets this so `~/.hermes/plugins` keeps its
+   *  unified agent-plugin root sets this so `~/.Zeloo/plugins` keeps its
    *  installed-but-inert posture (GHSA-mcfc-hp25-cjv7) on the desktop side too. */
   defaultEnabled?: boolean
   /** Absolute plugin.js path (disk plugins) — recorded for reveal/inventory. */
@@ -59,7 +59,7 @@ const loaded = new Map<string, (() => void)[]>()
 // literal or comment (e.g. `notify('react')`) is never touched.
 const importSpecifierRe = () => /(from\s*|import\s*\(\s*|import\s+)(['"])([^'"]+)\2/g
 
-/** Rewrite ONLY mapped import specifiers (@hermes/plugin-sdk, react*) to their
+/** Rewrite ONLY mapped import specifiers (@Zeloo/plugin-sdk, react*) to their
  *  live shim blob URLs — never occurrences inside strings/comments. */
 function rewriteSpecifiers(source: string): string {
   const map = sdkImportMap()
@@ -125,13 +125,13 @@ export async function loadRuntimePlugin(
     if (unsupported.length > 0) {
       throw new Error(
         `unsupported import${unsupported.length > 1 ? 's' : ''}: ${unsupported.join(', ')} — ` +
-          `runtime plugins may only import @hermes/plugin-sdk and react`
+          `runtime plugins may only import @Zeloo/plugin-sdk and react`
       )
     }
 
     const url = URL.createObjectURL(new Blob([rewriteSpecifiers(source)], { type: 'text/javascript' }))
 
-    let mod: { default?: HermesPlugin }
+    let mod: { default?: ZELOOPlugin }
 
     try {
       mod = await import(/* @vite-ignore */ url)
@@ -142,11 +142,11 @@ export async function loadRuntimePlugin(
     const plugin = mod.default
 
     if (!plugin?.id || typeof plugin.register !== 'function') {
-      throw new Error(`${origin} has no valid default HermesPlugin export`)
+      throw new Error(`${origin} has no valid default ZELOOPlugin export`)
     }
 
     // A disk/runtime copy of a plugin that now ships BUNDLED (e.g. a
-    // standalone install of hermes-bots predating its adoption in-tree) must
+    // standalone install of Zeloo-bots predating its adoption in-tree) must
     // not register a second time: contributions would double up and the two
     // copies would fight over storage. The bundled copy wins; the disk copy
     // is skipped — but VISIBLY: a silent skip left the stale folder
@@ -216,9 +216,9 @@ export async function loadRuntimePlugin(
 }
 
 // ---------------------------------------------------------------------------
-// The on-disk plugin door — ONE app-level root, `<hermes home>/desktop-plugins/`:
+// The on-disk plugin door — ONE app-level root, `<Zeloo home>/desktop-plugins/`:
 //  - `<id>/plugin.js` — a standalone desktop plugin (agent- or user-written);
-//  - `<package>/plugin.js` + `.hermes-package.json` — the desktop HALF of a
+//  - `<package>/plugin.js` + `.Zeloo-package.json` — the desktop HALF of a
 //    unified agent+desktop package, COPIED here by Electron from the package's
 //    `plugins/<package>/desktop/` folder (electron/desktop-plugins-root.ts).
 //    The agent half stays in its profile; the desktop half lives with the app,
@@ -243,10 +243,10 @@ interface DiskRoot {
 }
 
 /** The app-level root, resolved fresh each pass (Electron-local, never the
- *  backend's hermes_home — #66899). Resolving it also runs Electron's
+ *  backend's zeloo_home — #66899). Resolving it also runs Electron's
  *  reconcile, so unified packages' desktop halves are current before we scan. */
 async function diskRoots(): Promise<DiskRoot[]> {
-  const root = await window.hermesDesktop?.desktopPluginsRoot?.()
+  const root = await window.ZELOODesktop?.desktopPluginsRoot?.()
 
   return root ? [{ dir: root, entrySegments: ['plugin.js'] }] : []
 }
@@ -256,14 +256,14 @@ async function diskRoots(): Promise<DiskRoot[]> {
  *  until allowlisted — GHSA-mcfc-hp25-cjv7 — so the desktop half matches), and
  *  the record carries the package name so the Plugins page pairs it with the
  *  agent row. */
-const PACKAGE_MARKER = '.hermes-package.json'
+const PACKAGE_MARKER = '.Zeloo-package.json'
 
 interface PackageMarker {
   origin?: { catalogName?: string; repo?: string; sha?: string }
   package: string
 }
 
-async function readPackageMarker(desktop: Window['hermesDesktop'], folder: string): Promise<null | PackageMarker> {
+async function readPackageMarker(desktop: Window['ZELOODesktop'], folder: string): Promise<null | PackageMarker> {
   try {
     const { entries } = await desktop.readDir(folder)
     const marker = entries.find(entry => entry.name === PACKAGE_MARKER && !entry.isDirectory)
@@ -334,7 +334,7 @@ class PluginSourceOversizeError extends Error {}
  *  the preview read, which silently truncates at 512 KiB — there the read
  *  fails loudly instead of handing a partial file to the evaluator. */
 async function readPluginSourceText(file: string): Promise<string> {
-  const desktop = window.hermesDesktop!
+  const desktop = window.ZELOODesktop!
 
   if (desktop.readPluginSource) {
     return (await desktop.readPluginSource(file)).text
@@ -344,7 +344,7 @@ async function readPluginSourceText(file: string): Promise<string> {
 
   if (result.truncated) {
     throw new PluginSourceOversizeError(
-      "plugin.js exceeds this shell's 512 KiB read limit — update Hermes Desktop to load larger plugins"
+      "plugin.js exceeds this shell's 512 KiB read limit — update Zeloo Desktop to load larger plugins"
     )
   }
 
@@ -410,7 +410,7 @@ async function loadDiskPlugin(entry: DiskPlugin): Promise<boolean> {
 }
 
 async function resolveDiskPluginEntry(
-  desktop: Window['hermesDesktop'],
+  desktop: Window['ZELOODesktop'],
   folderPath: string,
   segments: readonly string[]
 ): Promise<string | null> {
@@ -441,7 +441,7 @@ async function resolveDiskPluginEntry(
 }
 
 async function scanDiskPlugins(): Promise<void> {
-  const desktop = window.hermesDesktop
+  const desktop = window.ZELOODesktop
 
   // Re-entrancy guard: the 5s poll must not overlap a slow in-flight scan
   // (reads/loads can exceed the interval).
@@ -550,7 +550,7 @@ export const discoverRuntimePlugins = scanDiskPlugins
 /** Start the self-maintaining disk door: initial scan, per-file hot reload,
  *  fs-watched folder reconciliation (poll fallback on older shells). Idempotent. */
 export function watchRuntimePlugins(): void {
-  const desktop = window.hermesDesktop
+  const desktop = window.ZELOODesktop
 
   if (watching || !desktop) {
     return

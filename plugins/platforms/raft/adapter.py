@@ -122,7 +122,7 @@ def _duration_ms(value: Any) -> Optional[int]:
 def _make_activity_event(*, hook_event_name: str, session_id: Any, status: str = "ok", tool_name: Any = None,
                          tool_input: Any = None, tool_output: Any = None, error_class: Any = None,
                          duration_ms: Any = None) -> Dict[str, Any]:
-    event: Dict[str, Any] = {"schema": ACTIVITY_EVENT_SCHEMA, "eventId": f"hermes-{uuid.uuid4()}",
+    event: Dict[str, Any] = {"schema": ACTIVITY_EVENT_SCHEMA, "eventId": f"Zeloo-{uuid.uuid4()}",
                              "sessionId": _safe_scalar(session_id, "unknown") or "unknown",
                              "hookEventName": hook_event_name, "status": "error" if status == "error" else "ok",
                              "occurredAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
@@ -444,7 +444,7 @@ class RaftAdapter(BasePlatformAdapter):
             return _error_response("invalid_json", 400)
         if not isinstance(payload, dict):
             return _error_response("invalid_payload", 400)
-        # No payload["schema"] gate: the bridge owns schema evolution; Hermes only checks content-free.
+        # No payload["schema"] gate: the bridge owns schema evolution; Zeloo only checks content-free.
         if _has_content_field(payload):
             return _error_response("content_not_allowed", 400)
         not_ready = {"ok": False, "error": "not_ready", "runtimeSession": self._runtime_session}
@@ -484,7 +484,7 @@ class RaftAdapter(BasePlatformAdapter):
         return web.json_response(self._activity_queue.drain(max_events))
 
     async def handle_message(self, event: MessageEvent) -> None:
-        """Accept Raft wake hints without interrupting an active Hermes turn."""
+        """Accept Raft wake hints without interrupting an active Zeloo turn."""
         if event.internal:
             # Durable gateway wakes need the base session fence and admission receipt.
             await super().handle_message(event)
@@ -525,10 +525,10 @@ def _env_enablement() -> Optional[dict]:
 
 
 def interactive_setup() -> None:
-    """``hermes gateway setup`` flow: persists ``RAFT_PROFILE`` to the Hermes env file.
+    """``Zeloo gateway setup`` flow: persists ``RAFT_PROFILE`` to the Zeloo env file.
     CLI helpers are lazy-imported so the plugin stays importable in gateway runtime and tests."""
-    from hermes_cli.cli_output import print_header, print_info, print_success, print_warning, prompt, prompt_yes_no
-    from hermes_cli.config import get_env_value, save_env_value
+    from zeloo_cli.cli_output import print_header, print_info, print_success, print_warning, prompt, prompt_yes_no
+    from zeloo_cli.config import get_env_value, save_env_value
     print_header("Raft")
     existing_profile = get_env_value("RAFT_PROFILE")
     if existing_profile:
@@ -536,7 +536,7 @@ def interactive_setup() -> None:
         if not prompt_yes_no("Reconfigure Raft?", False):
             print_info(f"Keeping RAFT_PROFILE={existing_profile}.")
             return
-    for line in ("Connect Hermes to Raft as an external agent.", "Create the External Agent in Raft first, then run:",
+    for line in ("Connect Zeloo to Raft as an external agent.", "Create the External Agent in Raft first, then run:",
                  "  raft agent login --server <server-url> --agent <agent-id> --profile-slug <slug>"):
         print_info(line)
     print()
@@ -547,11 +547,11 @@ def interactive_setup() -> None:
     save_env_value("RAFT_PROFILE", profile.strip())
     print()
     print_success("Raft configuration saved")
-    print_info("Restart the gateway for changes to take effect: hermes gateway restart")
+    print_info("Restart the gateway for changes to take effect: Zeloo gateway restart")
 
 
 def register(ctx) -> None:
-    """Plugin entry point — called by the Hermes plugin system."""
+    """Plugin entry point — called by the Zeloo plugin system."""
     ctx.register_platform(
         name="raft",
         label="Raft",

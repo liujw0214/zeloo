@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from hermes_time import now as _hermes_now
+from zeloo_time import now as _zeloo_now
 from typing import Optional
 
 # Log-record parity with the origin module.
@@ -342,7 +342,7 @@ def _block_and_pause_job(
     except Exception:
         logger.exception("Job '%s': failed to auto-pause unrunnable job", job_id)
 
-    now_iso = _hermes_now().strftime("%Y-%m-%d %H:%M:%S")
+    now_iso = _zeloo_now().strftime("%Y-%m-%d %H:%M:%S")
     doc = (
         f"# Cron Job: {job_name}\n\n"
         f"**Job ID:** {job_id}\n"

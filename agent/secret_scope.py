@@ -63,16 +63,16 @@ def current_secret_scope() -> Optional[Mapping[str, str]]:
 # fail-closed path would wrongly crash). Keep this tight — when in doubt a
 # value is a profile secret. Membership is exact name OR prefix.
 _GLOBAL_ENV_EXACT = frozenset({
-    # Hermes runtime / deployment
-    "HERMES_HOME", "HERMES_PROFILE", "HERMES_GATEWAY_LOCK_DIR",
-    "HERMES_MAX_ITERATIONS", "HERMES_API_TIMEOUT",
-    "HERMES_REDACT_SECRETS", "HERMES_NOUS_TIMEOUT_SECONDS",
-    "_HERMES_GATEWAY",
+    # Zeloo runtime / deployment
+    "ZELOO_HOME", "ZELOO_PROFILE", "ZELOO_GATEWAY_LOCK_DIR",
+    "ZELOO_MAX_ITERATIONS", "ZELOO_API_TIMEOUT",
+    "ZELOO_REDACT_SECRETS", "ZELOO_NOUS_TIMEOUT_SECONDS",
+    "_ZELOO_GATEWAY",
     # OS / interpreter
     "PATH", "HOME", "USER", "LANG", "LC_ALL", "TZ", "PWD", "SHELL", "TMPDIR",
     "VIRTUAL_ENV", "PYTHONPATH", "SSL_CERT_FILE",
     # Kanban paths (per-board, not per-profile-secret)
-    "HERMES_KANBAN_DB", "HERMES_KANBAN_WORKSPACES_ROOT", "HERMES_KANBAN_BOARD",
+    "ZELOO_KANBAN_DB", "ZELOO_KANBAN_WORKSPACES_ROOT", "ZELOO_KANBAN_BOARD",
     # API-server LISTENER settings — deployment config (compose/systemd env),
     # which the scoped runner reload must keep seeing or containers silently
     # lose the api_server platform. API_SERVER_KEY is a credential: NOT here.
@@ -91,8 +91,8 @@ _GLOBAL_ENV_EXACT = frozenset({
     "GATEWAY_RELAY_WAKE_URL", "GATEWAY_RELAY_DISPLAY_NAME",
 })
 _GLOBAL_ENV_PREFIXES = (
-    "HERMES_KANBAN_",
-    "HERMES_TELEGRAM_",   # tuning knobs (batch delays, fallback toggles) — NOT the token
+    "ZELOO_KANBAN_",
+    "ZELOO_TELEGRAM_",   # tuning knobs (batch delays, fallback toggles) — NOT the token
     "TERMINAL_",          # terminal/sandbox backend settings
 )
 
@@ -170,7 +170,7 @@ def load_env_file(env_path: Path) -> Dict[str, str]:
     except (FileNotFoundError, OSError, UnicodeDecodeError):
         return secrets
 
-    from hermes_cli.config import _parse_env_value
+    from zeloo_cli.config import _parse_env_value
 
     for raw in text.splitlines():
         line = raw.strip()
@@ -185,14 +185,14 @@ def load_env_file(env_path: Path) -> Dict[str, str]:
     return secrets
 
 
-def build_profile_secret_scope(hermes_home: Path) -> Dict[str, str]:
+def build_profile_secret_scope(zeloo_home: Path) -> Dict[str, str]:
     """Build a profile's secret mapping from ``<home>/.env`` plus its external
     secret sources. Global vars are NOT copied in — ``get_secret`` reads those
     from ``os.environ`` — so the scope holds only profile secrets."""
-    secrets = load_env_file(Path(hermes_home) / ".env")
+    secrets = load_env_file(Path(zeloo_home) / ".env")
     try:
-        from hermes_cli.env_loader import get_secret_source_values
-        external_secrets = get_secret_source_values(Path(hermes_home))
+        from zeloo_cli.env_loader import get_secret_source_values
+        external_secrets = get_secret_source_values(Path(zeloo_home))
     except Exception:
         external_secrets = {}
     secrets.update((k, v) for k, v in external_secrets.items() if not _is_global_env(k))

@@ -102,7 +102,7 @@ class TestCodexBuildKwargs:
         assert kw["temperature"] == 0.4
 
     def test_900k_context_variant_suffix_stripped_on_wire(self, transport):
-        """``-900k`` large-context picker variants are Hermes-side aliases —
+        """``-900k`` large-context picker variants are Zeloo-side aliases —
         the Codex backend only knows the base slug, so build_kwargs must
         strip the suffix from the wire model id."""
         messages = [{"role": "user", "content": "Hi"}]
@@ -177,7 +177,7 @@ class TestCodexBuildKwargs:
         # thread is_github_responses through to the input converter so the
         # id never reaches the request.
         messages = [
-            {"role": "system", "content": "You are Hermes."},
+            {"role": "system", "content": "You are Zeloo."},
             {
                 "role": "assistant",
                 "content": "pong",
@@ -207,7 +207,7 @@ class TestCodexBuildKwargs:
 
     def test_non_github_responses_keeps_message_item_id_end_to_end(self, transport):
         messages = [
-            {"role": "system", "content": "You are Hermes."},
+            {"role": "system", "content": "You are Zeloo."},
             {
                 "role": "assistant",
                 "content": "pong",
@@ -835,10 +835,10 @@ class TestCodexBuildKwargs:
         names = [t.get("name") for t in kw.get("tools", []) if t.get("type") == "function"]
         assert "read_file" in names
         assert "web_search" not in names
-        assert "hermes_web_search" not in names
+        assert "zeloo_web_search" not in names
 
     def test_xai_renames_client_web_search_when_firecrawl_configured(self, transport, monkeypatch):
-        """Configured Firecrawl (or any non-xai backend) must keep Hermes
+        """Configured Firecrawl (or any non-xai backend) must keep Zeloo
         dispatch — rename the wire tool so Grok cannot hijack ``web_search``.
         """
         import agent.transports.codex as codex_mod
@@ -863,11 +863,11 @@ class TestCodexBuildKwargs:
         assert not any(t.get("type") == "web_search" for t in tools), tools
         names = [t.get("name") for t in tools if t.get("type") == "function"]
         assert "read_file" in names
-        assert "hermes_web_search" in names
+        assert "zeloo_web_search" in names
         assert "web_search" not in names
 
     def test_xai_normalize_maps_client_web_search_alias_back(self, transport, monkeypatch):
-        """Alias used on the wire must become ``web_search`` for Hermes dispatch."""
+        """Alias used on the wire must become ``web_search`` for Zeloo dispatch."""
         import agent.transports.codex as codex_mod
 
         msg = SimpleNamespace(
@@ -880,7 +880,7 @@ class TestCodexBuildKwargs:
                     response_item_id="fc_1",
                     function=SimpleNamespace(
                         name=codex_mod._XAI_CLIENT_WEB_SEARCH_ALIAS,
-                        arguments='{"query":"hermes"}',
+                        arguments='{"query":"Zeloo"}',
                     ),
                 )
             ],
@@ -905,7 +905,7 @@ class TestCodexBuildKwargs:
         already-requested client ``web_search`` — NOT an additive grant.  A
         turn whose toolset has no ``web_search`` (user never enabled the web
         toolset) must not get Grok server-side search force-injected, which
-        would silently bypass Hermes's web-provider config and tool-trace
+        would silently bypass Zeloo's web-provider config and tool-trace
         plumbing for every xai-oauth turn.
         """
         messages = [{"role": "user", "content": "Read this file."}]
@@ -1002,8 +1002,8 @@ class TestOpencodeReservedToolAliases:
             base_url="https://opencode.ai/zen/go/v1",
         )
         names = self._names(kw)
-        assert "hermes_search_files" in names
-        assert "hermes_web_search" in names
+        assert "zeloo_search_files" in names
+        assert "zeloo_web_search" in names
         assert "search_files" not in names
         assert "web_search" not in names
         assert "read_file" in names  # non-reserved untouched
@@ -1018,7 +1018,7 @@ class TestOpencodeReservedToolAliases:
             base_url="https://opencode.ai/zen/go/v1",
         )
         names = self._names(kw)
-        assert "hermes_search_files" in names
+        assert "zeloo_search_files" in names
         assert "search_files" not in names
 
     def test_opencode_host_match_without_family_provider(self, transport):
@@ -1031,8 +1031,8 @@ class TestOpencodeReservedToolAliases:
             base_url="https://opencode.ai/zen/go/v1",
         )
         names = self._names(kw)
-        assert "hermes_search_files" in names
-        assert "hermes_web_search" in names
+        assert "zeloo_search_files" in names
+        assert "zeloo_web_search" in names
 
     def test_non_opencode_backend_keeps_original_names(self, transport):
         kw = transport.build_kwargs(
@@ -1045,7 +1045,7 @@ class TestOpencodeReservedToolAliases:
         names = self._names(kw)
         assert "search_files" in names
         assert "web_search" in names
-        assert "hermes_search_files" not in names
+        assert "zeloo_search_files" not in names
 
     def test_normalize_maps_reserved_aliases_back(self, transport, monkeypatch):
         msg = SimpleNamespace(
@@ -1055,15 +1055,15 @@ class TestOpencodeReservedToolAliases:
                 SimpleNamespace(
                     id="call_1", call_id="call_1", response_item_id="fc_1",
                     function=SimpleNamespace(
-                        name="hermes_search_files",
+                        name="zeloo_search_files",
                         arguments='{"pattern":"README"}',
                     ),
                 ),
                 SimpleNamespace(
                     id="call_2", call_id="call_2", response_item_id="fc_2",
                     function=SimpleNamespace(
-                        name="hermes_web_search",
-                        arguments='{"query":"hermes"}',
+                        name="zeloo_web_search",
+                        arguments='{"query":"Zeloo"}',
                     ),
                 ),
             ],
@@ -1117,7 +1117,7 @@ class TestXaiReservedToolSearchAlias:
             is_xai_responses=True,
         )
         names = self._names(kw)
-        assert "hermes_tool_search" in names
+        assert "zeloo_tool_search" in names
         assert "tool_search" not in names
         # Only ``tool_search`` is reserved — the sibling bridge tools and
         # ordinary tools go out untouched.
@@ -1134,7 +1134,7 @@ class TestXaiReservedToolSearchAlias:
         )
         names = self._names(kw)
         assert "tool_search" in names
-        assert "hermes_tool_search" not in names
+        assert "zeloo_tool_search" not in names
 
     def test_alias_composes_with_native_web_search_swap(self, transport, monkeypatch):
         """The bridge alias must survive the xAI web_search branch (#48108)."""
@@ -1155,7 +1155,7 @@ class TestXaiReservedToolSearchAlias:
         )
         assert any(t.get("type") == "web_search" for t in kw.get("tools", []))
         names = self._names(kw)
-        assert "hermes_tool_search" in names
+        assert "zeloo_tool_search" in names
         assert "tool_search" not in names
 
     def test_normalize_maps_tool_search_alias_back(self, transport, monkeypatch):
@@ -1166,7 +1166,7 @@ class TestXaiReservedToolSearchAlias:
                 SimpleNamespace(
                     id="call_1", call_id="call_1", response_item_id="fc_1",
                     function=SimpleNamespace(
-                        name="hermes_tool_search",
+                        name="zeloo_tool_search",
                         arguments='{"query":"create github issue"}',
                     ),
                 ),
@@ -1187,7 +1187,7 @@ class TestXaiReservedToolSearchAlias:
             tools=list(self._TOOLS),
             is_xai_responses=True,
         )
-        assert transport._last_wire_aliases == {"hermes_tool_search": "tool_search"}
+        assert transport._last_wire_aliases == {"zeloo_tool_search": "tool_search"}
         normalized = transport.normalize_response(response)
         assert [tc.name for tc in normalized.tool_calls] == ["tool_search"]
 
@@ -1214,9 +1214,9 @@ class TestXaiReservedToolSearchAlias:
 
     def test_no_alias_emitted_means_no_reverse_rewrite(self, transport, monkeypatch):
         """Provenance contract (#95003 review): a request that emitted no
-        aliases must not have a real ``hermes_tool_search`` tool rewritten."""
+        aliases must not have a real ``zeloo_tool_search`` tool rewritten."""
         real_tool = {"type": "function", "function": {
-            "name": "hermes_tool_search", "description": "A real MCP tool.",
+            "name": "zeloo_tool_search", "description": "A real MCP tool.",
             "parameters": {"type": "object", "properties": {}}}}
         transport.build_kwargs(
             model="grok-4.6",
@@ -1226,16 +1226,16 @@ class TestXaiReservedToolSearchAlias:
         )
         assert transport._last_wire_aliases == {}
         normalized = self._normalize_named_call(
-            transport, monkeypatch, "hermes_tool_search"
+            transport, monkeypatch, "zeloo_tool_search"
         )
-        assert [tc.name for tc in normalized.tool_calls] == ["hermes_tool_search"]
+        assert [tc.name for tc in normalized.tool_calls] == ["zeloo_tool_search"]
 
     def test_alias_collision_takes_suffix_no_duplicates(self, transport, monkeypatch):
-        """A real tool already named ``hermes_tool_search`` keeps its wire
+        """A real tool already named ``zeloo_tool_search`` keeps its wire
         name; the bridge is suffixed and both round-trip independently."""
         tools = [
             {"type": "function", "function": {
-                "name": "hermes_tool_search", "description": "Real tool.",
+                "name": "zeloo_tool_search", "description": "Real tool.",
                 "parameters": {"type": "object", "properties": {}}}},
             {"type": "function", "function": {
                 "name": "tool_search", "description": "Bridge.",
@@ -1248,25 +1248,25 @@ class TestXaiReservedToolSearchAlias:
             is_xai_responses=True,
         )
         names = self._names(kw)
-        assert names == ["hermes_tool_search", "hermes_tool_search_2"]
+        assert names == ["zeloo_tool_search", "zeloo_tool_search_2"]
         assert len(names) == len(set(names))
-        assert transport._last_wire_aliases == {"hermes_tool_search_2": "tool_search"}
+        assert transport._last_wire_aliases == {"zeloo_tool_search_2": "tool_search"}
         # Bridge alias maps back; the real tool's name is untouched.
         normalized = self._normalize_named_call(
-            transport, monkeypatch, "hermes_tool_search_2"
+            transport, monkeypatch, "zeloo_tool_search_2"
         )
         assert [tc.name for tc in normalized.tool_calls] == ["tool_search"]
         normalized2 = self._normalize_named_call(
-            transport, monkeypatch, "hermes_tool_search"
+            transport, monkeypatch, "zeloo_tool_search"
         )
-        assert [tc.name for tc in normalized2.tool_calls] == ["hermes_tool_search"]
+        assert [tc.name for tc in normalized2.tool_calls] == ["zeloo_tool_search"]
 
     def test_legacy_fallback_without_provenance(self, transport, monkeypatch):
         """Normalize-only call sites (no build_kwargs on this instance) keep
         the historical unconditional reverse mapping."""
         assert transport._last_wire_aliases is None
         normalized = self._normalize_named_call(
-            transport, monkeypatch, "hermes_tool_search"
+            transport, monkeypatch, "zeloo_tool_search"
         )
         assert [tc.name for tc in normalized.tool_calls] == ["tool_search"]
 
@@ -1487,8 +1487,8 @@ class TestCodexTransportXaiReasoningEffort:
         assert kw["reasoning"]["effort"] == "xhigh"
 
     @pytest.mark.parametrize("effort", ["max", "ultra"])
-    def test_grok_46_clamps_hermes_aliases_to_model_ceiling(self, transport, effort):
-        """Hermes ladder aliases mean "this model's ceiling" — on grok-4.6
+    def test_grok_46_clamps_zeloo_aliases_to_model_ceiling(self, transport, effort):
+        """Zeloo ladder aliases mean "this model's ceiling" — on grok-4.6
         that is xhigh, not one rung below it (#87279)."""
         kw = transport.build_kwargs(
             model="x-ai/grok-4.6-latest",

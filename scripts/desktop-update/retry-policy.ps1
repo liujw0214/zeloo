@@ -1,4 +1,4 @@
-function Test-HermesUpdateShouldRetry {
+function Test-ZELOOUpdateShouldRetry {
     param(
         [int]$ExitCode,
         [string]$InstallRoot

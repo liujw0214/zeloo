@@ -15,7 +15,7 @@ import time
 
 import pytest
 
-from hermes_cli import worktree_ops
+from zeloo_cli import worktree_ops
 
 
 def _run(args, cwd):
@@ -94,11 +94,11 @@ class TestFetchRemoteBranchHeads:
     def test_lists_pushed_branches(self, repo_with_bare_origin):
         import cli
         repo = repo_with_bare_origin
-        _mk_worktree(repo, "hermes-a", "hermes/hermes-a", push=True)
+        _mk_worktree(repo, "Zeloo-a", "Zeloo/Zeloo-a", push=True)
         heads = worktree_ops._fetch_remote_branch_heads(str(repo))
         assert heads is not None
         assert "main" in heads
-        assert "hermes/hermes-a" in heads
+        assert "Zeloo/Zeloo-a" in heads
 
     def test_unreachable_remote_returns_none(self, tmp_path):
         import cli
@@ -113,7 +113,7 @@ class TestBranchPushedExact:
     def test_exact_match_true(self, repo_with_bare_origin):
         import cli
         repo = repo_with_bare_origin
-        wt = _mk_worktree(repo, "hermes-x", "hermes/hermes-x", push=True)
+        wt = _mk_worktree(repo, "Zeloo-x", "Zeloo/Zeloo-x", push=True)
         heads = worktree_ops._fetch_remote_branch_heads(str(repo))
         assert worktree_ops._worktree_branch_pushed_exact(str(wt), heads) is True
 
@@ -121,7 +121,7 @@ class TestBranchPushedExact:
         import cli
         repo = repo_with_bare_origin
         wt = _mk_worktree(
-            repo, "hermes-y", "hermes/hermes-y",
+            repo, "Zeloo-y", "Zeloo/Zeloo-y",
             push=True, extra_commit_after_push=True,
         )
         heads = worktree_ops._fetch_remote_branch_heads(str(repo))
@@ -130,14 +130,14 @@ class TestBranchPushedExact:
     def test_never_pushed_false(self, repo_with_bare_origin):
         import cli
         repo = repo_with_bare_origin
-        wt = _mk_worktree(repo, "hermes-z", "hermes/hermes-z", push=False)
+        wt = _mk_worktree(repo, "Zeloo-z", "Zeloo/Zeloo-z", push=False)
         heads = worktree_ops._fetch_remote_branch_heads(str(repo))
         assert worktree_ops._worktree_branch_pushed_exact(str(wt), heads) is False
 
     def test_none_heads_false(self, repo_with_bare_origin):
         import cli
         repo = repo_with_bare_origin
-        wt = _mk_worktree(repo, "hermes-n", "hermes/hermes-n", push=True)
+        wt = _mk_worktree(repo, "Zeloo-n", "Zeloo/Zeloo-n", push=True)
         assert worktree_ops._worktree_branch_pushed_exact(str(wt), None) is False
         assert worktree_ops._worktree_branch_pushed_exact(str(wt), {}) is False
 
@@ -148,21 +148,21 @@ class TestStartupPrunerPushedTier:
     def test_pushed_lane_tree_reaped_branch_kept(self, repo_with_bare_origin):
         import cli
         repo = repo_with_bare_origin
-        wt = _mk_worktree(repo, "hermes-pushed", "hermes/hermes-pushed", push=True)
+        wt = _mk_worktree(repo, "Zeloo-pushed", "Zeloo/Zeloo-pushed", push=True)
 
         cli._prune_stale_worktrees(str(repo))
 
         assert not wt.exists(), (
             "pushed-as-is open-PR lane must be reaped (checkout is redundant)"
         )
-        assert _branch_exists(repo, "hermes/hermes-pushed"), (
+        assert _branch_exists(repo, "Zeloo/Zeloo-pushed"), (
             "branch ref must survive the reap AND the orphaned-branch pass"
         )
 
     def test_unpushed_lane_still_preserved(self, repo_with_bare_origin):
         import cli
         repo = repo_with_bare_origin
-        wt = _mk_worktree(repo, "hermes-unpushed", "hermes/hermes-unp", push=False)
+        wt = _mk_worktree(repo, "Zeloo-unpushed", "Zeloo/Zeloo-unp", push=False)
 
         cli._prune_stale_worktrees(str(repo))
 
@@ -172,7 +172,7 @@ class TestStartupPrunerPushedTier:
         import cli
         repo = repo_with_bare_origin
         wt = _mk_worktree(
-            repo, "hermes-ahead", "hermes/hermes-ahead",
+            repo, "Zeloo-ahead", "Zeloo/Zeloo-ahead",
             push=True, extra_commit_after_push=True,
         )
 
@@ -185,7 +185,7 @@ class TestStartupPrunerPushedTier:
     def test_pushed_but_dirty_preserved(self, repo_with_bare_origin):
         import cli
         repo = repo_with_bare_origin
-        wt = _mk_worktree(repo, "hermes-pdirty", "hermes/hermes-pdirty", push=True)
+        wt = _mk_worktree(repo, "Zeloo-pdirty", "Zeloo/Zeloo-pdirty", push=True)
         (wt / "uncommitted.txt").write_text("in-flight\n")
         _age(wt)
 
@@ -196,7 +196,7 @@ class TestStartupPrunerPushedTier:
     def test_offline_remote_preserves(self, repo_with_bare_origin, tmp_path):
         import cli
         repo = repo_with_bare_origin
-        wt = _mk_worktree(repo, "hermes-off", "hermes/hermes-off", push=True)
+        wt = _mk_worktree(repo, "Zeloo-off", "Zeloo/Zeloo-off", push=True)
         # Sever the remote AFTER pushing: ls-remote now fails -> None ->
         # pushed tier must degrade to preserve.
         _run(["git", "remote", "set-url", "origin", str(tmp_path / "gone.git")], repo)
@@ -211,7 +211,7 @@ class TestAttendedGcPushedTier:
 
     def test_audit_verdict_and_reclaim_keeps_branch(self, repo_with_bare_origin):
         import cli  # noqa: F401  (worktree_gc lazily imports cli)
-        from hermes_cli import worktree_gc
+        from zeloo_cli import worktree_gc
 
         repo = repo_with_bare_origin
         wt = _mk_worktree(repo, "salv-lane", "salv/pushed-lane", push=True)
@@ -228,7 +228,7 @@ class TestAttendedGcPushedTier:
 
     def test_audit_never_pushed_keeps(self, repo_with_bare_origin):
         import cli  # noqa: F401
-        from hermes_cli import worktree_gc
+        from zeloo_cli import worktree_gc
 
         repo = repo_with_bare_origin
         wt = _mk_worktree(repo, "salv-keep", "salv/never-pushed", push=False)
@@ -279,7 +279,7 @@ class TestCronWorktreeMaintenance:
         import cron.scheduler as sched
 
         repo = repo_with_bare_origin
-        wt = _mk_worktree(repo, "hermes-cronreap", "hermes/hermes-cronreap", push=True)
+        wt = _mk_worktree(repo, "Zeloo-cronreap", "Zeloo/Zeloo-cronreap", push=True)
 
         monkeypatch.setattr(sched, "_last_worktree_maintenance_at", None)
         monkeypatch.setattr(
@@ -293,4 +293,4 @@ class TestCronWorktreeMaintenance:
             time.sleep(0.2)
 
         assert not wt.exists(), "cron-tick maintenance must run the real pruner"
-        assert _branch_exists(repo, "hermes/hermes-cronreap")
+        assert _branch_exists(repo, "Zeloo/Zeloo-cronreap")

@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from hermes_state import SessionDB
+from zeloo_state import SessionDB
 from run_agent import AIAgent
 
 

@@ -13,7 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from acp_adapter.model_catalog import _named_custom_provider_catalogs
-from acp_adapter.server import HermesACPAgent
+from acp_adapter.server import ZELOOACPAgent
 from acp_adapter.session import SessionManager
 from acp.schema import SessionModelState
 
@@ -44,8 +44,8 @@ class TestNamedCustomProviderCatalogs:
                 }
             }
         )
-        with patch("hermes_cli.config.load_config", return_value=cfg), patch(
-            "hermes_cli.model_switch_providers._fetch_picker_live_models",
+        with patch("zeloo_cli.config.load_config", return_value=cfg), patch(
+            "zeloo_cli.model_switch_providers._fetch_picker_live_models",
             return_value=["model-a", "model-b"],
         ):
             catalogs = _named_custom_provider_catalogs()
@@ -69,8 +69,8 @@ class TestNamedCustomProviderCatalogs:
                 }
             }
         )
-        with patch("hermes_cli.config.load_config", return_value=cfg), patch(
-            "hermes_cli.model_switch_providers._fetch_picker_live_models", return_value=None
+        with patch("zeloo_cli.config.load_config", return_value=cfg), patch(
+            "zeloo_cli.model_switch_providers._fetch_picker_live_models", return_value=None
         ):
             assert _named_custom_provider_catalogs() == []
 
@@ -85,8 +85,8 @@ class TestNamedCustomProviderCatalogs:
                 }
             }
         )
-        with patch("hermes_cli.config.load_config", return_value=cfg), patch(
-            "hermes_cli.model_switch_providers._fetch_picker_live_models", return_value=None
+        with patch("zeloo_cli.config.load_config", return_value=cfg), patch(
+            "zeloo_cli.model_switch_providers._fetch_picker_live_models", return_value=None
         ):
             assert _named_custom_provider_catalogs() == []
 
@@ -102,8 +102,8 @@ class TestNamedCustomProviderCatalogs:
                 }
             ]
         )
-        with patch("hermes_cli.config.load_config", return_value=cfg), patch(
-            "hermes_cli.model_switch_providers._fetch_picker_live_models", return_value=None
+        with patch("zeloo_cli.config.load_config", return_value=cfg), patch(
+            "zeloo_cli.model_switch_providers._fetch_picker_live_models", return_value=None
         ):
             catalogs = _named_custom_provider_catalogs()
 
@@ -119,11 +119,11 @@ class TestNamedCustomProviderCatalogs:
                 }
             }
         )
-        with patch("hermes_cli.config.load_config", return_value=cfg), patch(
-            "hermes_cli.models_local.should_use_ollama_native_catalog",
+        with patch("zeloo_cli.config.load_config", return_value=cfg), patch(
+            "zeloo_cli.models_local.should_use_ollama_native_catalog",
             return_value=True,
         ), patch(
-            "hermes_cli.model_switch_providers._fetch_picker_live_models",
+            "zeloo_cli.model_switch_providers._fetch_picker_live_models",
             return_value=["qwen3:1.7b"],
         ) as fetch:
             catalogs = _named_custom_provider_catalogs()
@@ -147,11 +147,11 @@ class TestNamedCustomProviderCatalogs:
                 }
             ]
         )
-        with patch("hermes_cli.config.load_config", return_value=cfg), patch(
-            "hermes_cli.models_local.should_use_ollama_native_catalog",
+        with patch("zeloo_cli.config.load_config", return_value=cfg), patch(
+            "zeloo_cli.models_local.should_use_ollama_native_catalog",
             return_value=True,
         ), patch(
-            "hermes_cli.model_switch_providers._fetch_picker_live_models",
+            "zeloo_cli.model_switch_providers._fetch_picker_live_models",
             return_value=["qwen3:1.7b"],
         ) as fetch:
             catalogs = _named_custom_provider_catalogs()
@@ -169,13 +169,13 @@ class TestNamedCustomProviderCatalogs:
                 }
             }
         )
-        from hermes_cli.model_switch_providers import _NativePickerModelList
+        from zeloo_cli.model_switch_providers import _NativePickerModelList
 
-        with patch("hermes_cli.config.load_config", return_value=cfg), patch(
-            "hermes_cli.models_local.should_use_ollama_native_catalog",
+        with patch("zeloo_cli.config.load_config", return_value=cfg), patch(
+            "zeloo_cli.models_local.should_use_ollama_native_catalog",
             return_value=True,
         ), patch(
-            "hermes_cli.model_switch_providers._fetch_picker_live_models",
+            "zeloo_cli.model_switch_providers._fetch_picker_live_models",
             return_value=_NativePickerModelList(),
         ):
             assert _named_custom_provider_catalogs() == [
@@ -191,7 +191,7 @@ class TestModelStateIncludesNamedProviders:
                 model="saved:model", provider="ollama"
             )
         )
-        acp_agent = HermesACPAgent(session_manager=manager)
+        acp_agent = ZELOOACPAgent(session_manager=manager)
 
         with patch(
             "acp_adapter.model_catalog._named_custom_provider_catalogs",
@@ -213,7 +213,7 @@ class TestModelStateIncludesNamedProviders:
                 model="gpt-5.4", provider="openai-codex"
             )
         )
-        acp_agent = HermesACPAgent(session_manager=manager)
+        acp_agent = ZELOOACPAgent(session_manager=manager)
 
         with patch(
             "acp_adapter.model_catalog._named_custom_provider_catalogs",
@@ -241,7 +241,7 @@ class TestModelStateIncludesNamedProviders:
 
     def test_selector_choice_id_round_trips_through_parse_model_input(self):
         """The encoded choice id must resolve back to the named provider."""
-        from hermes_cli.models import parse_model_input
+        from zeloo_cli.models import parse_model_input
 
         choice_id = "custom:bedrock-mantle:openai.gpt-5.5"
         cfg = {
@@ -252,14 +252,14 @@ class TestModelStateIncludesNamedProviders:
                 }
             }
         }
-        with patch("hermes_cli.config.load_config", return_value=cfg):
+        with patch("zeloo_cli.config.load_config", return_value=cfg):
             provider, model = parse_model_input(choice_id, "bedrock")
         assert provider == "custom:bedrock-mantle"
         assert model == "openai.gpt-5.5"
 
     def test_selector_choice_id_round_trips_colon_bearing_custom_identity(self):
         """Configured provider and model IDs may both contain colons."""
-        from hermes_cli.models import parse_model_input
+        from zeloo_cli.models import parse_model_input
 
         cfg = {
             "providers": {
@@ -269,7 +269,7 @@ class TestModelStateIncludesNamedProviders:
                 }
             }
         }
-        with patch("hermes_cli.config.load_config", return_value=cfg):
+        with patch("zeloo_cli.config.load_config", return_value=cfg):
             provider, model = parse_model_input(
                 "custom:local-127.0.0.1:11434:qwen3:1.7b", "custom"
             )

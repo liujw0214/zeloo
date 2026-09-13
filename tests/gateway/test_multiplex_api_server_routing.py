@@ -45,7 +45,7 @@ class TestApiServerProfileResolution:
     def test_unserved_prefix_is_rejected(self, monkeypatch):
         adapter = _make_adapter(multiplex=True, allowlist=["worker"])
         monkeypatch.setattr(
-            "hermes_cli.profiles.profiles_to_serve",
+            "zeloo_cli.profiles.profiles_to_serve",
             lambda multiplex, profile_allowlist=None: [
                 ("default", "/profiles/default"),
                 ("worker", "/profiles/worker"),
@@ -83,9 +83,9 @@ class TestApiServerModelsUnderProfile:
     def test_resolve_model_name_follows_active_profile(self, monkeypatch):
         """When the request is scoped to a named profile, advertise that name."""
         adapter = _make_adapter(multiplex=True)
-        adapter._model_name = "hermes-agent"
+        adapter._model_name = "Zeloo-agent"
         monkeypatch.setattr(
-            "hermes_cli.profiles.get_active_profile_name",
+            "zeloo_cli.profiles.get_active_profile_name",
             lambda: "coder",
         )
         token_prof = _api_request_profile.set("coder")
@@ -96,11 +96,11 @@ class TestApiServerModelsUnderProfile:
 
 
 class TestApiServerSessionProfileBinding:
-    """HERMES_SESSION_PROFILE must be bound per /p/<profile>/ request.
+    """ZELOO_SESSION_PROFILE must be bound per /p/<profile>/ request.
 
     Regression guard for cross-profile sandbox reuse: before the fix,
     _bind_api_server_session never passed ``profile`` to set_session_vars,
-    so every API-server turn bound HERMES_SESSION_PROFILE="" and the
+    so every API-server turn bound ZELOO_SESSION_PROFILE="" and the
     terminal tool collapsed ALL api_server sessions (default AND org
     profiles) onto the shared "default" container key — letting org-profile
     turns reuse the default profile's sandbox (SSH key / secrets exposure).
@@ -117,7 +117,7 @@ class TestApiServerSessionProfileBinding:
             profile="nm-media",
         )
         try:
-            assert get_session_env("HERMES_SESSION_PROFILE") == "nm-media"
+            assert get_session_env("ZELOO_SESSION_PROFILE") == "nm-media"
         finally:
             clear_session_vars(tokens)
 

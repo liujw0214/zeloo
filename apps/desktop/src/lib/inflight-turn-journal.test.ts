@@ -11,9 +11,9 @@ import {
   resetInFlightTurnJournalStateForTests
 } from '@/lib/inflight-turn-journal'
 
-const STORAGE_KEY = 'hermes.desktop.inflightTurnJournal.v1'
-const STORAGE_PREFIX = 'hermes.desktop.inflightTurnJournal.v2:'
-const MIGRATION_KEY = 'hermes.desktop.inflightTurnJournal.v2.migrated'
+const STORAGE_KEY = 'Zeloo.desktop.inflightTurnJournal.v1'
+const STORAGE_PREFIX = 'Zeloo.desktop.inflightTurnJournal.v2:'
+const MIGRATION_KEY = 'Zeloo.desktop.inflightTurnJournal.v2.migrated'
 
 const sessionStorageKey = (storedSessionId: string) => `${STORAGE_PREFIX}${encodeURIComponent(storedSessionId)}`
 

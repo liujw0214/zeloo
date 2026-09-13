@@ -27,7 +27,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
-from tools.bot_mode_probe import _default_home, _hermes_root
+from tools.bot_mode_probe import _default_home, _zeloo_root
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ DEFAULT_ENVELOPE_TTL_SECONDS = 900  # older envelopes are refused at drain with 
 # Per-attempt turn timeout and attempt ceiling for bot_relay.deliver (tui_gateway/methods_bot_relay.py).
 TURN_ATTEMPT_TIMEOUT_SECONDS = 600
 TURN_MAX_ATTEMPTS = 2  # first attempt + the policy-gated re-run
-# Mirrors RELAY_DELIVER_TIMEOUT_MS in apps/desktop/src/plugins/hermes-bots/relay.ts; both test suites pin it.
+# Mirrors RELAY_DELIVER_TIMEOUT_MS in apps/desktop/src/plugins/Zeloo-bots/relay.ts; both test suites pin it.
 DESKTOP_DELIVER_SETTLEMENT_MARGIN_SECONDS = 180
 DESKTOP_DELIVER_TIMEOUT_SECONDS = (
     TURN_WAIT_SECONDS_FALLBACK + TURN_ATTEMPT_TIMEOUT_SECONDS * TURN_MAX_ATTEMPTS + DESKTOP_DELIVER_SETTLEMENT_MARGIN_SECONDS
@@ -74,7 +74,7 @@ class EnvelopeRefusedError(RuntimeError):
 # ``message_agent`` target grammar in ``tools/bot_mode_dm.py``).
 _HANDLE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
-# One turn in a profile's canonical Bot Chat: ``hermes -p <profile> *BOT_CHAT_TURN_ARGS``.
+# One turn in a profile's canonical Bot Chat: ``Zeloo -p <profile> *BOT_CHAT_TURN_ARGS``.
 # ``-c "Bot Chat"`` must match ``bot_mode_probe.BOT_CHAT_TITLE``.
 BOT_CHAT_TURN_ARGS = ("chat", "--in", "~", "-c", "Bot Chat", "--create-if-missing", "-Q")
 
@@ -107,7 +107,7 @@ def _bot_mode_cfg(key: str, *, loader: str) -> Any:
     """``bot_mode.<key>`` from config, read lazily (tools/ must not import CLI
     config at import time); None when absent or the config is unreadable."""
     try:
-        import hermes_cli.config as cfgmod
+        import zeloo_cli.config as cfgmod
 
         cfg = getattr(cfgmod, loader)() or {}
         return (cfg.get("bot_mode") or {}).get(key)
@@ -122,7 +122,7 @@ def _normalize_roster_row(row: Any) -> Optional[dict]:
     if not isinstance(row, dict):
         return None
     profile = str(row.get("profile") or "").strip()
-    handle = str(row.get("handle") or "").strip().lstrip("@") or ("hermes" if profile == "default" else profile)
+    handle = str(row.get("handle") or "").strip().lstrip("@") or ("Zeloo" if profile == "default" else profile)
     connection_id = str(row.get("connection_id") or "").strip()
     if not profile or not connection_id or not all(_HANDLE_RE.match(v) for v in (handle, profile, connection_id)):
         return None
@@ -316,7 +316,7 @@ def cleanup_bot_relay_artifacts(max_age_hours: float | None = None) -> int:
     only on Desktop drains). ``max_age_hours`` is for ``cleanup_*_cache`` signature parity only."""
     del max_age_hours
     try:
-        base = relay_root(_hermes_root(Path(_default_home())))
+        base = relay_root(_zeloo_root(Path(_default_home())))
         return _sweep_stale(base) if base.is_dir() else 0
     except Exception:
         logger.debug("bot_relay artifact sweep failed", exc_info=True)
@@ -364,24 +364,24 @@ def waiter_command(root: Path | str, envelope: dict) -> str:
     return f"{shlex.quote(sys.executable or 'python3')} -c {shlex.quote(code)}"
 
 
-def _hermes_cli() -> str:
-    """hermes CLI beside this interpreter, then ``shutil.which``, then the bare name
-    (service contexts lack PATH, so a bare "hermes" died with ENOENT).
+def _zeloo_cli() -> str:
+    """Zeloo CLI beside this interpreter, then ``shutil.which``, then the bare name
+    (service contexts lack PATH, so a bare "Zeloo" died with ENOENT).
 
     The deliver RPC runs on the target gateway, whose process is the venv python — its bin/Scripts directory
-    holds the matching ``hermes`` entrypoint. A bare ``"hermes"`` relies on PATH, which is exactly what
+    holds the matching ``Zeloo`` entrypoint. A bare ``"Zeloo"`` relies on PATH, which is exactly what
     service contexts (systemd units, desktop launchers, non-login SSH shells) do not provide, so delivery
     died with ENOENT there (#93590). When no sibling exists (e.g. running from a source tree without an
     installed script), a ``shutil.which`` lookup runs next — it honors whatever PATH the process does have —
     before falling back to the bare name, preserving today's behavior for interactive shells.
     """
-    sibling = Path(sys.executable or "").parent / ("hermes.exe" if sys.platform == "win32" else "hermes")
-    return str(sibling) if sibling.is_file() else shutil.which("hermes") or "hermes"
+    sibling = Path(sys.executable or "").parent / ("Zeloo.exe" if sys.platform == "win32" else "Zeloo")
+    return str(sibling) if sibling.is_file() else shutil.which("Zeloo") or "Zeloo"
 
 
 def local_delivery_command(profile: str, query_file: str) -> list[str]:
     """argv that delivers a DM into ``profile``'s Bot Chat on THIS gateway."""
-    return [_hermes_cli(), "-p", profile, *BOT_CHAT_TURN_ARGS, "--query-file", query_file]
+    return [_zeloo_cli(), "-p", profile, *BOT_CHAT_TURN_ARGS, "--query-file", query_file]
 
 
 class DeliveryAuthor:
@@ -416,7 +416,7 @@ def delivery_turn_author(from_profile: Any, from_handle: Any, from_connection: A
 
 
 def delivery_env(author: Optional[dict]) -> dict[str, str]:
-    """Environment for one delivery turn's ``hermes`` child. The dispatcher's own HERMES_TURN_AUTHOR is
+    """Environment for one delivery turn's ``Zeloo`` child. The dispatcher's own ZELOO_TURN_AUTHOR is
     dropped first so a delivery without an author never inherits the author of the turn that sent it."""
     from agent.turn_author import TURN_AUTHOR_ENV, turn_author_env
 
@@ -428,14 +428,14 @@ def delivery_env(author: Optional[dict]) -> dict[str, str]:
 
 
 # Two deliveries into the SAME profile must never run Bot Chat turns concurrently.
-# Deliveries are separate ``hermes`` subprocesses, so the lock is a per-profile
+# Deliveries are separate ``Zeloo`` subprocesses, so the lock is a per-profile
 # lockfile under ``<root>/bot_relay/locks/`` held with ``fcntl.flock`` for exactly
 # the turn window; the kernel releases it on fd close (incl. process death), so a
 # crashed turn can never wedge the profile.
 
 
 # ── per-profile turn lock (#93091) ─────────────────────────────────────────── Two deliveries into the SAME
-# target profile must never run their Bot Chat turns concurrently: deliveries spawn separate ``hermes``
+# target profile must never run their Bot Chat turns concurrently: deliveries spawn separate ``Zeloo``
 # subprocesses, so an in-memory mutex is useless — the lock is a per-profile lockfile under
 # ``<root>/bot_relay/locks/`` held with ``fcntl.flock`` for exactly the turn execution window. flock is
 # released by the kernel when the holder's fd closes (including process death), so a crashed turn can never

@@ -2,7 +2,7 @@
 
 AI-native cross-session user modeling with multi-pass dialectic reasoning, session summaries, bidirectional peer tools, and persistent conclusions.
 
-> **Honcho docs:** <https://docs.honcho.dev/v3/guides/integrations/hermes>
+> **Honcho docs:** <https://docs.honcho.dev/v3/guides/integrations/Zeloo>
 
 ## Requirements
 
@@ -13,8 +13,8 @@ AI-native cross-session user modeling with multi-pass dialectic reasoning, sessi
 ## Setup
 
 ```bash
-hermes memory setup honcho   # configure Honcho directly (works on a fresh install)
-hermes memory setup          # generic picker, choose Honcho from the list
+Zeloo memory setup honcho   # configure Honcho directly (works on a fresh install)
+Zeloo memory setup          # generic picker, choose Honcho from the list
 ```
 
 For cloud, the wizard asks **OAuth, device code, or API key**. OAuth opens a
@@ -26,13 +26,13 @@ a **Connect** link next to the memory-provider dropdown.
 
 Or manually:
 ```bash
-hermes config set memory.provider honcho
-echo "HONCHO_API_KEY=***" >> ~/.hermes/.env
+Zeloo config set memory.provider honcho
+echo "HONCHO_API_KEY=***" >> ~/.Zeloo/.env
 ```
 
-> `hermes honcho setup` also works, but only **after** Honcho is the active
+> `Zeloo honcho setup` also works, but only **after** Honcho is the active
 > memory provider — the `honcho` subcommand is registered for the active
-> provider only. On a fresh install, use `hermes memory setup honcho`.
+> provider only. On a fresh install, use `Zeloo memory setup honcho`.
 
 ## Architecture Overview
 
@@ -56,9 +56,9 @@ Both layers are joined, then truncated to fit `contextTokens` budget via `_trunc
 
 ### Current-Query Recall (opt-in)
 
-Set `"recallSync": true` in `$HERMES_HOME/honcho.json` (at the root or under
-`hosts.hermes`), or enable **Current-query recall** in the memory settings or
-`hermes honcho setup`. An explicit host-level `false` overrides root-level `true`.
+Set `"recallSync": true` in `$ZELOO_HOME/honcho.json` (at the root or under
+`hosts.Zeloo`), or enable **Current-query recall** in the memory settings or
+`Zeloo honcho setup`. An explicit host-level `false` overrides root-level `true`.
 
 In `context` and `hybrid` modes, due base and dialectic retrievals use the current
 user request before inference. The whole wait, including session initialization,
@@ -95,7 +95,7 @@ generic dialectic prewarm is skipped so it cannot shadow the first user
 message.
 
 **Off by default** — the rewrite adds one auxiliary-model call per dialectic
-cycle (not per pass). Select a fast, inexpensive model under `hermes model`
+cycle (not per pass). Select a fast, inexpensive model under `Zeloo model`
 -> auxiliary models -> **Memory query rewrite**; its request timeout is
 `auxiliary.memory_query_rewrite.timeout` in config.yaml (default 8s). The
 task and module (`plugins/memory/query_rewrite.py`) are provider-agnostic —
@@ -170,11 +170,11 @@ Config is read from the first file that exists:
 
 | Priority | Path | Scope |
 |----------|------|-------|
-| 1 | `$HERMES_HOME/honcho.json` | Profile-local (isolated Hermes instances) |
-| 2 | `~/.hermes/honcho.json` | Default profile (shared host blocks) |
+| 1 | `$ZELOO_HOME/honcho.json` | Profile-local (isolated Zeloo instances) |
+| 2 | `~/.Zeloo/honcho.json` | Default profile (shared host blocks) |
 | 3 | `~/.honcho/config.json` | Global (cross-app interop) |
 
-Host key is derived from the active Hermes profile: `hermes` (default) or `hermes_<profile>`.
+Host key is derived from the active Zeloo profile: `Zeloo` (default) or `ZELOO_<profile>`.
 
 For every key, resolution order is: **host block > root > env var > default**.
 
@@ -203,7 +203,7 @@ In gateway deployments (Telegram, Discord, Slack, etc.) each user arrives with a
 | `userPeerAliases` | object | `{}` | Map of runtime IDs to peer IDs (`{"7654321": "alice"}`). Many-to-one is the intended pattern — alias all your runtime IDs to one peer name. One-to-many is not supported; one runtime ID resolves to exactly one peer |
 | `runtimePeerPrefix` | string | `""` | Prepended to unknown runtime IDs to namespace them (e.g. `"telegram_"` → `telegram_7654321`). Used only when no alias matches. Prevents collisions between platforms whose runtime IDs share the same shape |
 
-> **Deprecated:** `pinPeerName` is a legacy alias for `pinUserPeer`, still read for back-compat (`pinUserPeer` wins where both are set). `hermes honcho setup` migrates it onto `pinUserPeer` on touch and never writes it.
+> **Deprecated:** `pinPeerName` is a legacy alias for `pinUserPeer`, still read for back-compat (`pinUserPeer` wins where both are set). `Zeloo honcho setup` migrates it onto `pinUserPeer` on touch and never writes it.
 
 **Resolver ladder** (first match wins):
 
@@ -221,9 +221,9 @@ In gateway deployments (Telegram, Discord, Slack, etc.) each user arrives with a
 
 **Host vs root semantics.** All three keys are accepted at both root and `hosts.<host>` levels. Host-level wins. For maps and prefixes, host-level *replaces* the root value as a whole (not merge), so a host can intentionally own its identity universe or wipe it with `userPeerAliases: {}` / `runtimePeerPrefix: ""`.
 
-**Setup — gateway identity tree.** `hermes honcho setup` only asks about identity mapping when it detects a connected gateway platform (it inspects the gateway config; off-gateway the step is skipped because these keys do nothing without a runtime user ID). When it runs, it asks *who talks to this gateway?* and derives the keys:
+**Setup — gateway identity tree.** `Zeloo honcho setup` only asks about identity mapping when it detects a connected gateway platform (it inspects the gateway config; off-gateway the step is skipped because these keys do nothing without a runtime user ID). When it runs, it asks *who talks to this gateway?* and derives the keys:
 
-- **just me** → `pinUserPeer: true`. Every non-agent gateway user collapses to `peerName`; the pin overrides all aliases, so pick this only when no user-side identity needs its own peer. Personal use where you connect Hermes to your own Telegram/Discord/etc. If separate agents reach the gateway and each needs a distinct peer, do **not** pin — leave `pinUserPeer: false` and map them via `userPeerAliases` (the `[e]` editor).
+- **just me** → `pinUserPeer: true`. Every non-agent gateway user collapses to `peerName`; the pin overrides all aliases, so pick this only when no user-side identity needs its own peer. Personal use where you connect Zeloo to your own Telegram/Discord/etc. If separate agents reach the gateway and each needs a distinct peer, do **not** pin — leave `pinUserPeer: false` and map them via `userPeerAliases` (the `[e]` editor).
 - **me + other people, pooled** → `pinUserPeer: false` + `userPeerAliases` mapping your runtime IDs to `peerName`. You stay on the shared history; everyone else gets their own peer.
 - **me + other people / only other people** → `pinUserPeer: false`, optional `runtimePeerPrefix`. Each runtime user → own peer. For bots serving many humans.
 
@@ -265,42 +265,42 @@ The Honcho session name determines which conversation bucket memory lands in. Re
 | 1 | Manual map (`sessions` config) | `"myproject-main"` |
 | 2 | `/title` command (mid-session rename) | `"refactor-auth"` |
 | 3 | Gateway session key (Telegram, Discord, etc.) | `"agent-main-telegram-dm-8439114563"` |
-| 4 | `per-session` strategy | Hermes session ID (`20260415_a3f2b1`) |
-| 5 | `per-repo` strategy | Git root directory name (`hermes-agent`) |
+| 4 | `per-session` strategy | Zeloo session ID (`20260415_a3f2b1`) |
+| 5 | `per-repo` strategy | Git root directory name (`Zeloo-agent`) |
 | 6 | `per-directory` strategy | Current directory basename (`src`) |
-| 7 | `global` strategy | Workspace name (`hermes`) |
+| 7 | `global` strategy | Workspace name (`Zeloo`) |
 
 Gateway platforms always resolve via priority 3 (per-chat isolation) regardless of `sessionStrategy`. The strategy setting only affects CLI sessions.
 
-If `sessionPeerPrefix` is `true`, the peer name is prepended: `alice-hermes-agent`.
+If `sessionPeerPrefix` is `true`, the peer name is prepended: `alice-Zeloo-agent`.
 
 #### Bot DMs (`a2aSessions`)
 
-In bot mode another Hermes profile can DM this agent. The relay marks that turn with author `bot:<profile>`. A gateway platform marks a bot sender with its platform user id and a bot flag. Either way the turn never reaches the human's session. With `a2aSessions: true` (default) the turn is written into `<session>:a2a:<this agent's aiPeer>:<sanitized sender id>-<8-char digest>`: the sender's message under the sender's peer, the reply under this agent's `aiPeer`. The `aiPeer` segment keeps two profiles that share a `workspace` and a session key from writing one sender's DMs into one session. A `bot:` sender is identified by its full id, `bot:<profile>` for a profile on this machine or `bot:<connection>/<profile>` for one relayed through a Desktop connection. Its peer is the `userPeerAliases` entry for that full id if one exists, else the id after `bot:` sanitized, with no `runtimePeerPrefix`. When sanitizing changed the id, or the result equals `peerName` or an alias target, a digest suffix is added the same way `runtimePeerPrefix` users get one, so a bot never lands on the operator's peer and two connections' `coder` stay apart. A platform bot resolves like any other runtime user: alias, then prefix. `pinUserPeer` never collapses a bot onto `peerName`. A bot whose peer would equal this agent's `aiPeer` is skipped, and so is every bot turn when `a2aSessions: false`. During a bot-authored turn `honcho_conclude` and `honcho_profile` refuse writes, because conclusions and cards describe the human. Recall still reads the human's session only.
+In bot mode another Zeloo profile can DM this agent. The relay marks that turn with author `bot:<profile>`. A gateway platform marks a bot sender with its platform user id and a bot flag. Either way the turn never reaches the human's session. With `a2aSessions: true` (default) the turn is written into `<session>:a2a:<this agent's aiPeer>:<sanitized sender id>-<8-char digest>`: the sender's message under the sender's peer, the reply under this agent's `aiPeer`. The `aiPeer` segment keeps two profiles that share a `workspace` and a session key from writing one sender's DMs into one session. A `bot:` sender is identified by its full id, `bot:<profile>` for a profile on this machine or `bot:<connection>/<profile>` for one relayed through a Desktop connection. Its peer is the `userPeerAliases` entry for that full id if one exists, else the id after `bot:` sanitized, with no `runtimePeerPrefix`. When sanitizing changed the id, or the result equals `peerName` or an alias target, a digest suffix is added the same way `runtimePeerPrefix` users get one, so a bot never lands on the operator's peer and two connections' `coder` stay apart. A platform bot resolves like any other runtime user: alias, then prefix. `pinUserPeer` never collapses a bot onto `peerName`. A bot whose peer would equal this agent's `aiPeer` is skipped, and so is every bot turn when `a2aSessions: false`. During a bot-authored turn `honcho_conclude` and `honcho_profile` refuse writes, because conclusions and cards describe the human. Recall still reads the human's session only.
 
 #### What each strategy produces
 
-- **`per-directory`** — basename of `$PWD`. Opening hermes in `~/code/myapp` and `~/code/other` gives two separate sessions. Same directory = same session across runs.
+- **`per-directory`** — basename of `$PWD`. Opening Zeloo in `~/code/myapp` and `~/code/other` gives two separate sessions. Same directory = same session across runs.
 - **`per-repo`** — git root directory name. All subdirectories within a repo share one session. Falls back to `per-directory` if not inside a git repo.
-- **`per-session`** — Hermes session ID (timestamp + hex). Every `hermes` invocation starts a fresh Honcho session. Falls back to `per-directory` if no session ID is available.
+- **`per-session`** — Zeloo session ID (timestamp + hex). Every `Zeloo` invocation starts a fresh Honcho session. Falls back to `per-directory` if no session ID is available.
 - **`global`** — workspace name. One session for everything. Memory accumulates across all directories and runs.
 
 ### Multi-Profile Pattern
 
-Multiple Hermes profiles can share one workspace while maintaining separate AI identities. Config resolution is **host block > root > env var > default** — host blocks inherit from root, so shared settings only need to be declared once:
+Multiple Zeloo profiles can share one workspace while maintaining separate AI identities. Config resolution is **host block > root > env var > default** — host blocks inherit from root, so shared settings only need to be declared once:
 
 ```json
 {
   "apiKey": "***",
-  "workspace": "hermes",
+  "workspace": "Zeloo",
   "peerName": "yourname",
   "hosts": {
-    "hermes": {
-      "aiPeer": "hermes",
+    "Zeloo": {
+      "aiPeer": "Zeloo",
       "recallMode": "hybrid",
       "sessionStrategy": "per-directory"
     },
-    "hermes_coder": {
+    "zeloo_coder": {
       "aiPeer": "coder",
       "recallMode": "tools",
       "sessionStrategy": "per-repo"
@@ -309,9 +309,9 @@ Multiple Hermes profiles can share one workspace while maintaining separate AI i
 }
 ```
 
-Both profiles see the same user (`yourname`) in the same shared environment (`hermes`), but each AI peer builds its own observations, conclusions, and behavior patterns. The coder's memory stays code-oriented; the main agent's stays broad.
+Both profiles see the same user (`yourname`) in the same shared environment (`Zeloo`), but each AI peer builds its own observations, conclusions, and behavior patterns. The coder's memory stays code-oriented; the main agent's stays broad.
 
-Host key is derived from the active Hermes profile: `hermes` (default) or `hermes_<profile>` (e.g. `hermes -p coder` -> host key `hermes_coder`). Older `hermes.<profile>` host blocks are still read for compatibility and are migrated when the CLI writes profile-scoped Honcho config.
+Host key is derived from the active Zeloo profile: `Zeloo` (default) or `ZELOO_<profile>` (e.g. `Zeloo -p coder` -> host key `zeloo_coder`). Older `Zeloo.<profile>` host blocks are still read for compatibility and are migrated when the CLI writes profile-scoped Honcho config.
 
 ### Dialectic & Reasoning
 
@@ -380,44 +380,44 @@ Presets:
 | `HONCHO_API_KEY` | `apiKey` |
 | `HONCHO_BASE_URL` | `baseUrl` |
 | `HONCHO_ENVIRONMENT` | `environment` |
-| `HERMES_HONCHO_HOST` | Host key override |
+| `ZELOO_HONCHO_HOST` | Host key override |
 | `HONCHO_OAUTH_DASHBOARD` | OAuth authorize origin (default: cloud dashboard; local-dev `localhost:3000`) |
 | `HONCHO_OAUTH_AUTHORIZE_URL` | Full authorize URL (overrides the dashboard origin) |
 | `HONCHO_OAUTH_TOKEN_URL` | Token endpoint (default: cloud API; local-dev `localhost:8000`) |
 | `HONCHO_OAUTH_DEVICE_AUTH_URL` | Device-authorization endpoint (default: derived from the token URL) |
-| `HONCHO_OAUTH_CLIENT_ID` | OAuth client (default `hermes-agent`) |
+| `HONCHO_OAUTH_CLIENT_ID` | OAuth client (default `Zeloo-agent`) |
 | `HONCHO_OAUTH_SCOPE` | Requested scope (default `write`) |
 
 ## CLI Commands
 
 | Command | Description |
 |---------|-------------|
-| `hermes memory setup honcho` | Configure Honcho directly — works on a fresh install |
-| `hermes honcho setup` | Interactive setup wizard (only registered once Honcho is the active provider; redirects to `hermes memory setup`) |
-| `hermes honcho status` | Show resolved config for active profile |
-| `hermes honcho enable` / `disable` | Toggle Honcho for active profile |
-| `hermes honcho mode <mode>` | Change recall or observation mode |
-| `hermes honcho peer --user <name>` | Update user peer name |
-| `hermes honcho peer --ai <name>` | Update AI peer name |
-| `hermes honcho tokens --context <N>` | Set context token budget |
-| `hermes honcho tokens --dialectic <N>` | Set dialectic max chars |
-| `hermes honcho map <name>` | Map current directory to a session name |
-| `hermes honcho sync` | Create host blocks for all Hermes profiles |
+| `Zeloo memory setup honcho` | Configure Honcho directly — works on a fresh install |
+| `Zeloo honcho setup` | Interactive setup wizard (only registered once Honcho is the active provider; redirects to `Zeloo memory setup`) |
+| `Zeloo honcho status` | Show resolved config for active profile |
+| `Zeloo honcho enable` / `disable` | Toggle Honcho for active profile |
+| `Zeloo honcho mode <mode>` | Change recall or observation mode |
+| `Zeloo honcho peer --user <name>` | Update user peer name |
+| `Zeloo honcho peer --ai <name>` | Update AI peer name |
+| `Zeloo honcho tokens --context <N>` | Set context token budget |
+| `Zeloo honcho tokens --dialectic <N>` | Set dialectic max chars |
+| `Zeloo honcho map <name>` | Map current directory to a session name |
+| `Zeloo honcho sync` | Create host blocks for all Zeloo profiles |
 
 ## Example Config
 
 ```json
 {
   "apiKey": "***",
-  "workspace": "hermes",
+  "workspace": "Zeloo",
   "peerName": "username",
   "contextCadence": 2,
   "dialecticCadence": 3,
   "dialecticDepth": 2,
   "hosts": {
-    "hermes": {
+    "Zeloo": {
       "enabled": true,
-      "aiPeer": "hermes",
+      "aiPeer": "Zeloo",
       "recallMode": "hybrid",
       "observation": {
         "user": { "observeMe": true, "observeOthers": true },
@@ -430,7 +430,7 @@ Presets:
       "dialecticMaxChars": 600,
       "saveMessages": true
     },
-    "hermes_coder": {
+    "zeloo_coder": {
       "enabled": true,
       "aiPeer": "coder",
       "sessionStrategy": "per-repo",

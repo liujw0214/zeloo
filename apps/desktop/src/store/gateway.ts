@@ -1,8 +1,8 @@
-import { type ConnectionState, type GatewayEvent, registryBackendScopeKey, resolveGatewayWsUrl } from '@hermes/shared'
+import { type ConnectionState, type GatewayEvent, registryBackendScopeKey, resolveGatewayWsUrl } from '@Zeloo/shared'
 import { atom } from 'nanostores'
 
-import type { HermesConnection } from '@/global'
-import { HermesGateway, setApiRequestConnection } from '@/hermes'
+import type { ZELOOConnection } from '@/global'
+import { ZELOOGateway, setApiRequestConnection } from '@/Zeloo'
 import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
 import { isTimeoutError, RECONNECT_ATTEMPT_TIMEOUT_MS, withTimeout } from '@/lib/with-timeout'
 import { markNativeNotifyBaseline } from '@/store/notify-baseline'
@@ -32,10 +32,10 @@ function dialPriority(spawnPriority: SpawnPriority): { priority: 'foreground' } 
 }
 
 function dialProfile(
-  desktop: NonNullable<typeof window.hermesDesktop>,
+  desktop: NonNullable<typeof window.ZELOODesktop>,
   profile: string,
   spawnPriority: SpawnPriority
-): Promise<HermesConnection> {
+): Promise<ZELOOConnection> {
   return spawnPriority === 'foreground'
     ? desktop.getConnection(profile, { priority: 'foreground' })
     : desktop.getConnection(profile)
@@ -43,7 +43,7 @@ function dialProfile(
 
 // Read connection state through a call so TS control-flow analysis doesn't
 // narrow the getter to a constant across guards (it genuinely changes).
-const isOpen = (gateway: HermesGateway | null): boolean => gateway?.connectionState === 'open'
+const isOpen = (gateway: ZELOOGateway | null): boolean => gateway?.connectionState === 'open'
 
 interface RegistryConfig {
   /** Electron's published descriptor is authoritative for a primary gateway's
@@ -52,7 +52,7 @@ interface RegistryConfig {
   activeConnectionId?: () => null | string
   onEvent: (event: GatewayEvent) => void
   onActiveConnectionInvalidated?: (fallbackProfile: string, activationEpoch: number) => void
-  onActiveConnectionChanged?: (connection: HermesConnection) => void
+  onActiveConnectionChanged?: (connection: ZELOOConnection) => void
   /**
    * Fires whenever applyActive() moves the active route to a (possibly
    * different) profile — including registry-internal eviction fallbacks
@@ -88,8 +88,8 @@ interface Secondary {
   profile: string
   /** Registry connection serving this socket; null = the local/legacy path. */
   connectionId: null | string
-  connection: HermesConnection | null
-  gateway: HermesGateway
+  connection: ZELOOConnection | null
+  gateway: ZELOOGateway
   /** True after this entry completed at least one socket connection. */
   openedOnce: boolean
   activeRequests: number
@@ -158,7 +158,7 @@ const ACTIVATION_LEASE_MS = 30_000
 // runtime behavior is identical to plain module state.
 interface GatewayRegistryState {
   config: RegistryConfig | null
-  primaryGateway: HermesGateway | null
+  primaryGateway: ZELOOGateway | null
   /** Registry source currently served by primaryGateway, when known. */
   primaryConnectionId: null | string
   primaryProfile: string
@@ -171,11 +171,11 @@ interface GatewayRegistryState {
   turnLeases: Map<string, () => void>
   /** Debounced releases so an immediate chained turn can reuse its lease. */
   turnLeaseReleaseTimers: Map<string, ReturnType<typeof setTimeout>>
-  $gateway: ReturnType<typeof atom<HermesGateway | null>>
+  $gateway: ReturnType<typeof atom<ZELOOGateway | null>>
   $activeProfile: ReturnType<typeof atom<string>>
 }
 
-const STATE_KEY = Symbol.for('hermes.desktop.gatewayRegistryState')
+const STATE_KEY = Symbol.for('Zeloo.desktop.gatewayRegistryState')
 
 function createRegistryState(): GatewayRegistryState {
   return {
@@ -192,7 +192,7 @@ function createRegistryState(): GatewayRegistryState {
     // The active gateway instance, exposed for inline message-stream
     // components (inline ClarifyTool, model overlays) that call gateway
     // methods without the instance threaded down through props.
-    $gateway: atom<HermesGateway | null>(null),
+    $gateway: atom<ZELOOGateway | null>(null),
     // The PROFILE the active gateway is routed to (bare profile name, never a
     // composite registry scope). Owned exclusively by applyActive() so the
     // published profile can never diverge from the socket actually selected —
@@ -264,7 +264,7 @@ export function emitLocalGatewayEvent(event: GatewayEvent): void {
   g.config?.onEvent(event)
 }
 
-export function setPrimaryGateway(gateway: HermesGateway | null, profile = 'default'): void {
+export function setPrimaryGateway(gateway: ZELOOGateway | null, profile = 'default'): void {
   const next = normKey(profile)
 
   if (g.primaryGateway !== gateway) {
@@ -309,7 +309,7 @@ export function setPrimaryGatewayConnectionId(connectionId: null | string | unde
 }
 
 /** Publish the registry source owned by the window primary socket. */
-export function setPrimaryGatewayConnection(connection: Pick<HermesConnection, 'connectionId'> | null): void {
+export function setPrimaryGatewayConnection(connection: Pick<ZELOOConnection, 'connectionId'> | null): void {
   setPrimaryGatewayConnectionId(connection?.connectionId)
 }
 
@@ -346,7 +346,7 @@ async function isAttachedSharedRemote(
     return false
   }
 
-  const desktop = window.hermesDesktop
+  const desktop = window.ZELOODesktop
 
   if (!desktop?.getConnectionFor) {
     return false
@@ -378,7 +378,7 @@ async function requestOnPrimaryGateway<T>(
   const gateway = g.primaryGateway
 
   if (!gateway || !isOpen(gateway)) {
-    throw new Error('Hermes gateway unavailable')
+    throw new Error('Zeloo gateway unavailable')
   }
 
   return timeoutMs === undefined && signal === undefined
@@ -395,7 +395,7 @@ export function gatewayActivationEpoch(): number {
   return Number.isFinite(g.activationEpoch) ? g.activationEpoch : 0
 }
 
-export function activeGateway(): HermesGateway | null {
+export function activeGateway(): ZELOOGateway | null {
   if (g.activeKey === g.primaryProfile) {
     return g.primaryGateway
   }
@@ -484,7 +484,7 @@ function applyActive(profile: string, activationEpoch: number): boolean {
   const gateway = activeGateway()
   g.$gateway.set(gateway)
   setGatewayState(gateway?.connectionState ?? 'closed')
-  // Push the active scope's registry connection into the hermes module (null
+  // Push the active scope's registry connection into the Zeloo module (null
   // for the local pool) so connection-building WS calls (pluginSocket) resolve
   // through the same source of truth every activation path maintains here —
   // registry-agent activations included, not just profile switches.
@@ -506,7 +506,7 @@ function applyActive(profile: string, activationEpoch: number): boolean {
   return true
 }
 
-function publishActiveConnection(connection: HermesConnection): void {
+function publishActiveConnection(connection: ZELOOConnection): void {
   if (g.config?.onActiveConnectionChanged) {
     g.config.onActiveConnectionChanged(connection)
   } else {
@@ -522,7 +522,7 @@ function clearTimer(entry: Secondary): void {
 }
 
 async function openSecondary(entry: Secondary, spawnPriority: SpawnPriority = 'background'): Promise<void> {
-  const desktop = window.hermesDesktop
+  const desktop = window.ZELOODesktop
 
   if (!desktop) {
     return
@@ -782,7 +782,7 @@ function isMissingProfileError(error: unknown): boolean {
 }
 
 function createSecondary(profile: string, connectionId: null | string = null): Secondary {
-  const gateway = new HermesGateway()
+  const gateway = new ZELOOGateway()
   const scope = registryBackendScopeKey(connectionId, profile)
 
   const entry: Secondary = {
@@ -851,7 +851,7 @@ function createSecondary(profile: string, connectionId: null | string = null): S
 // poisons the active gateway with "not connected" even though the primary is
 // open right next to it.
 async function sharedPrimaryRoute(profile: string, spawnPriority: SpawnPriority = 'background'): Promise<boolean> {
-  const desktop = window.hermesDesktop
+  const desktop = window.ZELOODesktop
 
   if (!desktop) {
     return false
@@ -884,7 +884,7 @@ async function gatewayForProfile(
   profile: string,
   leaseRequest = false,
   spawnPriority: SpawnPriority = 'background'
-): Promise<{ gateway: HermesGateway | null; key: string; release: () => void; scopeProfile: boolean }> {
+): Promise<{ gateway: ZELOOGateway | null; key: string; release: () => void; scopeProfile: boolean }> {
   const key = normKey(profile)
   const noRelease = () => undefined
 
@@ -968,7 +968,7 @@ export async function requestGatewayForProfile<T>(
 
   try {
     if (!route.gateway) {
-      throw new Error(`Hermes gateway unavailable for profile "${route.key}"`)
+      throw new Error(`Zeloo gateway unavailable for profile "${route.key}"`)
     }
 
     const routedParams = route.scopeProfile ? { ...params, profile: route.key } : params
@@ -1021,8 +1021,8 @@ export async function requestGatewayForAgent<T>(
     return requestOnPrimaryGateway<T>(method, { ...params, profile: key }, timeoutMs, signal)
   }
 
-  if (!window.hermesDesktop?.getConnectionFor) {
-    throw new Error('This Desktop build cannot dial registry connections. Update Hermes Desktop.')
+  if (!window.ZELOODesktop?.getConnectionFor) {
+    throw new Error('This Desktop build cannot dial registry connections. Update Zeloo Desktop.')
   }
 
   const entry = g.secondaries.get(scope) ?? createSecondary(key, connectionId)
@@ -1210,7 +1210,7 @@ export async function retainGatewayForAgent(connectionId: null | string, profile
     return () => undefined
   }
 
-  if (!window.hermesDesktop?.getConnectionFor) {
+  if (!window.ZELOODesktop?.getConnectionFor) {
     // No registry dialing in this build — nothing to hold; the request path
     // will throw its own actionable error.
     return () => undefined
@@ -1439,14 +1439,14 @@ export async function openGatewayForAgent(
 
   if (await isAttachedSharedRemote(connectionId, profile, spawnPriority)) {
     if (!isOpen(g.primaryGateway)) {
-      throw new Error('Hermes gateway unavailable')
+      throw new Error('Zeloo gateway unavailable')
     }
 
     return
   }
 
-  if (!window.hermesDesktop?.getConnectionFor) {
-    throw new Error('This Desktop build cannot dial registry connections. Update Hermes Desktop.')
+  if (!window.ZELOODesktop?.getConnectionFor) {
+    throw new Error('This Desktop build cannot dial registry connections. Update Zeloo Desktop.')
   }
 
   const entry = g.secondaries.get(scope) ?? createSecondary(profile, connectionId)
@@ -1495,8 +1495,8 @@ export async function ensureGatewayForAgent(
     return Boolean(isOpen(g.primaryGateway) && !signal?.aborted)
   }
 
-  if (!window.hermesDesktop?.getConnectionFor) {
-    throw new Error('This Desktop build cannot dial registry connections. Update Hermes Desktop.')
+  if (!window.ZELOODesktop?.getConnectionFor) {
+    throw new Error('This Desktop build cannot dial registry connections. Update Zeloo Desktop.')
   }
 
   const activationEpoch = beginGatewayActivation()
@@ -1631,7 +1631,7 @@ export async function ensureGatewayForProfile(profile: string): Promise<void> {
 
 // Reconnect the active gateway after a transient request failure. Primary
 // reconnects are owned by use-gateway-boot, so we only drive secondaries here.
-export async function ensureActiveGatewayOpen(): Promise<HermesGateway | null> {
+export async function ensureActiveGatewayOpen(): Promise<ZELOOGateway | null> {
   if (g.activeKey === g.primaryProfile) {
     return g.primaryGateway
   }
@@ -1652,7 +1652,7 @@ export async function ensureActiveGatewayOpen(): Promise<HermesGateway | null> {
   if (!isOpen(entry.gateway)) {
     // A remote/registry secondary can still be ACTIVATING (backend waking,
     // socket dialing). Failing instantly turned a routine cold start into
-    // "Hermes gateway is not connected" on the Sessions `+` action (#88880).
+    // "Zeloo gateway is not connected" on the Sessions `+` action (#88880).
     // Wait a bounded beat for the in-flight activation instead of erroring;
     // a genuinely dead gateway still returns null when the window closes.
     const deadline = Date.now() + ACTIVE_GATEWAY_OPEN_WAIT_MS
@@ -1721,7 +1721,7 @@ export function openSecondaryCount(): number {
 // tile-pinned backend keepalive-fresh forever, so LRU eviction and the idle
 // reaper never freed its pool slot (#103375).
 export function touchSecondaryGateways(): void {
-  const desktop = window.hermesDesktop
+  const desktop = window.ZELOODesktop
 
   for (const entry of g.secondaries.values()) {
     if (entry.wantOpen && isOpen(entry.gateway)) {

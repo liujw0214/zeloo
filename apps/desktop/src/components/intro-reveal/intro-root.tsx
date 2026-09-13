@@ -12,7 +12,7 @@ export function mountIntroReveal(): void {
     return
   }
 
-  document.title = 'Hermes'
+  document.title = 'Zeloo'
   // The intro fills a display the user sits back from; the app's 16 px root
   // is sized for a working window. Every intro measure is in rem, so one
   // root scale keeps the composition proportional (director: legibility).
@@ -33,7 +33,7 @@ export function mountIntroReveal(): void {
   // Native ready-to-show can precede the first React paint.
   requestAnimationFrame(() =>
     requestAnimationFrame(() => {
-      window.hermesDesktop?.introReveal?.ready()
+      window.ZELOODesktop?.introReveal?.ready()
     })
   )
 }

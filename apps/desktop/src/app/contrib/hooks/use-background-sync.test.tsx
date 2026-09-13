@@ -28,7 +28,7 @@ function render(
         refreshActiveTranscript: noop,
         refreshCronJobs: noop,
         refreshCurrentModel: noop,
-        refreshHermesConfig: noop,
+        refreshZELOOConfig: noop,
         refreshMessagingSessions: noop,
         refreshSessions,
         requestGateway: gatewayRequest

@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from hermes_constants import display_hermes_home
+from zeloo_constants import display_zeloo_home
 from agent.prompt_cache_boundary import register_stable_prefix
 from agent.skill_preprocessing import load_skills_config as _load_skills_config, preprocess_skill_content
 
@@ -129,24 +129,24 @@ def _resolve_skill_commands_platform() -> Optional[str]:
     """
     try:
         from gateway.session_context import get_session_env
-        resolved_platform = os.getenv("HERMES_PLATFORM") or get_session_env("HERMES_SESSION_PLATFORM")
+        resolved_platform = os.getenv("ZELOO_PLATFORM") or get_session_env("ZELOO_SESSION_PLATFORM")
     except Exception:
-        resolved_platform = os.getenv("HERMES_PLATFORM")
+        resolved_platform = os.getenv("ZELOO_PLATFORM")
     return resolved_platform or None
 
 
 def _resolve_skill_commands_home() -> str:
-    """Effective Hermes home the scan is scoped to (profiles carry their own
+    """Effective Zeloo home the scan is scoped to (profiles carry their own
     ``skills.external_dirs``, so a profile switch must invalidate the cache).
 
     A gateway session can switch between profiles that each carry their own ``skills.external_dirs`` (via
-    ``set_hermes_home_override``), but the module-level scan only tracked
+    ``set_zeloo_home_override``), but the module-level scan only tracked
     ``_resolve_skill_commands_platform()``. Switching profiles without a platform change left the previous
     profile's skill list cached, so ``get_skill_commands()`` reported a cache miss for skills that only
     exist under the new profile (#88023).
     """
-    from hermes_constants import get_hermes_home
-    return str(get_hermes_home())
+    from zeloo_constants import get_zeloo_home
+    return str(get_zeloo_home())
 
 
 def _load_skill_payload(skill_identifier: str, task_id: str | None = None) -> tuple[dict[str, Any], Path | None, str] | None:
@@ -178,7 +178,7 @@ def _load_skill_payload(skill_identifier: str, task_id: str | None = None) -> tu
 
 
 def _inject_skill_config(loaded_skill: dict[str, Any], parts: list[str]) -> None:
-    """Append a ``[Skill config: ...]`` block with resolved ``metadata.hermes.config``
+    """Append a ``[Skill config: ...]`` block with resolved ``metadata.Zeloo.config``
     values so the agent needn't read config.yaml. Any failure leaves the message without it."""
     try:
         from agent.skill_utils import extract_skill_config_vars, parse_frontmatter, resolve_skill_config_values
@@ -188,7 +188,7 @@ def _inject_skill_config(loaded_skill: dict[str, Any], parts: list[str]) -> None
         if not resolved:
             return
         parts.append("")
-        parts.append(f"[Skill config (from {display_hermes_home()}/config.yaml):")
+        parts.append(f"[Skill config (from {display_zeloo_home()}/config.yaml):")
         parts.extend(f"  {key} = {str(value) if value else '(not set)'}" for key, value in resolved.items())
         parts.append("]")
     except Exception:
@@ -346,7 +346,7 @@ def _scan_skill_md(skill_md: Path, disabled: set, seen_names: set, commands: Dic
     # A collision with a core command (name or alias, via resolve_command) skips
     # auto-registration; the skill stays loadable via /skill <name>.
     if resolve_command(cmd_name) is not None:
-        logger.warning("Skill %r generates slash command '/%s' which collides with a core Hermes command; "
+        logger.warning("Skill %r generates slash command '/%s' which collides with a core Zeloo command; "
                        "skipping auto-registration. Use '/skill %s' instead.", name, cmd_name, name)
         return
     # Dedup on the slug too: "git_helper" and "git-helper" normalize the same.
@@ -379,7 +379,7 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
         from agent.skill_utils import (
             get_external_skills_dirs, get_project_skills_dirs, iter_project_skill_files, iter_skill_index_files,
         )
-        from hermes_cli.commands import resolve_command
+        from zeloo_cli.commands import resolve_command
         disabled = _get_disabled_skill_names()
         seen_names: set = set()
         # Precedence: project (through the quarantine chokepoint) > local > external.
@@ -576,7 +576,7 @@ def _load_skill_blocks(
 def build_preloaded_skills_prompt(skill_identifiers: list[str], task_id: str | None = None) -> tuple[str, list[str], list[str]]:
     """Load skills for session-wide CLI/TUI preloading; returns (prompt_text,
     loaded_skill_names, missing_identifiers). Disabled skills count as missing:
-    this path bypasses the scan-time filter, and ``hermes -s <skill>`` must not
+    this path bypasses the scan-time filter, and ``Zeloo -s <skill>`` must not
     force-load an operator-disabled skill.
 
     Disabled skills are treated the same as missing ones: this loads via a raw identifier straight into

@@ -8,7 +8,7 @@ const unsavedReceipts = new Map<string, HandoffReceipt>()
 
 /** A navigation/submit receipt, never a copy of either profile's memory. */
 export function handoffReceiptKey(connection: null | string, guideStoredId: string): string {
-  return `hermes.onboarding.handoff.v1.connection.${encodeURIComponent(connection ?? 'ambient')}.profile.default.guide.${encodeURIComponent(guideStoredId)}`
+  return `Zeloo.onboarding.handoff.v1.connection.${encodeURIComponent(connection ?? 'ambient')}.profile.default.guide.${encodeURIComponent(guideStoredId)}`
 }
 
 export function readHandoffReceipt(key: string): HandoffReceipt | null {

@@ -1,4 +1,4 @@
-export interface HermesNotification {
+export interface ZELOONotification {
   title?: string
   body?: string
   silent?: boolean

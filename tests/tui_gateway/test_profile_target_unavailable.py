@@ -6,14 +6,14 @@ import pytest
 
 def test_explicit_profile_target_never_falls_back(tmp_path, monkeypatch):
     from tui_gateway import server
-    from hermes_state import SessionDB
+    from zeloo_state import SessionDB
 
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".Zeloo"
     worker = home / "profiles" / "worker"
     worker.mkdir(parents=True)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    monkeypatch.setenv("HERMES_HOME", str(home))
-    monkeypatch.setattr(server, "_hermes_home", home)
+    monkeypatch.setenv("ZELOO_HOME", str(home))
+    monkeypatch.setattr(server, "_zeloo_home", home)
     for path, marker in ((home, "launch"), (worker, "worker")):
         (path / "config.yaml").write_text(f"terminal:\n  cwd: /{marker}\n")
         with SessionDB(db_path=path / "state.db") as db:
@@ -48,8 +48,8 @@ def test_custom_root_basename_target_fails_closed_when_unavailable(tmp_path, mon
     custom_home.mkdir()
     (custom_home / "config.yaml").write_text("terminal:\n  cwd: /custom\n")
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    monkeypatch.setenv("HERMES_HOME", str(custom_home))
-    monkeypatch.setattr(server, "_hermes_home", custom_home)
+    monkeypatch.setenv("ZELOO_HOME", str(custom_home))
+    monkeypatch.setattr(server, "_zeloo_home", custom_home)
 
     with pytest.raises(FileNotFoundError):
         server._profile_home("customer-data")

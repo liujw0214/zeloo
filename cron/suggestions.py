@@ -19,17 +19,17 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from hermes_constants import get_hermes_home
-from hermes_time import now as _hermes_now
+from zeloo_constants import get_zeloo_home
+from zeloo_time import now as _zeloo_now
 from utils import atomic_replace
 
 logger = logging.getLogger(__name__)
 
-# Per-profile by design (anchored on get_hermes_home(), see cron/jobs.py). Optional test override;
-# production resolves the path at CALL time so multiplexed profile ticks (set_hermes_home_override)
+# Per-profile by design (anchored on get_zeloo_home(), see cron/jobs.py). Optional test override;
+# production resolves the path at CALL time so multiplexed profile ticks (set_zeloo_home_override)
 # cannot leak one profile's suggestions into the import-time home.
 # Per-profile by design (issue #4707): suggestions live alongside the active profile's cron store. Anchor on
-# get_hermes_home() (profile home), not the shared default root. Same pattern as cron/executions.py.
+# get_zeloo_home() (profile home), not the shared default root. Same pattern as cron/executions.py.
 SUGGESTIONS_FILE: Optional[Path] = None
 
 # Protects load->modify->save cycles (the background review fork and the main agent can both write).
@@ -45,7 +45,7 @@ _STATUS_DISMISSED = "dismissed"
 
 
 def _current_suggestions_file() -> Path:
-    return SUGGESTIONS_FILE or (get_hermes_home().resolve() / "cron" / "suggestions.json")
+    return SUGGESTIONS_FILE or (get_zeloo_home().resolve() / "cron" / "suggestions.json")
 
 
 def _secure_file(path: Path) -> None:
@@ -85,7 +85,7 @@ def _save_raw(suggestions: List[Dict[str, Any]]) -> None:
     fd, tmp_path = tempfile.mkstemp(dir=str(suggestions_file.parent), suffix=".tmp", prefix=".sugg_")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            payload = {"suggestions": suggestions, "updated_at": _hermes_now().isoformat()}
+            payload = {"suggestions": suggestions, "updated_at": _zeloo_now().isoformat()}
             json.dump(payload, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
@@ -145,7 +145,7 @@ def add_suggestion(
             "job_spec": job_spec,
             "dedup_key": dedup_key.strip(),
             "status": _STATUS_PENDING,
-            "created_at": _hermes_now().isoformat(),
+            "created_at": _zeloo_now().isoformat(),
         }
         suggestions.append(record)
         _save_raw(suggestions)
@@ -175,7 +175,7 @@ def _set_status(suggestion_id: str, status: str) -> bool:
         for s in suggestions:
             if s.get("id") == suggestion_id:
                 s["status"] = status
-                s["resolved_at"] = _hermes_now().isoformat()
+                s["resolved_at"] = _zeloo_now().isoformat()
                 _save_raw(suggestions)
                 return True
         return False

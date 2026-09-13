@@ -1,7 +1,7 @@
-"""langfuse — Hermes plugin tracing conversations, LLM calls and tool usage to Langfuse.
+"""langfuse — Zeloo plugin tracing conversations, LLM calls and tool usage to Langfuse.
 
 Activated via ``plugins.enabled``; hooks are inert without the ``langfuse`` SDK
-and credentials. Env: HERMES_LANGFUSE_PUBLIC_KEY / SECRET_KEY (required),
+and credentials. Env: ZELOO_LANGFUSE_PUBLIC_KEY / SECRET_KEY (required),
 BASE_URL, ENV, RELEASE, SAMPLE_RATE, MAX_CHARS (12000), DEBUG, and CAPTURE =
 metadata (sizes/ids/usage only) | sanitized (default: secret redaction +
 truncation) | full (truncated raw content). See README.md.
@@ -65,8 +65,8 @@ _READ_FILE_META_KEYS = ("total_lines", "file_size", "truncated", "is_binary", "i
 # template value: the SDK accepts it at construction time but silently drops
 # every trace at flush time (#23823).
 _LANGFUSE_KEY_PREFIXES: Dict[str, str] = {
-    "HERMES_LANGFUSE_PUBLIC_KEY": "pk-lf-",
-    "HERMES_LANGFUSE_SECRET_KEY": "sk-lf-",
+    "ZELOO_LANGFUSE_PUBLIC_KEY": "pk-lf-",
+    "ZELOO_LANGFUSE_SECRET_KEY": "sk-lf-",
 }
 
 # (langfuse usage key, CanonicalUsage attribute / summary-dict key, PricingEntry attribute)
@@ -84,7 +84,7 @@ def _env(name: str, default: str = "") -> str:
 
 
 def _debug(message: str) -> None:
-    if _env("HERMES_LANGFUSE_DEBUG").lower() in {"1", "true", "yes", "on"}:
+    if _env("ZELOO_LANGFUSE_DEBUG").lower() in {"1", "true", "yes", "on"}:
         logger.info("Langfuse tracing: %s", message)
 
 
@@ -107,13 +107,13 @@ def _capture_mode() -> str:
     can flip modes. Invalid values warn once and fall back to the default (never
     capture more than the operator intended)."""
     global _warned_invalid_capture
-    value = _env("HERMES_LANGFUSE_CAPTURE").lower()
+    value = _env("ZELOO_LANGFUSE_CAPTURE").lower()
     if not value or value in _CAPTURE_MODES:
         return value or _DEFAULT_CAPTURE_MODE
     if not _warned_invalid_capture:
         _warned_invalid_capture = True
         logger.warning(
-            "Langfuse plugin: invalid HERMES_LANGFUSE_CAPTURE=%r, falling back "
+            "Langfuse plugin: invalid ZELOO_LANGFUSE_CAPTURE=%r, falling back "
             "to %r (valid: %s)",
             value, _DEFAULT_CAPTURE_MODE, ", ".join(_CAPTURE_MODES),
         )
@@ -206,26 +206,26 @@ def _build_client() -> Optional[Langfuse]:
     if Langfuse is None:
         logger.warning(
             "Langfuse plugin is enabled but the langfuse SDK is unavailable; "
-            "tracing is disabled. Run `hermes tools` and configure Langfuse "
+            "tracing is disabled. Run `Zeloo tools` and configure Langfuse "
             "Observability to reinstall it."
         )
         return None
 
-    public_key, secret_key = (_env(f"HERMES_LANGFUSE_{n}") or _env(f"LANGFUSE_{n}") for n in ("PUBLIC_KEY", "SECRET_KEY"))
+    public_key, secret_key = (_env(f"ZELOO_LANGFUSE_{n}") or _env(f"LANGFUSE_{n}") for n in ("PUBLIC_KEY", "SECRET_KEY"))
     if not (public_key and secret_key):
         return None
 
     # The SDK does not validate keys at construction; placeholder keys
     # would fail silently at flush time (#23823). Warn once here instead.
     placeholder_issues = [issue for issue in (
-        _validate_langfuse_key("HERMES_LANGFUSE_PUBLIC_KEY", public_key),
-        _validate_langfuse_key("HERMES_LANGFUSE_SECRET_KEY", secret_key),
+        _validate_langfuse_key("ZELOO_LANGFUSE_PUBLIC_KEY", public_key),
+        _validate_langfuse_key("ZELOO_LANGFUSE_SECRET_KEY", secret_key),
     ) if issue]
     if placeholder_issues:
         logger.warning(
             "Langfuse plugin: credentials look like placeholders, traces will "
             "NOT be emitted (%s). Set real Langfuse keys (pk-lf-... / sk-lf-...) "
-            "or unset HERMES_LANGFUSE_PUBLIC_KEY / HERMES_LANGFUSE_SECRET_KEY to "
+            "or unset ZELOO_LANGFUSE_PUBLIC_KEY / ZELOO_LANGFUSE_SECRET_KEY to "
             "silence this warning.",
             "; ".join(placeholder_issues),
         )
@@ -234,15 +234,15 @@ def _build_client() -> Optional[Langfuse]:
     kwargs: Dict[str, Any] = {"public_key": public_key, "secret_key": secret_key}
     for key, name, default in (("base_url", "BASE_URL", "https://cloud.langfuse.com"), ("environment", "ENV", ""),
                                ("release", "RELEASE", "")):
-        value = _env(f"HERMES_LANGFUSE_{name}") or _env(f"LANGFUSE_{name}") or default
+        value = _env(f"ZELOO_LANGFUSE_{name}") or _env(f"LANGFUSE_{name}") or default
         if value:
             kwargs[key] = value
-    sample_rate = _env("HERMES_LANGFUSE_SAMPLE_RATE")
+    sample_rate = _env("ZELOO_LANGFUSE_SAMPLE_RATE")
     if sample_rate:
         try:
             kwargs["sample_rate"] = float(sample_rate)
         except ValueError:
-            logger.warning("Invalid HERMES_LANGFUSE_SAMPLE_RATE=%r", sample_rate)
+            logger.warning("Invalid ZELOO_LANGFUSE_SAMPLE_RATE=%r", sample_rate)
 
     try:
         return Langfuse(**kwargs)
@@ -348,7 +348,7 @@ def _normalize_payload(value: Any, *, tool_name: str = "", args: Any = None) -> 
 
 def _safe_value(value: Any, *, max_chars: Optional[int] = None, depth: int = 0,
                 parse_json_strings: bool = False) -> Any:
-    max_chars = max_chars if max_chars is not None else int(_env("HERMES_LANGFUSE_MAX_CHARS", "12000") or "12000")
+    max_chars = max_chars if max_chars is not None else int(_env("ZELOO_LANGFUSE_MAX_CHARS", "12000") or "12000")
     if depth > 4:
         return "<max-depth>"
     if value is None or isinstance(value, (int, float, bool)):
@@ -437,7 +437,7 @@ def _serialize_assistant_message(message: Any) -> dict[str, Any]:
 
 def _canonical_usage_and_cost(canonical: Any, *, provider: str, model: str,
                               base_url: str) -> tuple[dict[str, int], dict[str, float]]:
-    """Translate canonical Hermes usage into Langfuse usage and cost maps."""
+    """Translate canonical Zeloo usage into Langfuse usage and cost maps."""
     usage_details: Dict[str, int] = {
         key: tokens for key, attr, _ in _USAGE_FIELDS
         if (tokens := getattr(canonical, attr)) or key in ("input", "output")
@@ -462,7 +462,7 @@ def _canonical_usage_and_cost(canonical: Any, *, provider: str, model: str,
         return usage_details, cost_details
 
     # Langfuse only derives totals from input/output keys, so cache/custom keys
-    # need an explicit total (Hermes estimate also includes request pricing).
+    # need an explicit total (Zeloo estimate also includes request pricing).
     # A zero total is not exported: Langfuse would treat it as authoritative.
     if cost.status != "included" and float(cost.amount_usd) > 0:
         cost_details["total"] = float(cost.amount_usd)
@@ -515,7 +515,7 @@ def _start_root_trace(task_key: str, *, task_id: str, session_id: str, platform:
         if isinstance(messages, list) else None
     trace_input = None if last_user is None else {"role": "user", "content": _capture_content(last_user.get("content"))}
     metadata = {
-        "source": "hermes", "task_id": task_id, "turn_id": turn_id, "api_request_id": api_request_id,
+        "source": "Zeloo", "task_id": task_id, "turn_id": turn_id, "api_request_id": api_request_id,
         "platform": platform, "provider": provider, "model": model, "api_mode": api_mode,
         "capture_mode": _capture_mode(),
     }
@@ -523,15 +523,15 @@ def _start_root_trace(task_key: str, *, task_id: str, session_id: str, platform:
     trace_ctx: Dict[str, Any] = {"trace_id": trace_id, **({"session_id": session_id} if session_id else {})}
 
     def open_root():
-        ctx = client.start_as_current_observation(trace_context=trace_ctx, name="Hermes turn", as_type="chain",
+        ctx = client.start_as_current_observation(trace_context=trace_ctx, name="Zeloo turn", as_type="chain",
                                                   input=trace_input, metadata=metadata, end_on_exit=False)
         return ctx, ctx.__enter__()
 
     root_ctx = root_span = None
     if propagate_attributes is not None:
         try:
-            with propagate_attributes(session_id=session_id or task_key, trace_name="Hermes turn",
-                                      tags=["hermes", "langfuse"]):
+            with propagate_attributes(session_id=session_id or task_key, trace_name="Zeloo turn",
+                                      tags=["Zeloo", "langfuse"]):
                 root_ctx, root_span = open_root()
         except Exception:
             root_ctx = None
@@ -970,7 +970,7 @@ def on_subagent_stop(*, parent_turn_id: str = "", child_session_id: Any = None, 
 
 
 def register(ctx) -> None:
-    # Both hook-name variants so the plugin works across Hermes versions:
+    # Both hook-name variants so the plugin works across Zeloo versions:
     # *_api_request fire per API call (preferred); *_llm_call once per turn.
     hooks = (
         ("pre_api_request", on_pre_llm_request), ("post_api_request", on_post_llm_call),

@@ -1,6 +1,6 @@
 # Desktop Engineering Guide
 
-How to build Hermes Desktop well. This is a judgment guide, not an inventory —
+How to build Zeloo Desktop well. This is a judgment guide, not an inventory —
 it teaches the invariants and the reasoning behind them so a change fits the app
 even as files move. Read it with the repository `AGENTS.md` (root rules still
 apply), [`DESIGN.md`](./DESIGN.md) for the visual and interaction contract, and
@@ -30,7 +30,7 @@ change blurs a seam, that is the smell — fix the seam, don't widen it.
 The first question for any piece of state is *who is allowed to be right about
 it*, not where it is convenient to store it. Put state with its authority:
 
-- The **backend** is authoritative for anything another Hermes surface can also
+- The **backend** is authoritative for anything another Zeloo surface can also
   change. Treat the renderer's copy as a cache of that truth.
 - **Electron** is authoritative for machine and runtime facts.
 - The **renderer** owns only what is purely about this window's presentation.
@@ -90,7 +90,7 @@ There are three distinct switch shapes, and conflating them is the classic bug:
 - A **connection/mode apply** (local ↔ remote ↔ cloud) is the soft re-home:
   shell mounted, gateway-bound stores explicitly wiped, then reconnect. Query
   invalidation alone cannot evict live session stores — wipe them.
-- A **runtime home change** (switching the underlying `HERMES_HOME` profile) is
+- A **runtime home change** (switching the underlying `ZELOO_HOME` profile) is
   a hard re-home: the window legitimately reloads and state resets by remount.
 - A **live profile swap** in the same window activates another profile's socket
   while background profiles keep streaming; lists merge rather than wipe, and
@@ -151,7 +151,7 @@ lean on an existing seam — before you invent a framework. The shell's internal
 registries are composition seams, not a public plugin ABI; do not build a
 universal extension system, a manifest, or a plugin adapter for a single
 consumer. Design a shared contract only once more than one real consumer proves
-its shape. "Plugin" means several unrelated things across Hermes — do not assume
+its shape. "Plugin" means several unrelated things across Zeloo — do not assume
 one surface's extension model runs in another.
 
 When the new capability is an **agent-callable** one — a tool that acts on this
@@ -199,9 +199,9 @@ actually run rather than inventing a command; when in doubt, read the scripts.
 ## Rehearsing the guided onboarding
 
 From `apps/desktop`, use a fresh temporary directory for each rehearsal and run
-`env -u NODE_ENV HERMES_GUEST_ONBOARDING=1 HERMES_HOME=<tmp>/.hermes HERMES_DESKTOP_USER_DATA_DIR=<tmp>/electron-user-data npm run dev`
+`env -u NODE_ENV ZELOO_GUEST_ONBOARDING=1 ZELOO_HOME=<tmp>/.Zeloo ZELOO_DESKTOP_USER_DATA_DIR=<tmp>/electron-user-data npm run dev`
 (replace `<tmp>` with that directory). To use the portal stand-in, add
-`HERMES_PORTAL_BASE_URL=http://127.0.0.1:8765 HERMES_ANON_API_SECRET=test-secret HERMES_SHARED_AUTH_DIR=<tmp>/.hermes/shared`
+`ZELOO_PORTAL_BASE_URL=http://127.0.0.1:8765 ZELOO_ANON_API_SECRET=test-secret ZELOO_SHARED_AUTH_DIR=<tmp>/.Zeloo/shared`
 before `npm run dev`. Stop Electron and its dev server after the run.
 
 ## The taste test before you hand off
@@ -220,7 +220,7 @@ If any answer is "not sure," that's the part to go verify.
 
 ## Nous free tier: state is pulled, never latched in the renderer
 
-The free tier (a Nous identity with no account, `hermes_cli/anon_auth.py`) reaches the renderer
+The free tier (a Nous identity with no account, `zeloo_cli/anon_auth.py`) reaches the renderer
 through one JSON-RPC pair: `free_tier.status` (has_guest, enabled, available,
 notice_pending, model, label) read from local auth state with zero network, and
 `free_tier.ack_notice`, which persists the one-time notice flag on the identity itself. The

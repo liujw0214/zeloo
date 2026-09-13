@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
-import { saveHermesConfigRecord } from '@/hermes'
+import { saveZELOOConfigRecord } from '@/Zeloo'
 import { useI18n } from '@/i18n'
 import { Check, Globe } from '@/lib/icons'
 import { notify, notifyError } from '@/store/notifications'
@@ -23,7 +23,7 @@ import {
   releaseRealProfilePrompt
 } from '@/store/real-profile-consent'
 
-import { hermesConfigCacheWriter, useHermesConfigRecord } from '../../hooks/use-config-record'
+import { ZELOOConfigCacheWriter, useZELOOConfigRecord } from '../../hooks/use-config-record'
 
 interface RealProfileConsentDialogProps {
   /** The Browser tab this pane renders — used only to claim the prompt so
@@ -50,8 +50,8 @@ export function RealProfileConsentDialog({ tabId }: RealProfileConsentDialogProp
   const dismissed = useStore($realProfilePromptDismissed)
   const muted = useStore($realProfilePromptMuted)
   const claim = useStore($realProfilePromptClaim)
-  const { data: config } = useHermesConfigRecord()
-  const setConfig = hermesConfigCacheWriter()
+  const { data: config } = useZELOOConfigRecord()
+  const setConfig = ZELOOConfigCacheWriter()
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -78,7 +78,7 @@ export function RealProfileConsentDialog({ tabId }: RealProfileConsentDialogProp
     setConfig(next)
 
     try {
-      await saveHermesConfigRecord(next)
+      await saveZELOOConfigRecord(next)
       notify({ kind: 'info', title: copy.enabledTitle, message: copy.enabledMessage })
     } catch (err) {
       setConfig(config)

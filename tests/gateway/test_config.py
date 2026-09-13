@@ -12,7 +12,7 @@ from agent.secret_scope import (
     set_multiplex_active,
     set_secret_scope,
 )
-from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+from zeloo_constants import reset_zeloo_home_override, set_zeloo_home_override
 from gateway.config import (
     ChannelOverride,
     GatewayConfig,
@@ -257,9 +257,9 @@ class TestLoadGatewayConfig:
 
 
     def test_slack_ignored_channels_config_sets_env_bridge(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        (hermes_home / "config.yaml").write_text(
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        (zeloo_home / "config.yaml").write_text(
             "slack:\n"
             "  ignored_channels:\n"
             "    - C0123456789\n"
@@ -267,7 +267,7 @@ class TestLoadGatewayConfig:
             encoding="utf-8",
         )
 
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
         monkeypatch.delenv("SLACK_IGNORED_CHANNELS", raising=False)
 
         load_gateway_config()
@@ -278,16 +278,16 @@ class TestLoadGatewayConfig:
     def test_typing_status_text_from_nested_platforms_block(self, tmp_path, monkeypatch):
         """``platforms.slack.typing_status_text`` reaches PlatformConfig via
         _merge_platform_map + the from_dict top-level read."""
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        (hermes_home / "config.yaml").write_text(
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        (zeloo_home / "config.yaml").write_text(
             "platforms:\n"
             "  slack:\n"
             "    enabled: true\n"
             '    typing_status_text: "chasing yarn…"\n',
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
@@ -297,7 +297,7 @@ class TestLoadGatewayConfig:
 
     def test_multiplex_profiles_from_nested_gateway_section(self, tmp_path, monkeypatch):
         """``gateway.multiplex_profiles: true`` (the nested form written by
-        ``hermes config set gateway.multiplex_profiles true``) must enable
+        ``Zeloo config set gateway.multiplex_profiles true``) must enable
         multiplexing when loaded via load_gateway_config().
 
         Regression: load_gateway_config() only surfaced the *top-level*
@@ -307,24 +307,24 @@ class TestLoadGatewayConfig:
         load_gateway_config builds gw_data from the top-level keys before
         calling from_dict, so the nested value never reached it.)
         """
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "gateway:\n  multiplex_profiles: true\n",
             encoding="utf-8",
         )
 
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
         assert config.multiplex_profiles is True
 
     def test_multiplex_allowlist_from_nested_gateway_section(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        (hermes_home / "config.yaml").write_text(
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        (zeloo_home / "config.yaml").write_text(
             "gateway:\n"
             "  multiplex_profiles: true\n"
             "  multiplex_profile_allowlist:\n"
@@ -333,7 +333,7 @@ class TestLoadGatewayConfig:
             "    - guest\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
@@ -341,9 +341,9 @@ class TestLoadGatewayConfig:
         assert config.multiplex_profile_allowlist == ["worker", "guest"]
 
     def test_discord_websocket_health_settings_seed_platform_extra(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        (hermes_home / "config.yaml").write_text(
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        (zeloo_home / "config.yaml").write_text(
             "discord:\n"
             "  websocket_liveness_interval_seconds: 17\n"
             "  websocket_liveness_failure_threshold: 4\n"
@@ -351,10 +351,10 @@ class TestLoadGatewayConfig:
             "  websocket_max_latency_seconds: 30\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
         for key in (
-            "HERMES_DISCORD_LIVENESS_INTERVAL_SECONDS",
-            "HERMES_DISCORD_LIVENESS_FAILURE_THRESHOLD",
+            "ZELOO_DISCORD_LIVENESS_INTERVAL_SECONDS",
+            "ZELOO_DISCORD_LIVENESS_FAILURE_THRESHOLD",
         ):
             monkeypatch.delenv(key, raising=False)
 
@@ -368,14 +368,14 @@ class TestLoadGatewayConfig:
 
 
     def test_quick_commands_from_nested_gateway_section(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "gateway:\n  quick_commands:\n    limits:\n      type: exec\n      command: echo ok\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
@@ -385,14 +385,14 @@ class TestLoadGatewayConfig:
         """Asserts False (not the True default) so the test fails if the
         nested gateway.stt value never reaches from_dict() and silently
         falls back to the class default instead."""
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "gateway:\n  stt:\n    enabled: false\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
@@ -422,13 +422,13 @@ class TestLoadGatewayConfig:
         server unless API_SERVER_* env vars were also set.
         """
         self._clear_api_server_env(monkeypatch)
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        (hermes_home / "config.yaml").write_text(
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        (zeloo_home / "config.yaml").write_text(
             "gateway:\n  api_server:\n    enabled: true\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
@@ -441,19 +441,19 @@ class TestLoadGatewayConfig:
         (gateway/platforms/api_server.py), and from_dict discards unknown
         top-level keys, so without the bridge the port is silently lost."""
         self._clear_api_server_env(monkeypatch)
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        (hermes_home / "config.yaml").write_text(
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        (zeloo_home / "config.yaml").write_text(
             "gateway:\n"
             "  api_server:\n"
             "    enabled: true\n"
             "    port: 8642\n"
             "    host: 0.0.0.0\n"
             "    key: sekrit\n"
-            "    model_name: my-hermes\n",
+            "    model_name: my-Zeloo\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
@@ -461,24 +461,24 @@ class TestLoadGatewayConfig:
         assert extra["port"] == 8642
         assert extra["host"] == "0.0.0.0"
         assert extra["key"] == "sekrit"
-        assert extra["model_name"] == "my-hermes"
+        assert extra["model_name"] == "my-Zeloo"
 
     def test_room_link_url_from_nested_gateway_section(self, tmp_path, monkeypatch):
         """The supported config path advertises no endpoint until restart."""
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        (hermes_home / "config.yaml").write_text(
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        (zeloo_home / "config.yaml").write_text(
             "gateway:\n"
-            "  room_link_url: https://peer.example.test/hermes\n",
+            "  room_link_url: https://peer.example.test/Zeloo\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
-        assert config.room_link_url == "https://peer.example.test/hermes"
+        assert config.room_link_url == "https://peer.example.test/Zeloo"
         assert GatewayConfig.from_dict(config.to_dict()).room_link_url == (
-            "https://peer.example.test/hermes"
+            "https://peer.example.test/Zeloo"
         )
 
 
@@ -487,9 +487,9 @@ class TestLoadGatewayConfig:
         Platform enum: ``gateway.streaming`` / ``gateway.timeout`` must not
         be turned into phantom platform entries or break loading."""
         self._clear_api_server_env(monkeypatch)
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        (hermes_home / "config.yaml").write_text(
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        (zeloo_home / "config.yaml").write_text(
             "gateway:\n"
             "  streaming:\n"
             "    enabled: false\n"
@@ -498,7 +498,7 @@ class TestLoadGatewayConfig:
             "    enabled: true\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
@@ -510,14 +510,14 @@ class TestLoadGatewayConfig:
 
 
     def test_group_sessions_per_user_from_nested_gateway_section(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "gateway:\n  group_sessions_per_user: false\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
@@ -525,28 +525,28 @@ class TestLoadGatewayConfig:
 
 
     def test_reset_triggers_from_nested_gateway_section(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "gateway:\n  reset_triggers:\n    - /new\n    - /clear\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
         assert config.reset_triggers == ["/new", "/clear"]
 
     def test_always_log_local_from_nested_gateway_section(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "gateway:\n  always_log_local: false\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
@@ -554,14 +554,14 @@ class TestLoadGatewayConfig:
 
 
     def test_unauthorized_dm_behavior_from_nested_gateway_section(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "gateway:\n  unauthorized_dm_behavior: ignore\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
@@ -574,9 +574,9 @@ class TestLoadGatewayConfig:
         the adapter in the platform_registry is NOT enough — the connect loop
         iterates config.platforms, so an un-enabled RELAY never connects (the
         'relay registered but no inbound' bug)."""
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
         monkeypatch.setenv("GATEWAY_RELAY_URL", "https://connector.example/relay/")
 
         config = load_gateway_config()
@@ -594,9 +594,9 @@ class TestLoadGatewayConfig:
         connections: directly-connected messaging platforms must be disabled,
         even when explicitly enabled in config.yaml, while non-messaging
         surfaces (api_server et al.) survive."""
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "gateway:\n"
             "  platforms:\n"
@@ -607,7 +607,7 @@ class TestLoadGatewayConfig:
             "      enabled: true\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
         monkeypatch.setenv("GATEWAY_RELAY_URL", "https://connector.example/relay")
         # Credential-based auto-enable path must be suppressed too.
         monkeypatch.setenv("DISCORD_BOT_TOKEN", "fake-token-for-test")
@@ -625,9 +625,9 @@ class TestLoadGatewayConfig:
     def test_relay_yaml_url_keeps_other_platforms_enabled(self, tmp_path, monkeypatch):
         """gateway.relay_url in config.yaml (no env stamp) keeps the old
         additive behavior: relay runs beside directly-connected platforms."""
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "gateway:\n"
             "  platforms:\n"
@@ -640,7 +640,7 @@ class TestLoadGatewayConfig:
             "      bot_token: '123:abc'\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
         monkeypatch.delenv("GATEWAY_RELAY_URL", raising=False)
 
         config = load_gateway_config()
@@ -653,9 +653,9 @@ class TestLoadGatewayConfig:
         """GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true opts a deployment out of
         the relay-exclusive sweep: direct adapters stay enabled beside the
         relay even with the GATEWAY_RELAY_URL env stamp present."""
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "gateway:\n"
             "  platforms:\n"
@@ -664,7 +664,7 @@ class TestLoadGatewayConfig:
             "      bot_token: '123:abc'\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
         monkeypatch.setenv("GATEWAY_RELAY_URL", "https://connector.example/relay")
         monkeypatch.setenv("GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS", "true")
 
@@ -683,12 +683,12 @@ class TestLoadGatewayConfig:
         override the shared process stamp — an isolated multiplex scope is
         never consulted for globals. (A single-profile gateway, or the profile
         the process is launched under, still activates via its .env because
-        load_hermes_dotenv exports that file into os.environ at startup.)"""
+        load_zeloo_dotenv exports that file into os.environ at startup.)"""
         from agent import secret_scope as ss
 
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "gateway:\n"
             "  platforms:\n"
@@ -697,7 +697,7 @@ class TestLoadGatewayConfig:
             "      bot_token: '123:abc'\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
         # Managed-deploy stamp in the process env; the profile .env has none.
         monkeypatch.setenv("GATEWAY_RELAY_URL", "https://deploy.example/relay")
 
@@ -743,9 +743,9 @@ class TestLoadGatewayConfig:
         load."""
         import logging as _logging
 
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "gateway:\n"
             "  platforms:\n"
@@ -754,7 +754,7 @@ class TestLoadGatewayConfig:
             "      bot_token: '123:abc'\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
         monkeypatch.setenv("GATEWAY_RELAY_URL", "https://connector.example/relay")
         monkeypatch.setenv("DISCORD_BOT_TOKEN", "fake-token-for-test")
 
@@ -779,16 +779,16 @@ class TestLoadGatewayConfig:
 
     def test_thread_require_mention_yaml_does_not_overwrite_env(self, tmp_path, monkeypatch):
         """Explicit env var should win over config.yaml (env > yaml precedence)."""
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "discord:\n"
             "  thread_require_mention: false\n",
             encoding="utf-8",
         )
 
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
         monkeypatch.setenv("DISCORD_THREAD_REQUIRE_MENTION", "true")  # user override
 
         load_gateway_config()
@@ -804,9 +804,9 @@ class TestLoadGatewayConfig:
         adapter reads it from PlatformConfig.extra, but gateway auth
         (_is_user_authorized) only consults the env var.
         """
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "gateway:\n"
             "  platforms:\n"
@@ -819,7 +819,7 @@ class TestLoadGatewayConfig:
             encoding="utf-8",
         )
 
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
         monkeypatch.delenv("DINGTALK_ALLOWED_USERS", raising=False)
 
         config = load_gateway_config()
@@ -832,9 +832,9 @@ class TestLoadGatewayConfig:
 
 
     def test_top_level_platforms_override_nested_gateway_platforms(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "gateway:\n"
             "  platforms:\n"
@@ -852,7 +852,7 @@ class TestLoadGatewayConfig:
             encoding="utf-8",
         )
 
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
@@ -871,9 +871,9 @@ class TestLoadGatewayConfig:
         and allow_from was silently ignored.  The apply_yaml_config_fn dispatch
         received the same fix in #44f3e51; the shared-key loop now mirrors it.
         """
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "platforms:\n"
             "  telegram:\n"
@@ -884,7 +884,7 @@ class TestLoadGatewayConfig:
             encoding="utf-8",
         )
 
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
@@ -900,9 +900,9 @@ class TestLoadGatewayConfig:
 
 
     def test_bridges_unauthorized_dm_behavior_from_config_yaml(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "unauthorized_dm_behavior: ignore\n"
             "whatsapp:\n"
@@ -910,7 +910,7 @@ class TestLoadGatewayConfig:
             encoding="utf-8",
         )
 
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
@@ -919,9 +919,9 @@ class TestLoadGatewayConfig:
 
 
     def test_loads_telegram_rich_messages_from_gateway_platform_extra(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "gateway:\n"
             "  platforms:\n"
@@ -931,7 +931,7 @@ class TestLoadGatewayConfig:
             encoding="utf-8",
         )
 
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
@@ -939,16 +939,16 @@ class TestLoadGatewayConfig:
 
 
     def test_telegram_proxy_env_takes_precedence_over_config(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "telegram:\n"
             "  proxy_url: http://from-config:8080\n",
             encoding="utf-8",
         )
 
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
         monkeypatch.setenv("TELEGRAM_PROXY", "socks5://from-env:1080")
 
         load_gateway_config()
@@ -977,7 +977,7 @@ class TestLoadGatewayConfig:
             encoding="utf-8",
         )
 
-        monkeypatch.setenv("HERMES_HOME", str(default_home))
+        monkeypatch.setenv("ZELOO_HOME", str(default_home))
         monkeypatch.setenv("API_SERVER_ENABLED", "true")
         monkeypatch.setenv("DISCORD_BOT_TOKEN", "default-token")
 
@@ -987,13 +987,13 @@ class TestLoadGatewayConfig:
         # os.environ (single-profile overlay semantics, #67827) and this test
         # would no longer exercise the cross-profile isolation it's about.
         set_multiplex_active(True)
-        home_token = set_hermes_home_override(str(secondary_home))
+        home_token = set_zeloo_home_override(str(secondary_home))
         secret_token = set_secret_scope({"DISCORD_BOT_TOKEN": "worker-token"})
         try:
             config = load_gateway_config()
         finally:
             reset_secret_scope(secret_token)
-            reset_hermes_home_override(home_token)
+            reset_zeloo_home_override(home_token)
             set_multiplex_active(False)
 
         assert config.multiplex_profiles is True
@@ -1019,9 +1019,9 @@ class TestWebhookPortBridging:
     causing port conflicts between profiles that configure different ports."""
 
     def test_webhook_port_bridged_from_toplevel(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "platforms:\n"
             "  webhook:\n"
@@ -1030,7 +1030,7 @@ class TestWebhookPortBridging:
             "    port: 8649\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
         monkeypatch.delenv("WEBHOOK_ENABLED", raising=False)
         monkeypatch.delenv("WEBHOOK_PORT", raising=False)
 
@@ -1046,9 +1046,9 @@ class TestWebhookPortBridging:
     def test_msgraph_webhook_port_host_secret_bridged_from_toplevel(self, tmp_path, monkeypatch):
         """msgraph_webhook top-level port/host/secret must be bridged into extra,
         with an explicit extra: value still winning over the top-level one."""
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        config_path = zeloo_home / "config.yaml"
         config_path.write_text(
             "platforms:\n"
             "  msgraph_webhook:\n"
@@ -1061,7 +1061,7 @@ class TestWebhookPortBridging:
             "      secret: extra-secret\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
         monkeypatch.delenv("MSGRAPH_WEBHOOK_ENABLED", raising=False)
         monkeypatch.delenv("MSGRAPH_WEBHOOK_PORT", raising=False)
         monkeypatch.delenv("MSGRAPH_WEBHOOK_CLIENT_STATE", raising=False)
@@ -1133,7 +1133,7 @@ class TestHomeChannelEnvOverrides:
                 PlatformConfig(
                     enabled=True,
                     extra={
-                        "address": "hermes@test.com",
+                        "address": "Zeloo@test.com",
                         "imap_host": "imap.test.com",
                         "smtp_host": "smtp.test.com",
                     },
@@ -1169,11 +1169,11 @@ class TestMultiplexProfilesEnvOverride:
     """
 
     def _load(self, tmp_path, monkeypatch, config_text=None):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir(exist_ok=True)
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir(exist_ok=True)
         if config_text is not None:
-            (hermes_home / "config.yaml").write_text(config_text, encoding="utf-8")
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+            (zeloo_home / "config.yaml").write_text(config_text, encoding="utf-8")
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
         return load_gateway_config()
 
     # ── Tier 1: env wins ──────────────────────────────────────────────────
@@ -1216,18 +1216,18 @@ class TestMultiplexProfilesConfig:
 
 
     def test_multiplex_profiles_nested_under_gateway(self, tmp_path, monkeypatch):
-        """gateway.multiplex_profiles (the form written by `hermes config set
+        """gateway.multiplex_profiles (the form written by `Zeloo config set
         gateway.multiplex_profiles true`) must be honored. Regression test for
         the silent-fallback bug where the loader only forwarded the top-level
         key, so users who wrote it under gateway: got multiplex_profiles=False
         with no warning."""
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        (hermes_home / "config.yaml").write_text(
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        (zeloo_home / "config.yaml").write_text(
             "gateway:\n  multiplex_profiles: true\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 
@@ -1245,14 +1245,14 @@ class TestMultiplexProfilesConfig:
         nested form (so a stale `gateway.multiplex_profiles: true` cannot
         silently re-enable multiplexing). Guards against a future regression
         that flips the check to `not _mp`."""
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        (hermes_home / "config.yaml").write_text(
+        zeloo_home = tmp_path / ".Zeloo"
+        zeloo_home.mkdir()
+        (zeloo_home / "config.yaml").write_text(
             "multiplex_profiles: false\n"
             "gateway:\n  multiplex_profiles: true\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("ZELOO_HOME", str(zeloo_home))
 
         config = load_gateway_config()
 

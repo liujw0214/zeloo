@@ -59,7 +59,7 @@ _PATTERNS: List[Tuple[str, str, str]] = [
     (r'only\s+use\s+one[\s\-]?liners?\b', "anti_forensic_oneliner", "context"),
     (rf'never\s+{_FILLER}(?:create|write)\s+{_FILLER}(?:script|file)\s+{_FILLER}disk', "anti_forensic_disk", "context"),
     # Unsetting agent-runtime env vars is pure attack behavior (Brainworm sub-session bypass).
-    (r'unset\s+\w*(?:CLAUDE|CODEX|HERMES|AGENT|OPENAI|ANTHROPIC)\w*', "env_var_unset_agent", "context"),
+    (r'unset\s+\w*(?:CLAUDE|CODEX|Zeloo|AGENT|OPENAI|ANTHROPIC)\w*', "env_var_unset_agent", "context"),
 
     # ── Known C2 / red-team framework names (warn-only) ─────────────
     # Every token must be a distinctive offensive-security brand: a common English word here
@@ -81,9 +81,9 @@ _PATTERNS: List[Tuple[str, str, str]] = [
     # ── Persistence / SSH backdoor (strict scope — memory + skills) ──
     (r'authorized_keys', "ssh_backdoor", "strict"),
     (r'\$HOME/\.ssh|\~/\.ssh', "ssh_access", "strict"),
-    (r'\$HOME/\.hermes/\.env|\~/\.hermes/\.env', "hermes_env", "strict"),
+    (r'\$HOME/\.Zeloo/\.env|\~/\.Zeloo/\.env', "zeloo_env", "strict"),
     (rf'{_MODIFY}(?:AGENTS\.md|CLAUDE\.md|\.cursorrules|\.clinerules)', "agent_config_mod", "strict"),
-    (rf'{_MODIFY}\.hermes/(config\.yaml|SOUL\.md)', "hermes_config_mod", "strict"),
+    (rf'{_MODIFY}\.Zeloo/(config\.yaml|SOUL\.md)', "zeloo_config_mod", "strict"),
 
     # ── Hardcoded secrets ────────────────────────────────────────────
     (r'(?:api[_-]?key|token|secret|password)\s*[=:]\s*["\'][A-Za-z0-9+/=_-]{20,}', "hardcoded_secret", "strict"),

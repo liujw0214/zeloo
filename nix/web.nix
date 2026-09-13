@@ -1,10 +1,10 @@
-# nix/web.nix — Hermes Web Dashboard (Vite/React) frontend build
-{ hermesNpmLib, ... }:
-hermesNpmLib.buildNpmPackage {
+# nix/web.nix — Zeloo Web Dashboard (Vite/React) frontend build
+{ ZELOONpmLib, ... }:
+ZELOONpmLib.buildNpmPackage {
   dirs = [
     "web"
 
-    # @hermes/shared ships as a file: workspace dep of web, so its source
+    # @Zeloo/shared ships as a file: workspace dep of web, so its source
     # must be in the filtered src tree too.
     "apps/shared"
   ];
@@ -16,7 +16,7 @@ hermesNpmLib.buildNpmPackage {
     # The workspace root's node_modules/ is at ../node_modules/.
     cd web
     node ../node_modules/typescript/bin/tsc -b
-    # outDir in vite.config.ts points to ../hermes_cli/web_dist for the
+    # outDir in vite.config.ts points to ../zeloo_cli/web_dist for the
     # monorepo layout.  Override with --outDir dist for the nix build.
     node ../node_modules/vite/bin/vite.js build --outDir dist
 

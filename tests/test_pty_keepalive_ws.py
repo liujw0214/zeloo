@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from hermes_cli import web_server
-import hermes_cli.web_server_chat as _web_server_chat
+from zeloo_cli import web_server
+import zeloo_cli.web_server_chat as _web_server_chat
 
 
 class FakeBridge:
@@ -49,7 +49,7 @@ def pty_keepalive_harness(monkeypatch):
 
     async def fake_argv(**kw):
         resume = "child" if kw.get("resume") == "parent" else kw.get("resume")
-        env = {"HERMES_TUI_RESUME": resume} if resume else {}
+        env = {"ZELOO_TUI_RESUME": resume} if resume else {}
         return (["x", resume or "fresh"], "/tmp", env)
 
     monkeypatch.setattr(_web_server_chat, "_resolve_chat_argv_async", fake_argv)

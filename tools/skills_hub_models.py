@@ -178,11 +178,11 @@ def _parse_frontmatter(content: str) -> dict:
         return {}
 
 
-def _hermes_tags(fm: dict) -> Any:
-    """``metadata.hermes.tags`` from parsed frontmatter, or ``[]`` (unvalidated type)."""
+def _zeloo_tags(fm: dict) -> Any:
+    """``metadata.Zeloo.tags`` from parsed frontmatter, or ``[]`` (unvalidated type)."""
     metadata = fm.get("metadata", {})
-    hermes_meta = metadata.get("hermes", {}) if isinstance(metadata, dict) else None
-    return hermes_meta.get("tags", []) if isinstance(hermes_meta, dict) else []
+    zeloo_meta = metadata.get("Zeloo", {}) if isinstance(metadata, dict) else None
+    return zeloo_meta.get("tags", []) if isinstance(zeloo_meta, dict) else []
 
 
 def source_url_for_bundle(bundle: SkillBundle) -> str:

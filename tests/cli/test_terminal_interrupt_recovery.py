@@ -6,7 +6,7 @@ reply (``ESC[<row>;<col>R``) arrives on stdin after the input parser has torn
 down. The reply then leaks as literal text (``^[[19;1R``) and the VT100 parser
 can stall, accepting no further keystrokes — the terminal appears frozen.
 
-The recovery path lives in ``HermesCLI._recover_terminal_after_interrupt()``,
+The recovery path lives in ``ZELOOCLI._recover_terminal_after_interrupt()``,
 which is invoked from ``process_loop``'s ``finally`` block only when
 ``self._last_turn_interrupted`` is set. It must:
   1. Drain stray escape bytes from the OS input buffer (``flush_stdin``).
@@ -24,22 +24,22 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import cli as cli_mod
-from cli import HermesCLI
+from cli import ZELOOCLI
 
 
 @pytest.fixture
 def bare_cli():
-    """A HermesCLI with no __init__ — we only exercise the recovery helper."""
-    return object.__new__(HermesCLI)
+    """A ZELOOCLI with no __init__ — we only exercise the recovery helper."""
+    return object.__new__(ZELOOCLI)
 
 
 class TestRecoverTerminalAfterInterrupt:
-    """Directly exercise HermesCLI._recover_terminal_after_interrupt()."""
+    """Directly exercise ZELOOCLI._recover_terminal_after_interrupt()."""
 
     def test_drains_stdin_then_redraws(self, bare_cli):
         """Happy path: flush_stdin runs, then a full redraw is forced."""
         bare_cli._force_full_redraw = MagicMock()
-        with patch("hermes_cli.curses_ui.flush_stdin") as mock_flush:
+        with patch("zeloo_cli.curses_ui.flush_stdin") as mock_flush:
             bare_cli._recover_terminal_after_interrupt()
 
         mock_flush.assert_called_once()
@@ -53,7 +53,7 @@ class TestRecoverTerminalAfterInterrupt:
         """
         bare_cli._force_full_redraw = MagicMock()
         with patch(
-            "hermes_cli.curses_ui.flush_stdin", side_effect=OSError("no tty")
+            "zeloo_cli.curses_ui.flush_stdin", side_effect=OSError("no tty")
         ):
             bare_cli._recover_terminal_after_interrupt()  # must not raise
 
@@ -66,7 +66,7 @@ class TestRecoverTerminalAfterInterrupt:
             side_effect=lambda: events.append("redraw")
         )
         with patch(
-            "hermes_cli.curses_ui.flush_stdin",
+            "zeloo_cli.curses_ui.flush_stdin",
             side_effect=lambda: events.append("flush"),
         ):
             bare_cli._recover_terminal_after_interrupt()
@@ -79,7 +79,7 @@ class TestRecoverTerminalAfterInterrupt:
         Under pytest stdin is not a TTY, so this must return cleanly without
         touching termios.
         """
-        from hermes_cli.curses_ui import flush_stdin
+        from zeloo_cli.curses_ui import flush_stdin
 
         flush_stdin()  # must not raise in a non-TTY test environment
 
@@ -93,8 +93,8 @@ class TestFinallyBlockWiring:
     """
 
     def test_recovery_is_invoked_behind_interrupt_guard(self):
-        # process_loop's post-turn finally block is HermesCLI._tui_after_turn.
-        src = inspect.getsource(HermesCLI._tui_after_turn)
+        # process_loop's post-turn finally block is ZELOOCLI._tui_after_turn.
+        src = inspect.getsource(ZELOOCLI._tui_after_turn)
         # The recovery call must be gated on _last_turn_interrupted so it only
         # fires after an actual interrupt, not on every normal turn.
         guard = re.search(
@@ -109,5 +109,5 @@ class TestFinallyBlockWiring:
         )
 
     def test_recovery_helper_exists(self):
-        assert hasattr(HermesCLI, "_recover_terminal_after_interrupt")
-        assert callable(HermesCLI._recover_terminal_after_interrupt)
+        assert hasattr(ZELOOCLI, "_recover_terminal_after_interrupt")
+        assert callable(ZELOOCLI._recover_terminal_after_interrupt)

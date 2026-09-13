@@ -99,34 +99,34 @@ _PERSISTENCE_CAUSE_EXPLANATIONS: Dict[str, str] = {
         "session id, then send your message again."
     ),
     "turn_lease": (
-        "the turn was stopped because another Hermes process "
+        "the turn was stopped because another Zeloo process "
         "took over this session. Your reply was not saved — wait "
         "for the other process to finish, then send your message "
         "again."
     ),
     "locked": (
         "the turn was stopped because session storage was busy "
-        "(another Hermes process was writing to the state "
+        "(another Zeloo process was writing to the state "
         "database). Your message should already be saved — "
         "please send it again in a moment."
     ),
     "replaced": (
         "the turn was stopped because the state database file "
         "was replaced underneath this process. Do not run "
-        "`hermes doctor --fix` or in-place FTS repair — stop "
+        "`Zeloo doctor --fix` or in-place FTS repair — stop "
         "the process, restore the intended state.db, then "
         "restart. Unwritten messages were diverted to "
         "sessions/<session_id>.jsonl and, on the gateway, "
         "pending_messages/pending-*.json."
     ),
     "deleted_wal": (
-        "the turn was stopped because a live Hermes process held a retired "
+        "the turn was stopped because a live Zeloo process held a retired "
         "state.db-wal generation after its pathname was deleted or "
         "replaced. Stop the gateway, dashboard, and cron writers; "
         "do not overwrite the current state.db or delete its sidecars. "
-        "Check the logs for whether Hermes captured the retired generation, "
+        "Check the logs for whether Zeloo captured the retired generation, "
         "then read the adjacent state.db.retired-wal-*/manifest.json. If "
-        "manifest.main.mode is `copied`, inspect that artifact with `hermes "
+        "manifest.main.mode is `copied`, inspect that artifact with `Zeloo "
         "sessions recover --source <state.db.retired-wal-*/state.db> "
         "--inspect-only` before deciding whether its committed frames belong "
         "on the current database. A `header_only` artifact is forensic and "
@@ -139,10 +139,10 @@ _PERSISTENCE_CAUSE_EXPLANATIONS: Dict[str, str] = {
         "reported structural corruption (the transcript would "
         "have been lost on restart). Freeing disk space will "
         "not help. Recovery options:\n"
-        "1. Run `hermes {profile_arg}doctor --fix`\n"
+        "1. Run `Zeloo {profile_arg}doctor --fix`\n"
         "2. Stop the gateway, then recover with:\n"
-        "   hermes {profile_arg}sessions recover --source {db_path} --inspect-only\n"
-        "   (if it reports recoverable) hermes {profile_arg}sessions recover "
+        "   Zeloo {profile_arg}sessions recover --source {db_path} --inspect-only\n"
+        "   (if it reports recoverable) Zeloo {profile_arg}sessions recover "
         "--source {db_path} --output recovered-state.db\n"
         "   — recovery snapshots the damaged file first; do NOT "
         "run `sqlite3 ... \".recover\"` against the live "
@@ -157,8 +157,8 @@ _PERSISTENCE_CAUSE_EXPLANATIONS: Dict[str, str] = {
         "the turn was stopped because the session search index (FTS5) "
         "is corrupt and could not be detached, so this message was not "
         "saved. The message store itself is not damaged: do not run "
-        "recovery tools or restore a backup. Run `hermes {profile_arg}doctor --fix` "
-        "(or restart Hermes, which repairs the index on open), then "
+        "recovery tools or restore a backup. Run `Zeloo {profile_arg}doctor --fix` "
+        "(or restart Zeloo, which repairs the index on open), then "
         "send your message again."
     ),
     "disk": (
@@ -172,7 +172,7 @@ _PERSISTENCE_CAUSE_EXPLANATIONS: Dict[str, str] = {
 _PERSISTENCE_DEFAULT_EXPLANATION = (
     "the turn was stopped because session storage could not be "
     "written (the transcript would have been lost on restart). "
-    "Check the state database health (`hermes doctor`), then "
+    "Check the state database health (`Zeloo doctor`), then "
     "send your message again."
 )
 
@@ -182,7 +182,7 @@ def _display_flag_enabled(agent, *, env_var: str, config_key: str, cache_attr: s
 
     ``env_var`` overrides on every call and is never cached. Reads the persisted config.yaml
     so gateway and CLI share the setting; ``load_config`` is imported lazily (startup cycle,
-    and tests patch it at ``hermes_cli.config``). Any failure → True (safe default: on)."""
+    and tests patch it at ``zeloo_cli.config``). Any failure → True (safe default: on)."""
     try:
         env = os.environ.get(env_var)
         if env is not None:
@@ -191,7 +191,7 @@ def _display_flag_enabled(agent, *, env_var: str, config_key: str, cache_attr: s
         if cached is not None:
             return cached
         try:
-            from hermes_cli.config import load_config as _load_config
+            from zeloo_cli.config import load_config as _load_config
             _cfg = _load_config() or {}
         except Exception:
             _cfg = {}
@@ -232,7 +232,7 @@ class TurnExplainersMixin:
             if changed is not None:
                 changed.update(landed_paths)
             # Feed the checkpoint agent-write ledger so /rollback's safe mode can tell
-            # Hermes-authored content from later user hand-edits.
+            # Zeloo-authored content from later user hand-edits.
             mgr = getattr(self, "_checkpoint_mgr", None)
             if mgr is not None and getattr(mgr, "enabled", False):
                 for _p in landed_paths:
@@ -248,16 +248,16 @@ class TurnExplainersMixin:
                 state.pop(path, None)
 
     def _file_mutation_verifier_enabled(self) -> bool:
-        """``display.file_mutation_verifier`` / ``HERMES_FILE_MUTATION_VERIFIER`` (a patchable seam)."""
+        """``display.file_mutation_verifier`` / ``ZELOO_FILE_MUTATION_VERIFIER`` (a patchable seam)."""
         return _display_flag_enabled(
-            self, env_var="HERMES_FILE_MUTATION_VERIFIER", config_key="file_mutation_verifier",
+            self, env_var="ZELOO_FILE_MUTATION_VERIFIER", config_key="file_mutation_verifier",
             cache_attr="_file_mutation_verifier_enabled_cache",
         )
 
     def _turn_completion_explainer_enabled(self) -> bool:
-        """``display.turn_completion_explainer`` / ``HERMES_TURN_COMPLETION_EXPLAINER``."""
+        """``display.turn_completion_explainer`` / ``ZELOO_TURN_COMPLETION_EXPLAINER``."""
         return _display_flag_enabled(
-            self, env_var="HERMES_TURN_COMPLETION_EXPLAINER", config_key="turn_completion_explainer",
+            self, env_var="ZELOO_TURN_COMPLETION_EXPLAINER", config_key="turn_completion_explainer",
             cache_attr="_turn_completion_explainer_enabled_cache",
         )
 
@@ -331,13 +331,13 @@ class TurnExplainersMixin:
             if persistence_cause in ("corrupt", "fts_index"):
                 # Copy-pasteable, so name the store that actually failed and pin the profile:
                 # a multi-profile backend (Desktop serve) hosts sessions whose state.db is NOT
-                # the process default, and a bare `hermes` follows active_profile (#105887).
-                from hermes_constants import get_default_hermes_root, profile_cli_selector
-                from hermes_state import _default_db_path
+                # the process default, and a bare `Zeloo` follows active_profile (#105887).
+                from zeloo_constants import get_default_zeloo_root, profile_cli_selector
+                from zeloo_state import _default_db_path
 
                 body = body.replace("{profile_arg}", profile_cli_selector())
                 body = body.replace("{db_path}", str(db_path or _default_db_path()))
                 body = body.replace(
-                    "{backups_dir}", str(get_default_hermes_root() / "backups")
+                    "{backups_dir}", str(get_default_zeloo_root() / "backups")
                 )
         return _NO_REPLY + body if body else ""

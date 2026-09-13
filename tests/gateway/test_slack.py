@@ -202,7 +202,7 @@ def adapter():
 
 @pytest.fixture(autouse=True)
 def _redirect_cache(tmp_path, monkeypatch):
-    """Point document cache to tmp_path so tests don't touch ~/.hermes."""
+    """Point document cache to tmp_path so tests don't touch ~/.Zeloo."""
     monkeypatch.setattr(
         "gateway.platforms.base.DOCUMENT_CACHE_DIR", tmp_path / "doc_cache"
     )
@@ -379,7 +379,7 @@ class TestAppMentionHandler:
         assert "assistant_thread_started" in registered_events
         assert "assistant_thread_context_changed" in registered_events
         # Slack slash commands are registered via a single regex matcher
-        # covering every COMMAND_REGISTRY entry (e.g. /hermes, /btw, /stop,
+        # covering every COMMAND_REGISTRY entry (e.g. /Zeloo, /btw, /stop,
         # /model, ...) so users get native-slash parity with Discord and
         # Telegram. Verify the regex matches the key expected slashes.
         assert (
@@ -389,7 +389,7 @@ class TestAppMentionHandler:
         import re as _re
 
         assert isinstance(slash_matcher, _re.Pattern)
-        for expected in ("/hermes", "/btw", "/stop", "/model", "/help"):
+        for expected in ("/Zeloo", "/btw", "/stop", "/model", "/help"):
             assert slash_matcher.match(
                 expected
             ), f"Slack slash regex does not match {expected}"
@@ -558,7 +558,7 @@ class TestSlackConnectCleanup:
     async def test_disconnect_closes_workspace_clients_and_clears_runtime_state(self):
         """Regression for #51465: shutdown must close Slack WebClients.
 
-        ``hermes gateway run --replace`` takes the old process through the
+        ``Zeloo gateway run --replace`` takes the old process through the
         normal adapter.disconnect() path. If Slack leaves AsyncWebClient
         instances open there, aiohttp logs ``Unclosed client session`` while
         the old gateway exits after SIGTERM.
@@ -974,19 +974,19 @@ class TestSlackProxyBehavior:
         await pin_proxy(client=per_request_client, next_=_continue)
         assert per_request_client.proxy == "http://proxy.example.com:3128"
         assert continued is True
-        assert "hermes_feedback" in created_apps[0].registered_actions
-        assert "hermes_clarify_other" in created_apps[0].registered_actions
+        assert "zeloo_feedback" in created_apps[0].registered_actions
+        assert "zeloo_clarify_other" in created_apps[0].registered_actions
         clarify_choice_patterns = [
             action_id
             for action_id in created_apps[0].registered_actions
             if hasattr(action_id, "fullmatch")
         ]
         assert any(
-            pattern.fullmatch("hermes_clarify_choice_0")
+            pattern.fullmatch("zeloo_clarify_choice_0")
             for pattern in clarify_choice_patterns
         )
         assert not any(
-            pattern.fullmatch("hermes_clarify_choice")
+            pattern.fullmatch("zeloo_clarify_choice")
             for pattern in clarify_choice_patterns
         )
 
@@ -1194,12 +1194,12 @@ class TestStandaloneSendUserDmResolution:
             result = await _slack_mod._standalone_send(
                 config,
                 "C123",
-                "[Hermes](https://example.com/hermes)",
+                "[Zeloo](https://example.com/Zeloo)",
             )
 
         assert result["success"] is True
         payload = session.post.call_args.kwargs["json"]
-        assert payload["text"] == "<https://example.com/hermes|Hermes>"
+        assert payload["text"] == "<https://example.com/Zeloo|Zeloo>"
         assert payload["unfurl_links"] is False
         assert payload["unfurl_media"] is False
 
@@ -3423,7 +3423,7 @@ class TestSlashCommands:
 
     # ------------------------------------------------------------------
     # Native slash commands — /btw, /stop, /model, ... dispatched directly
-    # instead of as /hermes subcommands. This is the Discord/Telegram parity
+    # instead of as /Zeloo subcommands. This is the Discord/Telegram parity
     # fix: the slash name itself becomes the command.
     # ------------------------------------------------------------------
 
@@ -3466,15 +3466,15 @@ class TestSlashCommands:
 
 
     @pytest.mark.asyncio
-    async def test_legacy_hermes_prefix_still_works(self, adapter):
-        """Backward compat: /hermes btw foo must still route to /btw foo.
+    async def test_legacy_zeloo_prefix_still_works(self, adapter):
+        """Backward compat: /Zeloo btw foo must still route to /btw foo.
 
-        Old workspace manifests only declared /hermes as the single slash.
+        Old workspace manifests only declared /Zeloo as the single slash.
         After users refresh their manifest they get /btw natively, but the
         legacy form must keep working during the transition.
         """
         command = {
-            "command": "/hermes",
+            "command": "/Zeloo",
             "text": "btw run the tests",
             "user_id": "U1",
             "channel_id": "C1",
@@ -3528,7 +3528,7 @@ class TestMessageSplitting:
 
     @pytest.mark.asyncio
     async def test_send_coerces_string_unfurl_options(self, adapter):
-        """`hermes config set` / Railway persist YAML booleans as strings.
+        """`Zeloo config set` / Railway persist YAML booleans as strings.
 
         Relay-plane parity: string "false"/"true" must coerce instead of
         being silently dropped (which would leave previews on with no error).
@@ -4435,7 +4435,7 @@ class TestMissingCredentials:
         assert fatal_errors[0]["code"] == "missing_slack_app_token"
         assert fatal_errors[0]["retryable"] is False
         assert "SLACK_APP_TOKEN" in fatal_errors[0]["message"]
-        assert "hermes gateway setup" in fatal_errors[0]["message"].lower() or ".env" in fatal_errors[0]["message"]
+        assert "Zeloo gateway setup" in fatal_errors[0]["message"].lower() or ".env" in fatal_errors[0]["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -4527,10 +4527,10 @@ class TestTrackingStructureBounds:
     @pytest.mark.asyncio
     async def test_slash_command_contexts_bounded(self, adapter):
         adapter._SLASH_CTX_MAX = 4
-        adapter.handle_hermes_command = AsyncMock(return_value=None)
+        adapter.handle_zeloo_command = AsyncMock(return_value=None)
         for i in range(10):
             command = {
-                "command": "/hermes",
+                "command": "/Zeloo",
                 "text": "/status",
                 "user_id": f"U{i}",
                 "channel_id": "C1",
@@ -4795,7 +4795,7 @@ class TestThreadImageContext:
             ("T_TEAM", "U_ALICE"): "Alice",
             ("T_TEAM", "U_USER"): "User",
         }
-        a._download_slack_file = AsyncMock(return_value="/tmp/hermes-cached.png")
+        a._download_slack_file = AsyncMock(return_value="/tmp/Zeloo-cached.png")
         return a
 
     @pytest.fixture()
@@ -4855,7 +4855,7 @@ class TestThreadImageContext:
 
         a.handle_message.assert_awaited_once()
         msg_event = a.handle_message.call_args[0][0]
-        assert msg_event.media_urls == ["/tmp/hermes-cached.png"]
+        assert msg_event.media_urls == ["/tmp/Zeloo-cached.png"]
         assert msg_event.media_types == ["image/png"]
         assert msg_event.message_type == MessageType.PHOTO
         # The context marker AND the delivered image coexist.
@@ -5015,17 +5015,17 @@ class TestSlackUserAgent:
 
     Slack platform partners (analytics, abuse-detection, etc.) attribute
     outbound API traffic by ``User-Agent``. The Slack adapter sets
-    ``user_agent_prefix=_HERMES_SLACK_USER_AGENT_PREFIX`` on every
+    ``user_agent_prefix=_ZELOO_SLACK_USER_AGENT_PREFIX`` on every
     ``AsyncWebClient`` it builds and threads the primary client into
     ``AsyncApp(client=...)`` so the prefix sticks on the app-owned client too.
     Pin both behaviors at the actual call sites — a future refactor that
     drops either kwarg would silently break attribution otherwise.
     """
 
-    def test_hermes_slack_user_agent_prefix_format(self):
-        """Module constant matches the HermesAgent/<version> convention used
+    def test_zeloo_slack_user_agent_prefix_format(self):
+        """Module constant matches the ZELOOAgent/<version> convention used
         elsewhere in the codebase for platform-partner attribution."""
-        assert _slack_mod._HERMES_SLACK_USER_AGENT_PREFIX.startswith("HermesAgent/")
+        assert _slack_mod._ZELOO_SLACK_USER_AGENT_PREFIX.startswith("ZELOOAgent/")
 
 
 class TestNativeTaskCardProgress:
@@ -5797,7 +5797,7 @@ class TestSlackAuthoredTextDeduplication:
     @pytest.mark.parametrize(
         "flat",
         [
-            "hey <@U_BOT|hermes> please look",
+            "hey <@U_BOT|Zeloo> please look",
             "hey <@U_BOT> please look",
             "hey &lt;@U_BOT&gt; please look",
         ],

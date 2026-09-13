@@ -11,12 +11,12 @@ import type {
   WebhookCreateResponse,
   WebhookEnableResponse,
   WebhooksResponse
-} from '@/types/hermes'
+} from '@/types/Zeloo'
 
-import { hermesApi, profileScoped } from './client'
+import { ZELOOApi, profileScoped } from './client'
 
 export function getMessagingPlatforms(profile?: null | string): Promise<MessagingPlatformsResponse> {
-  return hermesApi<MessagingPlatformsResponse>({
+  return ZELOOApi<MessagingPlatformsResponse>({
     ...profileScoped(profile),
     path: '/api/messaging/platforms'
   })
@@ -27,7 +27,7 @@ export function updateMessagingPlatform(
   body: MessagingPlatformUpdate,
   profile?: null | string
 ): Promise<{ ok: boolean; platform: string }> {
-  return hermesApi<{ ok: boolean; platform: string }>({
+  return ZELOOApi<{ ok: boolean; platform: string }>({
     ...profileScoped(profile),
     path: `/api/messaging/platforms/${encodeURIComponent(platformId)}`,
     method: 'PUT',
@@ -39,7 +39,7 @@ export function testMessagingPlatform(
   platformId: string,
   profile?: null | string
 ): Promise<MessagingPlatformTestResponse> {
-  return hermesApi<MessagingPlatformTestResponse>({
+  return ZELOOApi<MessagingPlatformTestResponse>({
     ...profileScoped(profile),
     path: `/api/messaging/platforms/${encodeURIComponent(platformId)}/test`,
     method: 'POST'
@@ -55,7 +55,7 @@ export function startTelegramOnboarding(
   botName?: string,
   profile?: null | string
 ): Promise<TelegramOnboardingStartResponse> {
-  return hermesApi<TelegramOnboardingStartResponse>({
+  return ZELOOApi<TelegramOnboardingStartResponse>({
     ...profileScoped(profile),
     path: '/api/messaging/telegram/onboarding/start',
     method: 'POST',
@@ -67,7 +67,7 @@ export function getTelegramOnboardingStatus(
   pairingId: string,
   profile?: null | string
 ): Promise<TelegramOnboardingStatusResponse> {
-  return hermesApi<TelegramOnboardingStatusResponse>({
+  return ZELOOApi<TelegramOnboardingStatusResponse>({
     ...profileScoped(profile),
     path: `/api/messaging/telegram/onboarding/${encodeURIComponent(pairingId)}`
   })
@@ -78,7 +78,7 @@ export function applyTelegramOnboarding(
   allowedUserIds: string[],
   profile?: null | string
 ): Promise<TelegramOnboardingApplyResponse> {
-  return hermesApi<TelegramOnboardingApplyResponse>({
+  return ZELOOApi<TelegramOnboardingApplyResponse>({
     ...profileScoped(profile),
     path: `/api/messaging/telegram/onboarding/${encodeURIComponent(pairingId)}/apply`,
     method: 'POST',
@@ -87,7 +87,7 @@ export function applyTelegramOnboarding(
 }
 
 export function cancelTelegramOnboarding(pairingId: string, profile?: null | string): Promise<{ ok: boolean }> {
-  return hermesApi<{ ok: boolean }>({
+  return ZELOOApi<{ ok: boolean }>({
     ...profileScoped(profile),
     path: `/api/messaging/telegram/onboarding/${encodeURIComponent(pairingId)}`,
     method: 'DELETE'
@@ -102,7 +102,7 @@ export function cancelTelegramOnboarding(pairingId: string, profile?: null | str
 // a row they can already see.
 
 export function getPairing(profile?: null | string): Promise<PairingResponse> {
-  return hermesApi<PairingResponse>({
+  return ZELOOApi<PairingResponse>({
     ...profileScoped(profile),
     path: '/api/pairing'
   })
@@ -113,7 +113,7 @@ export function approvePairing(
   requestId: string,
   profile?: null | string
 ): Promise<{ ok: boolean; user: PairingUser }> {
-  return hermesApi<{ ok: boolean; user: PairingUser }>({
+  return ZELOOApi<{ ok: boolean; user: PairingUser }>({
     ...profileScoped(profile),
     path: '/api/pairing/approve',
     method: 'POST',
@@ -124,7 +124,7 @@ export function approvePairing(
 }
 
 export function revokePairing(platform: string, userId: string, profile?: null | string): Promise<{ ok: boolean }> {
-  return hermesApi<{ ok: boolean }>({
+  return ZELOOApi<{ ok: boolean }>({
     ...profileScoped(profile),
     path: '/api/pairing/revoke',
     method: 'POST',
@@ -138,14 +138,14 @@ export function revokePairing(platform: string, userId: string, profile?: null |
 // best-effort restarts the gateway; subscription changes hot-reload.
 
 export function getWebhooks(): Promise<WebhooksResponse> {
-  return hermesApi<WebhooksResponse>({
+  return ZELOOApi<WebhooksResponse>({
     ...profileScoped(),
     path: '/api/webhooks'
   })
 }
 
 export function enableWebhooks(): Promise<WebhookEnableResponse> {
-  return hermesApi<WebhookEnableResponse>({
+  return ZELOOApi<WebhookEnableResponse>({
     ...profileScoped(),
     path: '/api/webhooks/enable',
     method: 'POST'
@@ -153,7 +153,7 @@ export function enableWebhooks(): Promise<WebhookEnableResponse> {
 }
 
 export function createWebhook(body: WebhookCreatePayload): Promise<WebhookCreateResponse> {
-  return hermesApi<WebhookCreateResponse>({
+  return ZELOOApi<WebhookCreateResponse>({
     ...profileScoped(),
     path: '/api/webhooks',
     method: 'POST',
@@ -162,7 +162,7 @@ export function createWebhook(body: WebhookCreatePayload): Promise<WebhookCreate
 }
 
 export function deleteWebhook(name: string): Promise<{ ok: boolean }> {
-  return hermesApi<{ ok: boolean }>({
+  return ZELOOApi<{ ok: boolean }>({
     ...profileScoped(),
     path: `/api/webhooks/${encodeURIComponent(name)}`,
     method: 'DELETE'
@@ -173,7 +173,7 @@ export function setWebhookEnabled(
   name: string,
   enabled: boolean
 ): Promise<{ enabled: boolean; name: string; ok: boolean }> {
-  return hermesApi<{ enabled: boolean; name: string; ok: boolean }>({
+  return ZELOOApi<{ enabled: boolean; name: string; ok: boolean }>({
     ...profileScoped(),
     path: `/api/webhooks/${encodeURIComponent(name)}/enabled`,
     method: 'PUT',

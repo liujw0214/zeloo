@@ -59,7 +59,7 @@ class PlannedCall:
 class Partition:
     """The original ``calls[]`` split by destination, positions preserved."""
 
-    # (position, call) for entries hermes dispatches locally.
+    # (position, call) for entries Zeloo dispatches locally.
     local: tuple[tuple[int, Mapping[str, Any]], ...]
     # Connector-bound entries, original order preserved: remote[i] becomes
     # the gateway request's tools[i], which is also how responses correlate.

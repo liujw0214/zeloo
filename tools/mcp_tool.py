@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MCP (Model Context Protocol) client: connects to the ``mcp_servers`` configured in
-~/.hermes/config.yaml (stdio, Streamable HTTP or SSE), discovers their tools and registers them
-into the hermes tool registry. The ``mcp`` package is optional (no-op without it).
+~/.Zeloo/config.yaml (stdio, Streamable HTTP or SSE), discovers their tools and registers them
+into the Zeloo tool registry. The ``mcp`` package is optional (no-op without it).
 
 One background event loop (``_mcp_loop``) in a daemon thread runs each server as a long-lived
 Task (``MCPServerTask``) so the transport's anyio cancel scopes enter and exit in one Task; every
@@ -54,7 +54,7 @@ async def _preflight_stdio_command(server_name: str, command: str, args: list) -
         raise ValueError(f"MCP server '{server_name}': {malware_error}")
 
     # npx resolves the package and then FORKS, staying resident as the real server's parent for
-    # nothing (~48 MB per server, measured). Hermes already supervises the child (shared death
+    # nothing (~48 MB per server, measured). Zeloo already supervises the child (shared death
     # supervisor), so a cached package is spawned directly; a cache miss leaves npx untouched.
     if os.path.basename(command).lower().startswith("npx"):
         cached = _npx_cached_bin(args)
@@ -375,7 +375,7 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         self._rpc_lock = asyncio.Lock()
         self._pending_refresh_tasks: set[asyncio.Task] = set()
         # contextvars snapshot inside session.call_tool(): the SDK runs elicitation/create on a
-        # task that does not inherit HERMES_SESSION_PLATFORM, so the callback replays this.
+        # task that does not inherit ZELOO_SESSION_PLATFORM, so the callback replays this.
         self._pending_call_context: Optional[contextvars.Context] = None
         self._lifecycle_started_at = self._last_tool_call_at = time.monotonic()
         self._idle_timeout_seconds = self._max_lifetime_seconds = self._recycled_reason = None
@@ -713,7 +713,7 @@ def __getattr__(name):  # PEP 562 — chained onto the module's own __getattr__
     if target is None:
         return _plugin_compat_prev_getattr(name)
     import importlib
-    from hermes_cli.plugin_compat import warn_once
+    from zeloo_cli.plugin_compat import warn_once
     warn_once(__name__, name, *target)
     return getattr(importlib.import_module(target[0]), target[1])
 # ---- END PLUGIN-COMPAT ----

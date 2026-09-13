@@ -1,4 +1,4 @@
-"""Shared ``OAuthClientProvider`` customizations for Hermes MCP OAuth.
+"""Shared ``OAuthClientProvider`` customizations for Zeloo MCP OAuth.
 
 Two code paths build an SDK provider — ``tools.mcp_oauth.build_oauth_auth`` (legacy public
 API) and ``tools.mcp_oauth_manager.MCPOAuthManager`` — and both need the same real-world
@@ -12,13 +12,13 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from tools.mcp_oauth import HermesTokenStorage
+    from tools.mcp_oauth import ZELOOTokenStorage
 logger = logging.getLogger(__name__)
 
 
-class HermesProviderMixin:
+class ZELOOProviderMixin:
     """Token-endpoint fixes layered over the SDK's ``OAuthClientProvider`` (must precede it in
-    the MRO; subclasses set ``_hermes_logger`` to keep their own logger name).
+    the MRO; subclasses set ``_zeloo_logger`` to keep their own logger name).
 
     - Supabase-style dynamic registration returns a ``client_secret`` but omits
       ``token_endpoint_auth_method``; the SDK then treats the client as public and the token
@@ -27,43 +27,43 @@ class HermesProviderMixin:
       (some authorization servers/WAFs reject httpx's default).
     - Any 2xx token/refresh response is accepted; token bodies never leak into errors/logs."""
 
-    _hermes_logger: logging.Logger = logger
+    _zeloo_logger: logging.Logger = logger
 
     def __init__(self, *args: Any, token_user_agent: str | None = None, oauth_flow: str = "browser", **kwargs: Any):
         super().__init__(*args, **kwargs)
-        self._hermes_oauth_flow = oauth_flow
+        self._zeloo_oauth_flow = oauth_flow
         # oauth.user_agent — stamped onto token-endpoint requests only; some authorization servers/WAFs
         # reject httpx's default (#75576).
-        self._hermes_token_user_agent = token_user_agent
+        self._zeloo_token_user_agent = token_user_agent
 
     async def _perform_authorization(self):
         info = self.context.client_info
         grants = getattr(info, "grant_types", None) or []
-        if (getattr(self, "_hermes_oauth_flow", "browser") == "device"
+        if (getattr(self, "_zeloo_oauth_flow", "browser") == "device"
                 or ("urn:ietf:params:oauth:grant-type:device_code" in grants and "authorization_code" not in grants)):
             from tools.mcp_oauth import OAuthNonInteractiveError
             raise OAuthNonInteractiveError(
-                "MCP device authorization requires `hermes mcp login <server> --flow device`; "
+                "MCP device authorization requires `Zeloo mcp login <server> --flow device`; "
                 "background reconnects cannot start a device login")
         return await super()._perform_authorization()
 
     def _prepare_token_request(self, request):
         """Stamp the configured User-Agent onto a token/refresh request."""
-        ua = getattr(self, "_hermes_token_user_agent", None)  # tests build via __new__
+        ua = getattr(self, "_zeloo_token_user_agent", None)  # tests build via __new__
         if ua:
             request.headers["User-Agent"] = ua
         return request
 
     def _coerce_client_secret_post(self) -> None:
-        """Same rule as ``HermesTokenStorage._coerce_secret_auth_method``, applied to the
+        """Same rule as ``ZELOOTokenStorage._coerce_secret_auth_method``, applied to the
         in-memory client info BEFORE the SDK builds a token-endpoint request from it."""
         info = self.context.client_info
         if not info:
             return
         from mcp.shared.auth import OAuthClientInformationFull
-        from tools.mcp_oauth import HermesTokenStorage
+        from tools.mcp_oauth import ZELOOTokenStorage
         data = info.model_dump(mode="json", exclude_none=True)
-        if HermesTokenStorage._coerce_secret_auth_method(data):
+        if ZELOOTokenStorage._coerce_secret_auth_method(data):
             self.context.client_info = OAuthClientInformationFull.model_validate(data)
 
     async def _exchange_token_authorization_code(self, *args: Any, **kwargs: Any):
@@ -95,7 +95,7 @@ class HermesProviderMixin:
     async def _handle_refresh_response(self, response) -> bool:
         """Accept any 2xx refresh response; never log the body."""
         if not (200 <= response.status_code < 300):
-            self._hermes_logger.warning("Token refresh failed: %s", response.status_code)
+            self._zeloo_logger.warning("Token refresh failed: %s", response.status_code)
             self.context.clear_tokens()
             return False
         from httpx import HTTPError
@@ -104,7 +104,7 @@ class HermesProviderMixin:
         try:
             token_response = OAuthToken.model_validate_json(await response.aread())
         except (HTTPError, ValidationError):
-            self._hermes_logger.warning("Invalid refresh response: %s", response.status_code)
+            self._zeloo_logger.warning("Invalid refresh response: %s", response.status_code)
             self.context.clear_tokens()
             return False
         # RFC 6749 §6: a refresh response may omit refresh_token (AS does not rotate) and scope
@@ -121,17 +121,17 @@ class HermesProviderMixin:
         return True
 
 
-def prepare_oauth_config(server_name: str, server_url: str, oauth_config: dict | None) -> tuple[dict, "HermesTokenStorage"]:
+def prepare_oauth_config(server_name: str, server_url: str, oauth_config: dict | None) -> tuple[dict, "ZELOOTokenStorage"]:
     """Copy the ``oauth:`` block, apply provider defaults, open its token storage. The copy
     matters: later steps record ``_resolved_port`` / ``_cimd_url`` in the dict, which must
     never leak back into the caller's config."""
     from tools import mcp_oauth as mo
     cfg = dict(oauth_config or {})
     mo.apply_oauth_provider_defaults(cfg, server_name=server_name, server_url=server_url)
-    return cfg, mo.HermesTokenStorage(server_name)
+    return cfg, mo.ZELOOTokenStorage(server_name)
 
 
-def build_provider_kwargs(cfg: dict, storage: "HermesTokenStorage", *, ssh_proxy_hint: bool) -> dict[str, Any]:
+def build_provider_kwargs(cfg: dict, storage: "ZELOOTokenStorage", *, ssh_proxy_hint: bool) -> dict[str, Any]:
     """Resolve the callback port and return the shared provider constructor kwargs. Order
     matters: metadata needs the resolved port, pre-registration needs the metadata.
     ``ssh_proxy_hint`` lets the redirect handler tailor its remote-session hint to a configured

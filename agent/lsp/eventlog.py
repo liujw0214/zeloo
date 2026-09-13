@@ -17,7 +17,7 @@ from typing import List, Tuple
 
 # Dedicated logger name so the documented grep recipe survives any
 # ``logging.getLogger(__name__)`` rename of internal modules.
-event_log = logging.getLogger("hermes.lint.lsp")
+event_log = logging.getLogger("Zeloo.lint.lsp")
 
 _announce_lock = threading.Lock()
 _announced_active: set = set()        # keys: (server_id, workspace_root)
@@ -84,7 +84,7 @@ def log_server_unavailable(server_id: str, binary_or_pkg: str) -> None:
     _emit_once(
         _announced_unavailable, (server_id, binary_or_pkg), server_id, logging.WARNING,
         f"server unavailable: {binary_or_pkg} not found "
-        "(install via `hermes lsp install <id>` or set lsp.servers.<id>.command)",
+        "(install via `Zeloo lsp install <id>` or set lsp.servers.<id>.command)",
         f"server still unavailable: {binary_or_pkg}",
     )
 

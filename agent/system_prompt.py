@@ -19,19 +19,19 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from agent.prompt_builder import (
     DEFAULT_AGENT_IDENTITY, EXECUTION_GUIDANCE_MODELS, GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
-    HERMES_AGENT_HELP_GUIDANCE, HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS, KANBAN_GUIDANCE,
+    ZELOO_AGENT_HELP_GUIDANCE, ZELOO_AGENT_HELP_GUIDANCE_NO_SKILLS, KANBAN_GUIDANCE,
     PARALLEL_TOOL_CALL_GUIDANCE, PLATFORM_HINTS, SESSION_SEARCH_GUIDANCE,
     SKILLS_GUIDANCE, STEER_CHANNEL_NOTE, TASK_COMPLETION_GUIDANCE, TELEGRAM_RICH_MESSAGES_HINT,
     TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS, drain_truncation_warnings,
 )
 from agent import prompt_builder as _pb
 from agent.runtime_cwd import resolve_context_cwd
-from hermes_constants import get_default_hermes_root, get_hermes_home
+from zeloo_constants import get_default_zeloo_root, get_zeloo_home
 from utils import is_truthy_value
 
 logger = logging.getLogger(__name__)
 _PLUGIN_SECTION_FRAME_RE = re.compile(
-    r"^## Plugin Context: (?P<id>[a-z0-9][a-z0-9._-]{0,127})\n<!-- hermes-plugin-section-chars:(?P<chars>[0-9]{1,4}) -->\n\n",
+    r"^## Plugin Context: (?P<id>[a-z0-9][a-z0-9._-]{0,127})\n<!-- Zeloo-plugin-section-chars:(?P<chars>[0-9]{1,4}) -->\n\n",
     re.MULTILINE,
 )
 _GATE_WORDS = {**dict.fromkeys(("true", "always", "yes", "on"), True), **dict.fromkeys(("false", "never", "no", "off"), False)}
@@ -75,9 +75,9 @@ _TUI_EMBEDDED_PANE_CLARIFIER = (
 
 
 def _tui_embedded_pane_clarifier(hint: str) -> str:
-    """Append the desktop embedded-terminal clarifier when ``HERMES_DESKTOP_TERMINAL``
+    """Append the desktop embedded-terminal clarifier when ``ZELOO_DESKTOP_TERMINAL``
     is set (only the desktop's TUI PTY, never the chat backend). Idempotent."""
-    if not hint or _TUI_EMBEDDED_PANE_CLARIFIER in hint or not is_truthy_value(os.getenv("HERMES_DESKTOP_TERMINAL")):
+    if not hint or _TUI_EMBEDDED_PANE_CLARIFIER in hint or not is_truthy_value(os.getenv("ZELOO_DESKTOP_TERMINAL")):
         return hint
     return hint + _TUI_EMBEDDED_PANE_CLARIFIER
 
@@ -94,13 +94,13 @@ def _plugin_session_info(agent: Any) -> Dict[str, str]:
 
 
 def _ambient_plugin_profile_name() -> str:
-    from hermes_cli.profiles import get_active_profile_name
+    from zeloo_cli.profiles import get_active_profile_name
     return str(get_active_profile_name() or "default")
 
 
 def _active_profile_name(agent: Any, ambient) -> str:
     """Profile name from the agent's OWN home, else *ambient()*; "default" on any
-    failure. Ambient resolution misreports on threads that lost the HERMES_HOME
+    failure. Ambient resolution misreports on threads that lost the ZELOO_HOME
     ContextVar, which is why the agent's home is preferred."""
     try:
         home = _agent_home(agent)
@@ -121,7 +121,7 @@ def _frozen_plugin_prompt_sections(agent: Any) -> tuple:
         rendered = _restore_plugin_prompt_sections(stored_prompt)
     else:
         try:
-            from hermes_cli.plugins import render_system_prompt_sections
+            from zeloo_cli.plugins import render_system_prompt_sections
             rendered = tuple(render_system_prompt_sections(_plugin_session_info(agent)))
         except Exception as exc:
             rendered = getattr(agent, "_plugin_system_prompt_sections_previous", None)
@@ -138,7 +138,7 @@ def _restore_plugin_prompt_sections(prompt: str) -> tuple:
     """Recover frozen section bytes from the persisted full prompt.  Only the
     exact canonical container emitted by core is accepted — user/project text
     may resemble a frame."""
-    from hermes_cli.plugins import (
+    from zeloo_cli.plugins import (
         MAX_SYSTEM_PROMPT_SECTION_CHARS, PLUGIN_SECTIONS_END, PLUGIN_SECTIONS_START,
         RenderedPluginSystemPromptSection, format_system_prompt_sections,
     )
@@ -167,7 +167,7 @@ def restore_plugin_prompt_sections(agent: Any, prompt: str) -> None:
 
 
 def _plugin_section_blocks(sections: tuple, position: str) -> List[str]:
-    from hermes_cli.plugins import format_system_prompt_sections
+    from zeloo_cli.plugins import format_system_prompt_sections
     block = format_system_prompt_sections([s for s in sections if s.position == position])
     return [block] if block else []
 
@@ -222,7 +222,7 @@ def _session_start_like(agent: Any, now: Any) -> Any:
 
 def _agent_home(agent: Any) -> Optional[Path]:
     """The agent's OWN profile home, or None to use ambient resolution.
-    A bound HERMES_HOME ContextVar override wins (the gateway multiplexes
+    A bound ZELOO_HOME ContextVar override wins (the gateway multiplexes
     profiles over one shared session DB and binds the home per turn); else the
     parent of ``_session_db.db_path`` — ground truth on threads that lost the
     ContextVar, where ambient resolution would leak the launch profile.
@@ -237,8 +237,8 @@ def _agent_home(agent: Any) -> Optional[Path]:
     the default profile's skills/identity into a bot prompt.
     """
     try:
-        from hermes_constants import get_hermes_home_override
-        override = get_hermes_home_override()
+        from zeloo_constants import get_zeloo_home_override
+        override = get_zeloo_home_override()
         if override:
             return Path(override)
     except Exception:
@@ -258,12 +258,12 @@ def _agent_skills_dir(agent: Any) -> Optional[Path]:
 
 def _profile_name_for_home(home: Path) -> str:
     """``<root>/profiles/X`` -> ``"X"``; anything else -> ``"default"``.
-    Uses ``get_default_hermes_root()`` (NOT ``get_hermes_home()``): on a bound
+    Uses ``get_default_zeloo_root()`` (NOT ``get_zeloo_home()``): on a bound
     profile session the ambient home IS the profile dir, so every profile
     would misreport as "default"."""
     try:
-        from hermes_constants import get_default_hermes_root
-        rel = home.resolve().relative_to((get_default_hermes_root() / "profiles").resolve())
+        from zeloo_constants import get_default_zeloo_root
+        rel = home.resolve().relative_to((get_default_zeloo_root() / "profiles").resolve())
         return rel.parts[0] if rel.parts else "default"
     except (ValueError, OSError):
         return "default"
@@ -342,19 +342,19 @@ def _ambient_file_safety_profile_name() -> str:
 
 
 def _active_profile_line(agent: Any) -> str:
-    """Name the running profile so the agent doesn't conflate ``~/.hermes/skills``
-    (default) with ``~/.hermes/profiles/<active>/skills``.  Resolved from the
+    """Name the running profile so the agent doesn't conflate ``~/.Zeloo/skills``
+    (default) with ``~/.Zeloo/profiles/<active>/skills``.  Resolved from the
     agent's OWN home first (a build thread that lost the ContextVar would
     otherwise print "default" for a bot profile)."""
     _agent_home_path = _agent_home(agent)
     active_profile = _active_profile_name(agent, _ambient_file_safety_profile_name)
     if active_profile == "default":
         # With an explicit agent home, the default profile's data lives at the
-        # ROOT (get_hermes_home() on a bound profile session is the PROFILE dir).
+        # ROOT (get_zeloo_home() on a bound profile session is the PROFILE dir).
         # Without one, keep the ambient (patchable) resolution byte-identical.
-        _root_str = str(get_default_hermes_root() if _agent_home_path is not None else get_hermes_home())
+        _root_str = str(get_default_zeloo_root() if _agent_home_path is not None else get_zeloo_home())
         return (
-            "Active Hermes profile: default. Other profiles (if any) live "
+            "Active Zeloo profile: default. Other profiles (if any) live "
             "under " + _root_str + "/profiles/<name>/. Each profile has its own "
             "skills/, plugins/, cron/, and memories/ that affect a different "
             "session than this one. Do not modify another profile's "
@@ -363,15 +363,15 @@ def _active_profile_line(agent: Any) -> str:
         )
     # A non-default name is only returned when the resolved home is ALREADY
     # <root>/profiles/<name>, so the profile home is the session home itself.
-    profile_home = str(_agent_home_path) if _agent_home_path is not None else str(get_hermes_home())
+    profile_home = str(_agent_home_path) if _agent_home_path is not None else str(get_zeloo_home())
     # A non-default name is only ever returned when the resolved home is ALREADY <root>/profiles/<name> —
     # that is exactly how both _profile_name_for_home() and _resolve_active_profile_name() derive it. So the
     # profile home is the session home itself; appending /profiles/<name> again doubled it (#72894). The
-    # default profile's data sits at the ROOT (get_default_hermes_root()), which in ambient profile mode is
-    # NOT get_hermes_home().
-    default_root = get_default_hermes_root()
+    # default profile's data sits at the ROOT (get_default_zeloo_root()), which in ambient profile mode is
+    # NOT get_zeloo_home().
+    default_root = get_default_zeloo_root()
     return (
-        f"Active Hermes profile: {active_profile}. This session reads "
+        f"Active Zeloo profile: {active_profile}. This session reads "
         f"and writes {profile_home}/. The default "
         f"profile's data lives at {default_root}/skills/, {default_root}/plugins/, "
         f"{default_root}/cron/, {default_root}/memories/ — those belong to a "
@@ -406,7 +406,7 @@ def _telegram_rich_messages_enabled() -> bool:
     adapter uses (top-level ``platforms.telegram.extra`` overrides
     ``gateway.platforms.telegram.extra`` at the leaf). False on any read failure."""
     try:
-        from hermes_cli.config import load_config_readonly
+        from zeloo_cli.config import load_config_readonly
         _cfg = load_config_readonly()
         _gw = (((_cfg.get("gateway") or {}).get("platforms") or {}).get("telegram") or {}).get("extra")
         _top = ((_cfg.get("platforms") or {}).get("telegram") or {}).get("extra")
@@ -434,9 +434,9 @@ def _timestamp_line(agent: Any) -> str:
     """Date-only so the prompt is byte-stable for the day; zone + offset so
     tools needn't guess EST vs EDT. Long-lived sessions get an "as of" line on
     rebuild days (the cache prefix is already invalidated at that boundary)."""
-    from hermes_time import get_timezone as _hermes_tz, now as _hermes_now
-    now = _hermes_now()
-    _bits = _zone_bits(now, _hermes_tz())
+    from zeloo_time import get_timezone as _zeloo_tz, now as _zeloo_now
+    now = _zeloo_now()
+    _bits = _zone_bits(now, _zeloo_tz())
     _zone_suffix = f" ({', '.join(_bits)})" if _bits else ""
     _start = _session_start_like(agent, now)
     timestamp_line = f"Conversation started: {_start.strftime('%A, %B %d, %Y')}{_zone_suffix}"
@@ -588,7 +588,7 @@ def _context_files_part(agent: Any, ctx_len: Optional[int], soul_loaded: bool) -
     when set (gateway); None lets discovery fall back to the launch dir.  The
     install-tree fallback is only legitimate for cli/tui where the launch dir
     IS the user's shell cwd; desktop-pinned launch dirs are treated as the
-    fallback they really are so the guard can reject Hermes's bundled AGENTS.md."""
+    fallback they really are so the guard can reject Zeloo's bundled AGENTS.md."""
     if agent.skip_context_files:
         return []
     launch_artifact = getattr(agent, "_context_cwd_is_launch_artifact", False)
@@ -616,16 +616,16 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # ── Stable tier ────────────────────────────────────────────────
     stable_parts, _soul_loaded = _identity_parts(agent, _ctx_len)
     # The skill_view() pointer dangles without skill tools OR without the
-    # hermes-agent skill installed, so the variant is chosen after the skills
+    # Zeloo-agent skill installed, so the variant is chosen after the skills
     # index is built; this slot holds its position.
     _help_guidance_slot = len(stable_parts)
-    stable_parts.append(HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS)
+    stable_parts.append(ZELOO_AGENT_HELP_GUIDANCE_NO_SKILLS)
     stable_parts.extend(_guidance_parts(agent))
     skills_prompt = _skills_prompt(agent)
-    # Skill-pointer variant requires BOTH skill_view AND the hermes-agent skill
+    # Skill-pointer variant requires BOTH skill_view AND the Zeloo-agent skill
     # in the rendered index (pure string check — inherits the index's stability).
-    if "skill_view" in (agent.valid_tool_names or set()) and "- hermes-agent:" in skills_prompt:
-        stable_parts[_help_guidance_slot] = HERMES_AGENT_HELP_GUIDANCE
+    if "skill_view" in (agent.valid_tool_names or set()) and "- Zeloo-agent:" in skills_prompt:
+        stable_parts[_help_guidance_slot] = ZELOO_AGENT_HELP_GUIDANCE
     stable_parts.extend(_alibaba_identity_part(agent))
     # Coding posture: the operating brief stays in the stable prefix. The
     # environment block contains the current cwd/backend and belongs after
@@ -755,7 +755,7 @@ def __getattr__(name):  # PEP 562 — lazy so no import cycles
     if target is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     import importlib
-    from hermes_cli.plugin_compat import warn_once
+    from zeloo_cli.plugin_compat import warn_once
     warn_once(__name__, name, *target)
     return getattr(importlib.import_module(target[0]), target[1])
 # ---- END PLUGIN-COMPAT ----

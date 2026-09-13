@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from hermes_cli import worktree_ops
+from zeloo_cli import worktree_ops
 
 import cli
 
@@ -102,7 +102,7 @@ class TestResolveWorktreeBase:
 class TestResolveWorktreeBaseStartupCost:
     """The fetch on the -w startup path must be cheap and stall-proof.
 
-    A flaky smart-HTTP connection used to stall ``hermes -w`` for 30-60s
+    A flaky smart-HTTP connection used to stall ``Zeloo -w`` for 30-60s
     (30s fetch timeout in step 1, then a SECOND 30s fetch in step 2).
     """
 

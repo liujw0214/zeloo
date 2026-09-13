@@ -2,11 +2,11 @@
 name: dogfood
 description: "Exploratory QA of web apps: find bugs, evidence, reports."
 version: 1.0.0
-author: Teknium (teknium1), Hermes Agent
+author: Teknium (teknium1), Zeloo Agent
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
-  hermes:
+  Zeloo:
     tags: [qa, testing, browser, web, dogfood]
     related_skills: []
 ---

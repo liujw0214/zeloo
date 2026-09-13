@@ -38,7 +38,7 @@ const CHECK_IN_NOTE =
 interface FirstBuild {
   /** Profile the build session lives on. Carried because the whisper has to
    *  be routed explicitly: the user can walk back into Setup's chat while the
-   *  build runs, which makes hermes-setup the ACTIVE gateway. */
+   *  build runs, which makes Zeloo-setup the ACTIVE gateway. */
   profile: string
   sessionId: string
   tools: number

@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
-from hermes_constants import get_hermes_home
+from zeloo_constants import get_zeloo_home
 from tools.daemon_pool import DaemonThreadPoolExecutor
 from tools.thread_context import propagate_context_to_thread
 
@@ -79,7 +79,7 @@ _STALL_FIELD_MAP = (("_stall_quiet_seconds", "stalled_after_quiet_seconds"),
 
 # ── Durable ledger (state.db / async_delegations) ───────────────────────────
 def _db_path():
-    return get_hermes_home() / "state.db"
+    return get_zeloo_home() / "state.db"
 
 
 def _connect() -> sqlite3.Connection:
@@ -95,8 +95,8 @@ def _connect() -> sqlite3.Connection:
 
 
 def _initialize_schema(conn: sqlite3.Connection) -> None:
-    from hermes_state_repair import apply_durability_barriers
-    from hermes_state_schema import reconcile_state_schema
+    from zeloo_state_repair import apply_durability_barriers
+    from zeloo_state_schema import reconcile_state_schema
     # Preserve the journal mode SessionDB configured on state.db: forcing WAL from
     # every short-lived connection collides with live transcript/FTS writers.
     apply_durability_barriers(conn)
@@ -135,7 +135,7 @@ def _capture_routing_origin() -> Dict[str, Any]:
     Best-effort: empty values are omitted."""
     try:
         from gateway.session_context import get_session_env
-        return {k: v for k in _ROUTING_KEYS if (v := get_session_env(f"HERMES_SESSION_{k.upper()}", ""))}
+        return {k: v for k in _ROUTING_KEYS if (v := get_session_env(f"ZELOO_SESSION_{k.upper()}", ""))}
     except Exception:  # noqa: BLE001 - routing origin is additive, never fatal
         return {}
 
@@ -503,15 +503,15 @@ def _prune_completed_locked() -> None:
 
 
 def _current_origin_session_id() -> str:
-    """Raw session id of the ORIGINATING api_server request, or ``""``. ``HERMES_SESSION_ID``
+    """Raw session id of the ORIGINATING api_server request, or ``""``. ``ZELOO_SESSION_ID``
     is unsafe here: building the child agent calls ``set_current_session_id(child.session_id)``
     just before dispatch, so the wake would self-post into the subagent's own session. The
-    request-scoped ``HERMES_SESSION_CHAT_ID`` (raw X-Hermes-Session-Id on api_server) survives
+    request-scoped ``ZELOO_SESSION_CHAT_ID`` (raw X-Zeloo-Session-Id on api_server) survives
     child construction; on push platforms chat_id is a chat, not a session => ``""``."""
     try:
         from gateway.session_context import get_session_env
-        is_api = get_session_env("HERMES_SESSION_PLATFORM", "") == "api_server"
-        return (get_session_env("HERMES_SESSION_CHAT_ID", "") or "") if is_api else ""
+        is_api = get_session_env("ZELOO_SESSION_PLATFORM", "") == "api_server"
+        return (get_session_env("ZELOO_SESSION_CHAT_ID", "") or "") if is_api else ""
     except Exception:
         return ""
 
@@ -593,7 +593,7 @@ def _dispatch(
             _finalize(delegation_id, result, status)
 
     try:
-        # Propagate the dispatching profile so the detached child resolves get_hermes_home() correctly.
+        # Propagate the dispatching profile so the detached child resolves get_zeloo_home() correctly.
         executor.submit(propagate_context_to_thread(_worker))
     except Exception as exc:  # pragma: no cover — pool submit failure is rare
         with _records_lock:

@@ -1,4 +1,4 @@
-"""Skills Hub discovery: the centralized Hermes index fetch (cached, stale-
+"""Skills Hub discovery: the centralized Zeloo index fetch (cached, stale-
 fallback), the source router, and parallel/unified search across source
 adapters.
 
@@ -16,25 +16,25 @@ from typing import Any, Dict, List, Optional, Tuple
 from tools.skills_hub_clawhub import ClawHubSource
 from tools.skills_hub_github import GitHubAuth, GitHubSource, _PROVIDER_FILTER_VALUES, _filter_results_by_provider
 from tools.skills_hub_models import SkillMeta, SkillSource, TRUST_RANK, _dedupe_by_trust
-from tools.skills_hub_official import HermesIndexSource, OptionalSkillSource
+from tools.skills_hub_official import ZELOOIndexSource, OptionalSkillSource
 from tools.skills_hub_skillssh import SkillsShSource
 from tools.skills_hub_sources import BrowseShSource, LobeHubSource, UrlSource, WellKnownSkillSource
 
 # Log-record parity with the origin module.
 logger = logging.getLogger("tools.skills_hub")
 
-HERMES_INDEX_URL = "https://hermes-agent.nousresearch.com/docs/api/skills-index.json"
-HERMES_INDEX_TTL = 6 * 3600  # 6 hours
+ZELOO_INDEX_URL = "https://Zeloo-agent.nousresearch.com/docs/api/skills-index.json"
+ZELOO_INDEX_TTL = 6 * 3600  # 6 hours
 
 
-def _hermes_index_cache_file() -> Path:
+def _zeloo_index_cache_file() -> Path:
     from tools.skills_hub import _index_cache_dir
-    return _index_cache_dir() / "hermes-index.json"
+    return _index_cache_dir() / "Zeloo-index.json"
 
 
-def _load_hermes_index() -> Optional[dict]:
+def _load_zeloo_index() -> Optional[dict]:
     """Fetch the centralized skills index (docs site, rebuilt daily), cached
-    locally for HERMES_INDEX_TTL; on any failure serve the stale cache.
+    locally for ZELOO_INDEX_TTL; on any failure serve the stale cache.
 
     Brotli is deliberately NOT negotiated: the index is tens of MB and httpx's
     streaming Brotli decoder (brotlicffi, pinned for Discord attachments) raises
@@ -43,24 +43,24 @@ def _load_hermes_index() -> Optional[dict]:
     ignore the header and return Brotli anyway.
     """
     from tools.skills_hub import _read_json_if_fresh
-    cache_file = _hermes_index_cache_file()
-    cached = _read_json_if_fresh(cache_file, HERMES_INDEX_TTL)
+    cache_file = _zeloo_index_cache_file()
+    cached = _read_json_if_fresh(cache_file, ZELOO_INDEX_TTL)
     if cached is not None:
         return cached
     data = None
     for accept_encoding in ("gzip, deflate", "identity"):
         try:
-            resp = httpx.get(HERMES_INDEX_URL, timeout=15, follow_redirects=True,
+            resp = httpx.get(ZELOO_INDEX_URL, timeout=15, follow_redirects=True,
                              headers={"Accept-Encoding": accept_encoding})
             if resp.status_code != 200:
-                logger.debug("Hermes index fetch returned %d", resp.status_code)
+                logger.debug("Zeloo index fetch returned %d", resp.status_code)
                 return _load_stale_index_cache()
             data = resp.json()
             break
         except httpx.DecodingError as e:
-            logger.debug("Hermes index decode failed (Accept-Encoding=%s): %s", accept_encoding, e)
+            logger.debug("Zeloo index decode failed (Accept-Encoding=%s): %s", accept_encoding, e)
         except (httpx.HTTPError, json.JSONDecodeError) as e:
-            logger.debug("Hermes index fetch failed: %s", e)
+            logger.debug("Zeloo index fetch failed: %s", e)
             return _load_stale_index_cache()
     if not isinstance(data, dict) or "skills" not in data:
         return _load_stale_index_cache()
@@ -75,7 +75,7 @@ def _load_hermes_index() -> Optional[dict]:
 def _load_stale_index_cache() -> Optional[dict]:
     """Fall back to the cache regardless of age when the network fetch fails."""
     from tools.skills_hub import _read_json_if_fresh
-    return _read_json_if_fresh(_hermes_index_cache_file(), float("inf"))
+    return _read_json_if_fresh(_zeloo_index_cache_file(), float("inf"))
 
 
 # External API sources the centralized index already covers; skipped when the
@@ -91,7 +91,7 @@ def create_source_router(auth: Optional[GitHubAuth] = None) -> List[SkillSource]
         auth = GitHubAuth()
     return [
         OptionalSkillSource(auth=auth),   # official optional skills (highest priority)
-        HermesIndexSource(auth=auth),     # centralized index (search + resolved install paths)
+        ZELOOIndexSource(auth=auth),     # centralized index (search + resolved install paths)
         SkillsShSource(auth=auth),
         WellKnownSkillSource(),
         UrlSource(),                      # direct HTTP(S) URL to a SKILL.md
@@ -121,7 +121,7 @@ def _select_active_sources(sources: List[SkillSource], source_filter: str) -> Li
     """
     effective = "all" if source_filter.strip().lower() in _PROVIDER_FILTER_VALUES else source_filter
     index_available = effective == "all" and any(
-        src.source_id() == "hermes-index" and getattr(src, "is_available", False) for src in sources
+        src.source_id() == "Zeloo-index" and getattr(src, "is_available", False) for src in sources
     )
     active: List[SkillSource] = []
     for src in sources:

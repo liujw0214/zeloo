@@ -107,7 +107,7 @@ def _build_local_env(*, cwd, timeout, **_):
 def _build_docker_env(*, image, cwd, timeout, cc, task_id, host_cwd, **_):
     from tools.terminal_tool import (_docker_session_isolation_enabled, _has_isolation_overrides,
                                      _maybe_reap_docker_orphans)
-    # One-shot reaper for labeled containers orphaned by prior Hermes processes that died before
+    # One-shot reaper for labeled containers orphaned by prior Zeloo processes that died before
     # atexit (SIGKILL / OOM / closed terminal); ``terminal.docker_orphan_reaper: false`` disables it.
     _maybe_reap_docker_orphans(cc)
     # A session-keyed container must not outlive its session, so cross-process reuse/persist is
@@ -188,7 +188,7 @@ def _build_plugin_env(*, env_type, image, cwd, timeout, cc, task_id, **_):
         # Stamp the backend name so path-resolution and progress surfaces can identify plugin
         # backends without class-name sniffing. Test doubles may reject attributes.
         try:
-            env_obj._hermes_backend_name = provider.name.strip().lower()
+            env_obj._zeloo_backend_name = provider.name.strip().lower()
         except AttributeError:
             pass
         return env_obj

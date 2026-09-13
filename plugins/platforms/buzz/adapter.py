@@ -158,8 +158,8 @@ def _unscoped_profile_secrets() -> Dict[str, str]:
     if _UNSCOPED_PROFILE_SECRETS is None:
         try:
             from agent.secret_scope import build_profile_secret_scope
-            from hermes_constants import get_hermes_home
-            _UNSCOPED_PROFILE_SECRETS = dict(build_profile_secret_scope(get_hermes_home()))
+            from zeloo_constants import get_zeloo_home
+            _UNSCOPED_PROFILE_SECRETS = dict(build_profile_secret_scope(get_zeloo_home()))
         except Exception:
             logger.warning(
                 "Buzz requirement probe could not build the profile secret "
@@ -220,7 +220,7 @@ def _escape_unresolved_presentation_mention(content: str, error: str) -> Optiona
 
 _FETCH_LIMIT = 50  # events per poll / seed call
 _SEEN_CAP = 500  # per-channel de-dupe set bound (events)
-_CURSOR_STATE_SUBDIR = "buzz"  # per-channel cursors survive a restart under HERMES_HOME
+_CURSOR_STATE_SUBDIR = "buzz"  # per-channel cursors survive a restart under ZELOO_HOME
 _CURSOR_STATE_FILENAME = "channel-cursors.json"
 _DM_DISCOVERY_EVERY = 5  # re-run DM discovery every N poll sweeps
 _DEFAULT_POLL_INTERVAL = 4.0
@@ -273,7 +273,7 @@ _WS_AUTH_TIMEOUT = 20.0
 _WS_READ_IDLE_TIMEOUT = 300.0
 _WS_MAX_MESSAGE_BYTES = 2_000_000
 _WS_MEMBERSHIP_KIND = 44100  # Buzz channel-membership event — live DM discovery
-_WS_MEMBERSHIP_SUB_ID = "hermes-buzz-membership"
+_WS_MEMBERSHIP_SUB_ID = "Zeloo-buzz-membership"
 # Credentials JSON fallback when BUZZ_PRIVATE_KEY is not set; module-level so tests can point it at a tmpdir.
 _DEFAULT_CREDENTIALS_DIR = Path("~/.config/buzz").expanduser()
 # Buzz-hosted media is private to the community: same-relay URLs must be authenticated + localised for vision.
@@ -1191,8 +1191,8 @@ class BuzzAdapter(BasePlatformAdapter):
         for index, channel_id in enumerate(list(self._channel_state)):
             if channel_id in self._restricted_channels:
                 continue
-            subscriptions[f"hermes-buzz-{index}"] = channel_id
-            await self._send_channel_subscription(websocket, f"hermes-buzz-{index}", channel_id)
+            subscriptions[f"Zeloo-buzz-{index}"] = channel_id
+            await self._send_channel_subscription(websocket, f"Zeloo-buzz-{index}", channel_id)
         if self._self_pubkey:
             membership = {"kinds": [_WS_MEMBERSHIP_KIND], "#p": [self._self_pubkey], "since": max(self._membership_since - 1, 0)}
             await self._send_req(websocket, _WS_MEMBERSHIP_SUB_ID, membership)
@@ -1206,7 +1206,7 @@ class BuzzAdapter(BasePlatformAdapter):
         for channel_id in list(self._channel_state):
             if channel_id in before:
                 continue
-            subscription_id = f"hermes-buzz-dm-{len(subscriptions)}"
+            subscription_id = f"Zeloo-buzz-dm-{len(subscriptions)}"
             subscriptions[subscription_id] = channel_id
             await self._send_channel_subscription(websocket, subscription_id, channel_id)
             logger.info("Buzz: subscribed to new conversation %s", channel_id)
@@ -1334,8 +1334,8 @@ class BuzzAdapter(BasePlatformAdapter):
 
     @staticmethod
     def _cursor_path() -> Path:
-        from hermes_constants import get_hermes_home
-        return get_hermes_home() / _CURSOR_STATE_SUBDIR / _CURSOR_STATE_FILENAME
+        from zeloo_constants import get_zeloo_home
+        return get_zeloo_home() / _CURSOR_STATE_SUBDIR / _CURSOR_STATE_FILENAME
 
     def _load_cursors(self) -> None:
         """Read persisted cursors; another identity/relay's file is ignored (ids collide), failures seed from history."""
@@ -1839,7 +1839,7 @@ class BuzzAdapter(BasePlatformAdapter):
                 continue
             label = f"{path_match.group('sha')[:12]}{(path_match.group('ext') or '.bin').lower()}"
             try:
-                with tempfile.TemporaryDirectory(prefix="hermes-buzz-media-") as temp_dir:
+                with tempfile.TemporaryDirectory(prefix="Zeloo-buzz-media-") as temp_dir:
                     download_path = Path(temp_dir) / f"buzz_{label}"
                     code, _out, _err = await self._run_cli(["media", "get", "-o", str(download_path), url])
                     if code != 0 or not download_path.is_file():
@@ -1918,9 +1918,9 @@ def _profile_buzz_extra() -> dict:
     if not _profile_scoped():
         return {}
     try:
-        from hermes_constants import get_hermes_home
-        from hermes_cli.config import read_user_config_raw
-        cfg = read_user_config_raw(Path(get_hermes_home()) / "config.yaml")
+        from zeloo_constants import get_zeloo_home
+        from zeloo_cli.config import read_user_config_raw
+        cfg = read_user_config_raw(Path(get_zeloo_home()) / "config.yaml")
     except Exception:
         return {}
     buzz = ((cfg.get("gateway") or {}).get("platforms") or {}).get("buzz") if isinstance(cfg, dict) else None
@@ -2072,8 +2072,8 @@ async def _standalone_send(
 
 
 def interactive_setup() -> None:
-    """Interactive ``hermes gateway setup`` flow (lazy CLI imports keep the plugin importable elsewhere)."""
-    from hermes_cli.setup import (
+    """Interactive ``Zeloo gateway setup`` flow (lazy CLI imports keep the plugin importable elsewhere)."""
+    from zeloo_cli.setup import (
         prompt, prompt_yes_no, save_env_value, get_env_value, print_header, print_info, print_warning, print_success,
     )
     def ask(label: str, env: str) -> str:
@@ -2085,7 +2085,7 @@ def interactive_setup() -> None:
         print_info(f"Buzz: already configured (relay: {existing_relay})")
         if not prompt_yes_no("Reconfigure Buzz?", False):
             return
-    print_info("Connect Hermes to a Buzz community (Block's Nostr-based human+agent platform).")
+    print_info("Connect Zeloo to a Buzz community (Block's Nostr-based human+agent platform).")
     print_info("   Requires the buzz CLI binary and a Nostr key that is a community member.")
     print()
     relay = prompt("Relay URL (e.g. https://mycommunity.communities.buzz.xyz)", default=existing_relay or "")
@@ -2115,12 +2115,12 @@ def interactive_setup() -> None:
         allowed = ask("Allowed users (comma-separated npubs or hex pubkeys, empty to deny everyone)", "BUZZ_ALLOWED_USERS")
         save_env_value("BUZZ_ALLOWED_USERS", allowed.replace(" ", "") if allowed else "")
     print()
-    print_success("Buzz configuration saved to ~/.hermes/.env")
-    print_info("Restart the gateway for changes to take effect: hermes gateway restart")
+    print_success("Buzz configuration saved to ~/.Zeloo/.env")
+    print_info("Restart the gateway for changes to take effect: Zeloo gateway restart")
 
 
 def register(ctx):
-    """Plugin entry point: called by the Hermes plugin system."""
+    """Plugin entry point: called by the Zeloo plugin system."""
     ctx.register_platform(
         name="buzz", label="Buzz", adapter_factory=lambda cfg: BuzzAdapter(cfg), check_fn=check_requirements,
         validate_config=validate_config, is_connected=is_connected, required_env=["BUZZ_RELAY_URL", "BUZZ_PRIVATE_KEY"],

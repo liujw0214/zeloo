@@ -29,7 +29,7 @@ import {
 
 describe('resolveVenvPython', () => {
   it('returns a real path when a temp venv python file exists', () => {
-    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-vt-'))
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'zeloo-vt-'))
 
     try {
       const scriptsDir = process.platform === 'win32' ? 'Scripts' : 'bin'
@@ -70,9 +70,9 @@ describe('formatBlockerMessage', () => {
 })
 
 describe('formatProbeFailedMessage', () => {
-  it('suggests retry and hermes update', () => {
+  it('suggests retry and zeloo update', () => {
     const msg = formatProbeFailedMessage()
-    assert.ok(msg.includes('hermes update'))
+    assert.ok(msg.includes('zeloo update'))
     assert.ok(msg.includes('retry'))
   })
 
@@ -153,7 +153,7 @@ describe('parseVenvBlockerScanOutput', () => {
           {
             pid: 47484,
             name: 'python.exe',
-            cmdline: 'C:\\Hermes\\venv\\Scripts\\python.exe -m http.server 8766 --directory C',
+            cmdline: 'C:\\Zeloo\\venv\\Scripts\\python.exe -m http.server 8766 --directory C',
             kind: 'local-preview',
             safeToStop: true,
             label: 'Example Preview',
@@ -173,7 +173,7 @@ describe('parseVenvBlockerScanOutput', () => {
     assert.deepEqual(o.result.processes[0], {
       pid: 47484,
       name: 'python.exe',
-      cmdline: 'C:\\Hermes\\venv\\Scripts\\python.exe -m http.server 8766 --directory C',
+      cmdline: 'C:\\Zeloo\\venv\\Scripts\\python.exe -m http.server 8766 --directory C',
       kind: 'local-preview',
       safeToStop: true,
       label: 'Example Preview',
@@ -352,7 +352,7 @@ describe('scanVenvBlockers', () => {
     assert.equal(calls.length, 1)
     const c = calls[0]
     assert.ok(c.cmd.endsWith('python.exe'))
-    assert.deepEqual(c.args, ['-m', 'hermes_cli._scan_venv_blockers'])
+    assert.deepEqual(c.args, ['-m', 'zeloo_cli._scan_venv_blockers'])
     assert.equal(c.cwd, '/update/root')
     assert.equal(c.timeout, 60_000)
   })
@@ -393,13 +393,13 @@ describe('stopSafeVenvBlockers', () => {
         ]
       },
       exec,
-      () => 'C:\\Hermes\\venv\\Scripts\\python.exe'
+      () => 'C:\\Zeloo\\venv\\Scripts\\python.exe'
     )
 
     assert.deepEqual(calls, [
       {
-        command: 'C:\\Hermes\\venv\\Scripts\\python.exe',
-        args: ['-m', 'hermes_cli._scan_venv_blockers', '--terminate-safe', '47484', '1722798000.25']
+        command: 'C:\\Zeloo\\venv\\Scripts\\python.exe',
+        args: ['-m', 'zeloo_cli._scan_venv_blockers', '--terminate-safe', '47484', '1722798000.25']
       }
     ])
     assert.deepEqual(outcome, { stopped: [47484], failed: [] })

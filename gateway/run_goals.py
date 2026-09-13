@@ -29,7 +29,7 @@ class GatewayGoalsMixin:
     # ── /goal — persistent cross-turn goals (Ralph-style loop) ──────────
     def _goal_max_turns_from_config(self) -> int:
         """Configured /goal turn budget. GatewayRunner.config is a GatewayConfig dataclass, so the
-        top-level ``goals`` block is only reachable via hermes_cli.config.load_config()."""
+        top-level ``goals`` block is only reachable via zeloo_cli.config.load_config()."""
         try:
             goals_cfg = (
                 (self.config or {}).get("goals", {})
@@ -37,7 +37,7 @@ class GatewayGoalsMixin:
                 else getattr(self.config, "goals", {}) or {}
             )
             if not goals_cfg:
-                from hermes_cli.config import load_config
+                from zeloo_cli.config import load_config
 
                 goals_cfg = (load_config() or {}).get("goals") or {}
             return int(goals_cfg.get("max_turns", 20) or 20)
@@ -49,7 +49,7 @@ class GatewayGoalsMixin:
         init on the loop thread and freezes the loop. The executor hop keeps the profile home
         override alive under multiplex; a failed warm-up is a bounded stall, never a crash."""
         try:
-            from hermes_cli.goals import _get_session_db as _warm_goals_db
+            from zeloo_cli.goals import _get_session_db as _warm_goals_db
 
             await self._run_in_executor_with_context(_warm_goals_db)
         except Exception as exc:
@@ -85,7 +85,7 @@ class GatewayGoalsMixin:
     async def _get_goal_manager_for_event(self, event: "MessageEvent"):
         """Return ``(GoalManager, session_entry)`` for this event, or ``(None, None)``."""
         def _load():
-            from hermes_cli.goals import GoalManager
+            from zeloo_cli.goals import GoalManager
             max_turns = self._goal_max_turns_from_config()
             return lambda sid: GoalManager(session_id=sid, default_max_turns=max_turns)
         return await self._manager_for_event(event, "goal", _load)
@@ -93,7 +93,7 @@ class GatewayGoalsMixin:
     async def _get_heartbeat_manager_for_event(self, event: "MessageEvent"):
         """Return ``(HeartbeatManager, session_entry)`` for this event, or ``(None, None)``."""
         def _load():
-            from hermes_cli.heartbeat import HeartbeatManager
+            from zeloo_cli.heartbeat import HeartbeatManager
             return lambda sid: HeartbeatManager(session_id=sid)
         return await self._manager_for_event(event, "heartbeat", _load)
 
@@ -141,7 +141,7 @@ class GatewayGoalsMixin:
             or self._queue_depth(quick_key, adapter=adapter) > 0
         ):
             return  # keep missed intervals due until user work has drained
-        from hermes_cli.heartbeat import HeartbeatManager
+        from zeloo_cli.heartbeat import HeartbeatManager
 
         mgr = HeartbeatManager(session_id=session_id)
         if not mgr.has_heartbeat():
@@ -172,7 +172,7 @@ class GatewayGoalsMixin:
         if existing is not None and not existing.done():
             return
 
-        from hermes_cli.heartbeat import POLL_SECONDS
+        from zeloo_cli.heartbeat import POLL_SECONDS
 
         async def _poll_loop():
             while True:
@@ -187,7 +187,7 @@ class GatewayGoalsMixin:
             task = self._heartbeat_poll_task = asyncio.create_task(_poll_loop())
             # PERMANENT once started (infinite loop) — tag it like a _spawn_supervised watcher so
             # _scale_to_zero_has_live_background_work() doesn't treat the gateway as busy forever.
-            task._hermes_supervised_watcher = True  # type: ignore[attr-defined]
+            task._zeloo_supervised_watcher = True  # type: ignore[attr-defined]
             _bg = getattr(self, "_background_tasks", None)
             if _bg is not None:
                 _bg.add(task)
@@ -237,7 +237,7 @@ class GatewayGoalsMixin:
         if session_key and hasattr(adapter, "register_post_delivery_callback"):
             try:
                 active = getattr(adapter, "_active_sessions", {}).get(session_key)
-                generation = getattr(active, "_hermes_run_generation", None) if active is not None else None
+                generation = getattr(active, "_zeloo_run_generation", None) if active is not None else None
                 adapter.register_post_delivery_callback(session_key, _deliver, generation=generation)
                 return
             except Exception as exc:
@@ -265,7 +265,7 @@ class GatewayGoalsMixin:
         """Run the goal judge after a gateway turn (AFTER delivery) and, if still active, enqueue a
         continuation through the adapter FIFO so a simultaneous real user message takes priority."""
         def _load():
-            from hermes_cli.goals import GoalManager
+            from zeloo_cli.goals import GoalManager
             max_turns = self._goal_max_turns_from_config()
             return lambda sid: GoalManager(session_id=sid, default_max_turns=max_turns)
 
@@ -275,7 +275,7 @@ class GatewayGoalsMixin:
 
         _bg_procs, _active_deleg = None, 0
         with suppress(Exception):
-            from hermes_cli.goals import count_active_delegations, gather_background_processes as _gather_bg
+            from zeloo_cli.goals import count_active_delegations, gather_background_processes as _gather_bg
             # Only THIS session's processes (gateway turns register under turn_ctx.session_id):
             # subagents' pollers must not park the parent's goal.
             _bg_procs = _gather_bg(owner_task_id=getattr(session_entry, "session_id", None) or None)
@@ -350,7 +350,7 @@ class GatewayGoalsMixin:
         (``awaiting_response``, set when the wakeup was injected); applies the LOOP_COMPLETE marker
         / --until judge / caps and schedules the next tick for the idle wakeup watcher."""
         def _load():
-            from hermes_cli.loops import LoopManager
+            from zeloo_cli.loops import LoopManager
             return lambda sid: LoopManager(session_id=sid)
 
         mgr = await self._post_turn_manager(session_entry, "loop completion", "loops", _load)
@@ -370,7 +370,7 @@ class GatewayGoalsMixin:
     ) -> None:
         """Inject one due /loop wakeup into its session, applying every deferral rule. ``profile`` is
         the store being scanned (None = default); a ``profile`` persisted in the route wins."""
-        from hermes_cli.loops import LoopManager, goal_blocks_loop_tick
+        from zeloo_cli.loops import LoopManager, goal_blocks_loop_tick
 
         if state.awaiting_response or now < state.next_due_at:
             return
@@ -416,7 +416,7 @@ class GatewayGoalsMixin:
             return
         # fire_tick()/complete_tick() are writes (BEGIN IMMEDIATE) taking the SessionDB writer lock; a slow
         # writer elsewhere holding it while the loop thread blocked froze the gateway until the watchdog
-        # fired. The context-preserving executor keeps the profile HERMES_HOME override under multiplex.
+        # fired. The context-preserving executor keeps the profile ZELOO_HOME override under multiplex.
         wakeup = await self._run_in_executor_with_context(mgr.fire_tick)
         if not wakeup:
             return
@@ -460,7 +460,7 @@ class GatewayGoalsMixin:
                     else nullcontext())
 
         async def _scan_one_store(profile_name: Optional[str]) -> None:
-            from hermes_cli.loops import list_active_loops
+            from zeloo_cli.loops import list_active_loops
 
             # Warm once per scan: the scan reads every persisted loop and a cold cache would
             # run the state.db init on the loop thread before the first read.
