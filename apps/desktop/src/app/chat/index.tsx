@@ -6,6 +6,8 @@ import type * as React from 'react'
 import { memo, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router'
 
+import { useRoomMembershipQuery } from '@/app/chat/hooks/use-room-membership'
+
 import type { SubmitTextOptions } from '@/app/session/hooks/use-prompt-actions/utils'
 import { sessionShouldHaveTranscript } from '@/app/session/hooks/use-session-actions/utils'
 import { Thread } from '@/components/assistant-ui/thread'
@@ -367,6 +369,14 @@ function ChatRuntimeBoundary({
 export const ChatView = memo(function ChatView(props: ChatViewProps) {
   const composerSurfaceId = useId()
 
+  // M1.5 Phase 6: mount the room-membership query hook here so every
+  // chat surface in the window shares one query + one store. The
+  // hook's effect writes each active room into $roomMembership, which
+  // the AgentProgressPanel's useRoomMembership() reads to decide
+  // whether to render itself (Phase 4 gate). The hook is a side-
+  // effect-only consumer; the JSX below is unchanged.
+  useRoomMembershipQuery()
+
   return (
     <ComposerSurfaceProvider value={composerSurfaceId}>
       <ChatViewContent {...props} />
@@ -671,17 +681,17 @@ const ChatViewContent = memo(function ChatViewContent({
       {/* M1.5: group-chat room activity stream. Renders nothing when
           the active session is not a hosted room (Phase 4 gate); when
           it IS a room, renders a collapsible <details> panel with the
-          most recent agent.* events. forceShow is off in production
-          so a non-room chat session pays no render cost. The actual
-          population of the room-membership store is Phase 5
-          (listRooms query hook); until then, forceShow is the only
-          way to see the panel in a chat session. */}
+          most recent agent.* events. The chat mount does NOT pass
+          forceShow — the room-membership query hook (Phase 6) is
+          responsible for populating the store via listRooms, so
+          non-room sessions naturally hide the panel. The hook is
+          mounted once at the chat-shell level (see below) so every
+          chat surface in the window shares one query + one store. */}
       <AgentProgressPanel
         activeSessionId={activeSessionId}
         hideWhenEmpty
         className="shrink-0 border-b border-(--ui-border) bg-(--ui-muted)/30 px-3 py-2"
         maxRows={6}
-        forceShow
       />
 
       {/* Mounted for the primary AND every tile, each scoped to its own session

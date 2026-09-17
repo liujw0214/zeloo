@@ -134,3 +134,6 @@ export type {
   WebhookRoute,
   WebhooksResponse
 } from '@/types/Zeloo'
+
+// M1.5 Phase 6: hosted-room REST surface (list / get / create / disband).
+export * from './api/hosted_rooms'
