@@ -16,6 +16,7 @@ import { isSessionGone } from '@/store/session-gone-latch'
 import { setSessionDraftingTool } from '@/store/tool-drafting'
 import type { RpcEvent } from '@/types/Zeloo'
 
+import { handleAgentProgressEvent } from './agent-progress'
 import { handleDesktopBridgeEvent } from './desktop-bridge'
 import { handleInputRequestEvent } from './input-requests'
 import { handleLifecycleEvent } from './lifecycle'
@@ -89,6 +90,7 @@ const HANDLERS: GatewayEventHandler[] = [
   handleMessageStreamEvent,
   handleToolEvent,
   handleInputRequestEvent,
+  handleAgentProgressEvent,
   handleDesktopBridgeEvent,
   handleStatusEvent
 ]
