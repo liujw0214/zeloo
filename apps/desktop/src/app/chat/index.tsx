@@ -668,16 +668,20 @@ const ChatViewContent = memo(function ChatViewContent({
         />
       )}
 
-      {/* M1.5: group-chat room activity stream. Renders nothing while
-          the per-session ring buffer is empty (hideWhenEmpty) so a
-          non-room session does not pay the render cost. Phase 4 of
-          M1.5 will gate this on room membership and a collapsible
-          disclosure — for now it just surfaces whatever agent.*
-          events the gateway has emitted for the active session. */}
+      {/* M1.5: group-chat room activity stream. Renders nothing when
+          the active session is not a hosted room (Phase 4 gate); when
+          it IS a room, renders a collapsible <details> panel with the
+          most recent agent.* events. forceShow is off in production
+          so a non-room chat session pays no render cost. The actual
+          population of the room-membership store is Phase 5
+          (listRooms query hook); until then, forceShow is the only
+          way to see the panel in a chat session. */}
       <AgentProgressPanel
+        activeSessionId={activeSessionId}
         hideWhenEmpty
         className="shrink-0 border-b border-(--ui-border) bg-(--ui-muted)/30 px-3 py-2"
         maxRows={6}
+        forceShow
       />
 
       {/* Mounted for the primary AND every tile, each scoped to its own session
