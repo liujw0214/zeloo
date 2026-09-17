@@ -86,7 +86,7 @@ describe('AgentProgressPanel — basic rendering', () => {
     makeActiveSession()
     pushAgentProgress(makeEvent('agent.thinking', {}, 'a'), 'desc-a', 's')
     pushAgentProgress(makeEvent('agent.done', {}, 'b'), 'desc-b', 's')
-    pushAgentProgress(makeEvent('agent.tool', {}, 'c'), 'desc-c', 's')
+    pushAgentProgress(makeEvent('agent.tool_call', {}, 'c'), 'desc-c', 's')
 
     const { container } = render(<AgentProgressPanel />)
     const rows = container.querySelectorAll('[data-testid="agent-progress-row"]')
@@ -109,7 +109,7 @@ describe('AgentProgressPanel — ordering', () => {
     makeActiveSession()
     pushAgentProgress(makeEvent('agent.thinking', {}, 'a'), 'oldest', 's')
     await new Promise(r => setTimeout(r, 2))
-    pushAgentProgress(makeEvent('agent.tool', {}, 'b'), 'middle', 's')
+    pushAgentProgress(makeEvent('agent.tool_call', {}, 'b'), 'middle', 's')
     await new Promise(r => setTimeout(r, 2))
     pushAgentProgress(makeEvent('agent.done', {}, 'c'), 'newest', 's')
 
@@ -163,8 +163,8 @@ describe('AgentProgressPanel — terminal styling', () => {
   it('marks non-terminal kinds with data-terminal=none', () => {
     makeActiveSession()
     pushAgentProgress(makeEvent('agent.thinking', {}, 't'), 'desc', 's')
-    pushAgentProgress(makeEvent('agent.tool', {}, 'tl'), 'desc', 's')
-    pushAgentProgress(makeEvent('agent.progress', {}, 'p'), 'desc', 's')
+    pushAgentProgress(makeEvent('agent.tool_call', {}, 'tl'), 'desc', 's')
+    pushAgentProgress(makeEvent('agent.tool_result', {}, 'p'), 'desc', 's')
     const { container } = render(<AgentProgressPanel collapsible={false} />)
     const rows = container.querySelectorAll('[data-testid="agent-progress-row"]')
     for (const r of rows) {
@@ -190,8 +190,8 @@ describe('AgentProgressPanel — kind label', () => {
       ['agent.thinking', 'thinking'],
       ['agent.done', 'done'],
       ['agent.failed', 'failed'],
-      ['agent.tool', 'tool'],
-      ['agent.progress', 'progress'],
+      ['agent.tool_call', 'tool'],
+      ['agent.tool_result', 'tool result'],
       ['agent.waiting_child', 'waiting for child'],
     ]
     for (const [kind, expectedLabel] of cases) {
@@ -273,7 +273,7 @@ describe('AgentProgressPanel — accessibility', () => {
   it('exposes aria-atomic on each row so a new entry does not re-read the whole list', () => {
     makeActiveSession()
     pushAgentProgress(makeEvent('agent.thinking', {}, 'a'), 'd', 's')
-    pushAgentProgress(makeEvent('agent.tool', {}, 'b'), 'd', 's')
+    pushAgentProgress(makeEvent('agent.tool_call', {}, 'b'), 'd', 's')
     const { container } = render(<AgentProgressPanel collapsible={false} />)
     const rows = container.querySelectorAll('[data-testid="agent-progress-row"]')
     for (const r of rows) {
@@ -354,7 +354,7 @@ describe('AgentProgressPanel — Phase 4 collapsible disclosure', () => {
     makeActiveSession()
     pushAgentProgress(makeEvent('agent.thinking', {}, 'a'), 'a', 's')
     pushAgentProgress(makeEvent('agent.done', {}, 'b'), 'b', 's')
-    pushAgentProgress(makeEvent('agent.tool', {}, 'c'), 'c', 's')
+    pushAgentProgress(makeEvent('agent.tool_call', {}, 'c'), 'c', 's')
     const { container } = render(<AgentProgressPanel />)
     const summary = container.querySelector('[data-testid="agent-progress-summary"]')
     expect(summary?.tagName.toLowerCase()).toBe('summary')

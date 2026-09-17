@@ -66,8 +66,8 @@ describe('Phase 2: handler pushes events into $agentProgressEvents', () => {
       'agent.thinking',
       'agent.done',
       'agent.failed',
-      'agent.tool',
-      'agent.progress',
+      'agent.tool_call',
+      'agent.tool_result',
       'agent.waiting_child',
     ] as const
     for (const kind of kinds) {

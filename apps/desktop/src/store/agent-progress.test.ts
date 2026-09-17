@@ -29,8 +29,8 @@ describe('pushAgentProgress — basic acceptance', () => {
     'agent.thinking',
     'agent.done',
     'agent.failed',
-    'agent.tool',
-    'agent.progress',
+    'agent.tool_call',
+    'agent.tool_result',
     'agent.waiting_child',
   ])('accepts %s', (kind) => {
     const entry = pushAgentProgress(makeEvent(kind, { task_id: 't1' }), 'desc', 's1')
@@ -62,7 +62,7 @@ describe('pushAgentProgress — basic acceptance', () => {
 
   it('marks non-terminal kinds with terminal=null', () => {
     expect(pushAgentProgress(makeEvent('agent.thinking'), '', 's1')!.terminal).toBeNull()
-    expect(pushAgentProgress(makeEvent('agent.tool'), '', 's1')!.terminal).toBeNull()
+    expect(pushAgentProgress(makeEvent('agent.tool_call'), '', 's1')!.terminal).toBeNull()
   })
 })
 
@@ -73,7 +73,7 @@ describe('pushAgentProgress — ordering and dedupe', () => {
 
   it('newest entry is at index 0', () => {
     pushAgentProgress(makeEvent('agent.thinking', { event_id: '1' }), 'a', 's1')
-    pushAgentProgress(makeEvent('agent.tool', { event_id: '2' }), 'b', 's1')
+    pushAgentProgress(makeEvent('agent.tool_call', { event_id: '2' }), 'b', 's1')
     pushAgentProgress(makeEvent('agent.done', { event_id: '3' }), 'c', 's1')
     const buf = $agentProgressEvents.get().s1
     expect(buf.map((e) => e.description)).toEqual(['c', 'b', 'a'])
@@ -122,7 +122,7 @@ describe('pushAgentProgress — multi-session isolation', () => {
 
   it('keeps per-session buffers independent', () => {
     pushAgentProgress(makeEvent('agent.thinking', { event_id: 'a1' }), 'in-s1', 's1')
-    pushAgentProgress(makeEvent('agent.tool', { event_id: 'a2' }), 'in-s2', 's2')
+    pushAgentProgress(makeEvent('agent.tool_call', { event_id: 'a2' }), 'in-s2', 's2')
     expect($agentProgressEvents.get().s1.map((e) => e.description)).toEqual(['in-s1'])
     expect($agentProgressEvents.get().s2.map((e) => e.description)).toEqual(['in-s2'])
   })

@@ -25,16 +25,16 @@ export type AgentProgressKind =
   | 'agent.thinking'
   | 'agent.done'
   | 'agent.failed'
-  | 'agent.tool'
-  | 'agent.progress'
+  | 'agent.tool_call'
+  | 'agent.tool_result'
   | 'agent.waiting_child'
 
 const SUPPORTED_KINDS: ReadonlySet<AgentProgressKind> = new Set<AgentProgressKind>([
   'agent.thinking',
   'agent.done',
   'agent.failed',
-  'agent.tool',
-  'agent.progress',
+  'agent.tool_call',
+  'agent.tool_result',
   'agent.waiting_child',
 ])
 

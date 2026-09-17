@@ -45,8 +45,8 @@ const KIND_LABEL: Record<AgentProgressEntry['kind'], string> = {
   'agent.thinking': 'thinking',
   'agent.done': 'done',
   'agent.failed': 'failed',
-  'agent.tool': 'tool',
-  'agent.progress': 'progress',
+  'agent.tool_call': 'tool',
+  'agent.tool_result': 'tool result',
   'agent.waiting_child': 'waiting for child',
 }
 
