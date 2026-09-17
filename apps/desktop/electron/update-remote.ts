@@ -12,8 +12,20 @@
  * testable without booting Electron (main.ts requires('electron') at load).
  */
 
-const OFFICIAL_REPO_HTTPS_URL = 'https://github.com/NousResearch/Zeloo-agent.git'
-const OFFICIAL_REPO_CANONICAL = 'github.com/nousresearch/Zeloo-agent'
+// Canonical official repo URL. Per the owner (boss) request, the
+// official repo is `liujw0214/zeloo` (not NousResearch/Zeloo-agent,
+// which returns 404 on api.github.com). The historical const used
+// `NousResearch/Zeloo-agent` and was the source of three test
+// failures:
+//   - canonicalGitHubRemote normalizes SSH and HTTPS forms to the same value
+//   - isOfficialSshRemote is true only for the official repo over SSH
+//   - OFFICIAL_REPO_HTTPS_URL canonicalizes to OFFICIAL_REPO_CANONICAL
+// The comparison in `isOfficialSshRemote` goes through
+// `canonicalGitHubRemote` which lowercases everything, so the CANONICAL
+// form must also be lowercase. CANONICAL is the comparison key;
+// HTTPS_URL is the public display URL.
+const OFFICIAL_REPO_HTTPS_URL = 'https://github.com/liujw0214/zeloo.git'
+const OFFICIAL_REPO_CANONICAL = 'github.com/liujw0214/zeloo'
 
 // Normalize common GitHub remote URL forms to `host/owner/repo` (lowercased,
 // no trailing slash, no .git suffix) so SSH and HTTPS forms of the same repo
