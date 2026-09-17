@@ -417,6 +417,11 @@ extract, not to regex around it.
 | `skills/`, `optional-skills/`, `agent/curator*.py` | `skills/AGENTS.md` | Frontmatter, HARDLINE authoring standards, curator |
 | `cron/`, kanban (`zeloo_cli/kanban*.py`, `tools/kanban_tools.py`, `plugins/kanban/`) | `cron/AGENTS.md` | Scheduler invariants, job fields, kanban board/dispatcher |
 | `gateway/platforms/` new adapter | `gateway/platforms/ADDING_A_PLATFORM.md` | Step-by-step adapter guide |
+| `agent/pipeline.py`, `agent/spec_prompt.py` | `agent/AGENTS.md` (under "Self-improvement orchestrator") | Daily closed-loop pipeline (morning brief → plan → spec → implement → summary → consolidate), `/spec` slash command for spec-first workflow. **Read this before modifying agent/pipeline.py — the parser/store/runner contract is INVARIANT-tested.** |
+| `tools/factsheet.py` | `tools/AGENTS.md` (under "M2 factsheet") | Shared context sheet tool for subagent cross-talk (M2 prerequisite). Single source of truth that other agents read instead of re-deriving from session log. |
+| `tests/agent/test_pipeline.py` | `agent/AGENTS.md` (under "Pipeline tests") | 27 pytest regression tests for parser / store / runner. Run with `scripts/run_tests.sh tests/agent/test_pipeline.py`. **Adding a stage type = updating both `Stage.validate()` AND this test file.** |
+| `docs/design/`, `docs/audit/`, `docs/ROADMAP-*.md` | (no separate AGENTS.md; read these directly) | Design proposals, audit findings, and roadmap. Recent: M1 group-chat (44 KB), M1 implementation plan (370 lines), agent-self-improvement MVP fit, audit batch 2026-09-17. |
+| `workspace_bootstrap.py`, `workspace_templates/` | `workspace_templates/AGENTS.md` | Clone-deploy workspace scaffolding: copies `workspace_templates/{AGENTS,HEARTBEAT,MEMORY,PIPELINE}.md` into `.zeloo/workspace/`. The PIPELINE template pairs with `agent/pipeline.py` — keep them in sync. |
 
 Long-form background lives in `website/docs/developer-guide/` (agent-loop, prompt-assembly,
 context-compression-and-caching, gateway-internals, tools-runtime, plugins/, cron-internals,
