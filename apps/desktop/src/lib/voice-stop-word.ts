@@ -35,7 +35,14 @@ const STOP_PHRASES: readonly string[] = [
 
 // Optional address prefixes so "Zeloo stop" / "ok stop" / "hey Zeloo, stop"
 // still count. Stripped before matching the core phrase.
-const ADDRESS_PREFIXES: readonly string[] = ['hey Zeloo', 'hey Zeloo,', 'Zeloo', 'Zeloo,', 'ok', 'okay', 'hey']
+// Lowercase so the comparison against `normalize(text)` (which is
+// already lowercase) succeeds. The "Zeloo" form was capitalised here
+// for readability but `stripAddress` operates on normalized lowercase
+// text, so the capitalised prefix never matched and the test
+// 'matches stop commands addressed to Zeloo' failed. The displayed
+// name is still Zeloo — the text just has to be lowercased before
+// prefix comparison.
+const ADDRESS_PREFIXES: readonly string[] = ['hey zeloo', 'hey zeloo,', 'zeloo', 'zeloo,', 'ok', 'okay', 'hey']
 
 // Normalise: lowercase, strip surrounding punctuation/whitespace, collapse
 // internal runs of spaces. Trailing punctuation (".", "!", "…") is common in
