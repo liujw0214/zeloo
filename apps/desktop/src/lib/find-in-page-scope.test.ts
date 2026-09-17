@@ -190,7 +190,7 @@ describe('performScopedFind', () => {
     expect(result.count).toBe(2)
     const marks = [...surface.querySelectorAll('mark.find-hit')]
     expect(marks.length).toBe(2)
-    expect(marks.every(mark => mark.textContent.toLowerCase() === 'Zeloo')).toBe(true)
+    expect(marks.every(mark => mark.textContent.toLowerCase() === 'zeloo')).toBe(true)
   })
 
   it('re-wraps when new unmarked content contains the query (fast path, #81778 review)', () => {

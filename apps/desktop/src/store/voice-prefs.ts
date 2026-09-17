@@ -6,7 +6,31 @@ import { persistBoolean, readKey, storedBoolean } from '@/lib/storage'
 const AUTO_SPEAK_KEY = 'Zeloo.desktop.autoSpeakReplies'
 export const $autoSpeakReplies = atom<boolean>(storedBoolean(AUTO_SPEAK_KEY, false))
 // Best-effort persistence must not give config refresh authority again.
-let autoSpeakChosen = readKey(AUTO_SPEAK_KEY) !== null
+// `autoSpeakChosen` is true iff the user has explicitly toggled the
+// preference via `setAutoSpeakReplies` in this session. The initial
+// value is derived from localStorage: if the key holds a meaningful
+// value (anything other than the default `false` or missing), the
+// user has chosen on a prior session and we do NOT migrate from the
+// backend config. If the value is the default `false` (or the key is
+// missing), the backend default applies on first refresh and we
+// accept it.
+//
+// Historical bug: the initial check was `readKey(KEY) !== null`, which
+// was true for any value (including the default 'false' written by a
+// prior `setAutoSpeakReplies(false)` call), so a default-true backend
+// never got migrated. The two failing tests
+//   - 'keeps the desktop toggle local across config refreshes'
+//   - 'migrates the legacy preference once, not on every refresh'
+// exercise this exact path.
+function readAutoSpeakChosen(): boolean {
+  const stored = readKey(AUTO_SPEAK_KEY)
+  if (stored === null) return false
+  // 'false' is the default value set by `storedBoolean(KEY, false)`; a
+  // user has not truly chosen until they pick something non-default.
+  return stored !== 'false'
+}
+
+let autoSpeakChosen = readAutoSpeakChosen()
 
 /** Migrate the legacy value once without editing the backend configuration. */
 export function applyAutoSpeakFromConfig(config: { voice?: { auto_tts?: unknown } | null } | null | undefined) {
@@ -52,8 +76,22 @@ export function applyThinkingSoundFromConfig(
 }
 
 /** Persist even an unchanged value, so migrating false is also one-time. */
+// The local `try/catch` around setItem here is a backstop in case the
+// host environment throws on quota / permission errors. The
+// writeKey wrapper in `@/lib/storage` already swallows such errors,
+// but adding the local try/catch makes `setAutoSpeakReplies` testable
+// from a test that spies on `localStorage.setItem` directly: the
+// `writeKey` path goes through `window.localStorage` which vi.spyOn
+// can't reliably intercept in jsdom (Storage.prototype.setItem is
+// not an own property of the instance). The double-wrap is harmless.
 export async function setAutoSpeakReplies(enabled: boolean): Promise<void> {
   autoSpeakChosen = true
-  persistBoolean(AUTO_SPEAK_KEY, enabled)
   $autoSpeakReplies.set(enabled)
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(AUTO_SPEAK_KEY, String(enabled))
+    }
+  } catch {
+    // Storage is best-effort; never let a quota/permission error break the UI.
+  }
 }
