@@ -573,6 +573,24 @@ export interface SubagentEventPayload {
   toolsets?: string[]
 }
 
+/** M1.4: payload shape for agent.* progress events emitted by hosted room bot members. */
+export interface AgentProgressPayload {
+  /** Stable id of the bot member that authored this event. */
+  member_id: string
+  /** Display name of the bot member. */
+  display_name?: string
+  /** The hosted-room task this event belongs to (room-scoped task id). */
+  task_id: string
+  /** Human-readable text for this step (think, tool call, progress note). */
+  text?: string
+  /** For agent.done: output text excerpt (up to 1024 chars). */
+  output_tail?: string
+  /** For agent.tool: name of the tool being invoked. */
+  tool_name?: string
+  /** For agent.tool: preview of tool input. */
+  tool_preview?: string
+}
+
 // ── Delegation control RPCs ──────────────────────────────────────────
 
 export interface DelegationStatusResponse {
@@ -807,3 +825,9 @@ export type GatewayEvent =
     }
   | { payload?: { usage?: Usage }; session_id?: string; type: 'session.usage' }
   | { payload?: { message?: string }; session_id?: string; type: 'error' }
+  // M1.4: agent.* progress events from hosted room bot members
+  | { payload: AgentProgressPayload; session_id?: string; type: 'agent.thinking' }
+  | { payload: AgentProgressPayload; session_id?: string; type: 'agent.done' }
+  | { payload: AgentProgressPayload; session_id?: string; type: 'agent.failed' }
+  | { payload: AgentProgressPayload; session_id?: string; type: 'agent.tool' }
+  | { payload: AgentProgressPayload; session_id?: string; type: 'agent.progress' }
