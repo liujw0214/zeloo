@@ -56,6 +56,36 @@ _TERMINAL_FIELDS = {  # kind -> exact payload fields (coordinates + seen_through
         ("turn.cancelled", ("reason",)), ("turn.deferred", ("execution_generation", "reason")))}
 _TERMINAL_OPTIONAL_FIELDS = {"turn.failed": frozenset({"reason_code"})}
 _TERMINAL_EVENT_KINDS = frozenset(_TERMINAL_FIELDS)
+# M1.1: structured progress events (member-authored, append-only, no cache break)
+# Schema: (all_fields_frozenset, identifier_fields_tuple)
+# - all_fields: every field this kind may carry (required + optional); _exact_fields checks all are present
+# - identifier_fields: turn-coordinate fields used for correlation; subset of all_fields
+_PROGRESS_EVENT_FIELDS = {
+    "agent.thinking": (
+        frozenset({"task_id", "model", "round", "thread_id", "member_id", "member_index", "round_index", "discussion_event_id", "turn_id"}),
+        ("task_id", "round"),
+    ),
+    "agent.tool_call": (
+        frozenset({"task_id", "tool", "call_id", "round", "thread_id", "member_id", "member_index", "round_index", "discussion_event_id", "turn_id"}),
+        ("task_id", "call_id", "round"),
+    ),
+    "agent.tool_result": (
+        frozenset({"task_id", "tool", "call_id", "duration_ms", "status", "thread_id", "member_id", "member_index", "round_index", "discussion_event_id", "turn_id"}),
+        ("task_id", "call_id"),
+    ),
+    "agent.waiting_child": (
+        frozenset({"task_id", "child_task_id", "child_target", "thread_id", "member_id", "member_index", "round_index", "discussion_event_id", "turn_id"}),
+        ("task_id", "child_task_id"),
+    ),
+    "agent.done": (
+        frozenset({"task_id", "terminal_kind", "tokens", "thread_id", "member_id", "member_index", "round_index", "discussion_event_id", "turn_id"}),
+        ("task_id",),
+    ),
+    "agent.failed": (
+        frozenset({"task_id", "error_class", "error_message", "thread_id", "member_id", "member_index", "round_index", "discussion_event_id", "turn_id"}),
+        ("task_id",),
+    ),
+}
 # Gateway-authored control events: kind -> (exact payload fields, identifier fields).
 _GATEWAY_EVENT_FIELDS = {
     "room.activity": (
@@ -405,10 +435,36 @@ def _validate_gateway_event(kind: str, payload: Payload, actor: Payload, room: D
     return payload
 
 
+def _validate_progress_event(kind: str, payload: Payload, actor: Payload, room: DiscussionRoom) -> Payload:
+    """Validate M1.1 member-authored progress events (agent.thinking, agent.tool_call, etc.)."""
+    # actor must be "member" and match the payload's member_id
+    if actor.get("kind") != "member":
+        raise DiscussionValidationError(f"{kind} requires a member actor")
+    member = _member_by_id(room, payload.get("member_id"))
+    expected = {**_member_actor(member, display_name=False), "connection_id": _peer_id(member)}
+    if any(actor.get(key) != value for key, value in expected.items()):
+        raise DiscussionValidationError(f"{kind} actor does not match roster")
+    required_fields, optional_fields = _PROGRESS_EVENT_FIELDS[kind]
+    _exact_fields(payload, label=f"{kind} payload", required=required_fields, optional=frozenset(optional_fields))
+    _validate_turn_coordinates(payload, room)
+    # agent.tool_result status must be "ok" | "error"
+    if kind == "agent.tool_result":
+        status = payload.get("status")
+        if status not in ("ok", "error"):
+            raise DiscussionValidationError("agent.tool_result status must be 'ok' or 'error'")
+        _positive_int(payload.get("duration_ms"), label="duration_ms")
+    if kind == "agent.done":
+        if payload.get("terminal_kind") not in ("settled", "failed", "cancelled"):
+            raise DiscussionValidationError("agent.done terminal_kind must be 'settled', 'failed', or 'cancelled'")
+        _positive_int(payload.get("tokens"), label="tokens")
+    return payload
+
+
 _EVENT_VALIDATORS = {
     "message.user": _validate_user_event, "message.member": _validate_member_message,
     **dict.fromkeys(_TERMINAL_EVENT_KINDS, _validate_terminal_event),
-    **dict.fromkeys(_GATEWAY_EVENT_FIELDS, _validate_gateway_event)}
+    **dict.fromkeys(_GATEWAY_EVENT_FIELDS, _validate_gateway_event),
+    **dict.fromkeys(_PROGRESS_EVENT_FIELDS, _validate_progress_event)}
 
 
 def _validate_event(raw: Any, *, room: DiscussionRoom, previous_seq: int) -> _ValidatedEvent:
