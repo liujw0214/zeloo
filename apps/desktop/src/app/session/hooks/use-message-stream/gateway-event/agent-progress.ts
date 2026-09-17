@@ -13,13 +13,14 @@
  * panes). It only fires when the gateway emits the event on a session
  * the desktop is currently viewing.
  *
- * Phase 1 (this commit) wires the dispatch + console trail so the
- * event type appears in DevTools. UI rendering of the activity stream
- * is a follow-up; the precedent in lifecycle.ts: each handler is
- * plain TS, no React state, and the renderer subscribes via deps
- * callbacks.
+ * Phase 2 wiring: the handler also pushes each accepted event into the
+ * `$agentProgressEvents` ring buffer keyed by session id, so a React
+ * component can render the activity stream without each component
+ * re-walking the gateway event.
  */
 import type { RpcEvent } from '@/types/Zeloo'
+
+import { pushAgentProgress } from '@/store/agent-progress'
 
 import type { GatewayEventContext, GatewayEventHandler } from './types'
 
@@ -93,17 +94,12 @@ function describe(event: RpcEvent, payload: AgentProgressPayload): string {
 }
 
 /**
- * M1.5 handler: log agent.* events to console (DevTools) and return true
- * to indicate the event was consumed. The activity stream UI is a
- * follow-up; this commit ships the dispatch + observer so events
- * surface in DevTools immediately after M1.2-M1.3 emit them.
- *
- * If `deps.onAgentProgress` is provided, the handler delegates to it
- * for richer UI integration; the activity stream consumer is expected
- * to register a thin callback that pushes the entry into a store.
+ * M1.5 handler: log agent.* events to console (DevTools), push to the
+ * $agentProgressEvents ring buffer (Phase 2), and return true to
+ * indicate the event was consumed.
  */
 export function handleAgentProgressEvent(ctx: GatewayEventContext): boolean {
-  const { event } = ctx
+  const { event, sessionId } = ctx
   if (!AGENT_PROGRESS_EVENT_TYPES.has(event.type as never)) {
     return false  // not for us; let other handlers try
   }
@@ -111,19 +107,32 @@ export function handleAgentProgressEvent(ctx: GatewayEventContext): boolean {
   const text = describe(event, payload)
 
   // Phase 1: console trail so events are visible in DevTools.
-  // Future phase: feed into $agentProgress store + activity list renderer.
   if (typeof console !== 'undefined') {
     const fn = event.type === 'agent.failed' ? console.error : console.debug
     fn(`[M1.5 agent.progress] ${text}`)
   }
 
-  // Optional delegate hook for future UI integration.
+  // Phase 2: push into the per-session ring buffer. sessionId is resolved
+  // by the dispatcher before any handler runs (see
+  // resolveGatewayEventSessionId in dispatcher index.ts), so we can
+  // key on it directly without an explicit dep.
+  if (sessionId) {
+    try {
+      pushAgentProgress(event, text, sessionId)
+    } catch (err) {
+      if (typeof console !== 'undefined') {
+        console.warn('[M1.5 agent.progress] pushAgentProgress threw:', err)
+      }
+    }
+  }
+
+  // Back-compat hook for any external consumer that wants the raw
+  // description without going through the store.
   const onProgress = (ctx.deps as { onAgentProgress?: (e: RpcEvent, description: string) => void }).onAgentProgress
   if (typeof onProgress === 'function') {
     try {
       onProgress(event, text)
     } catch (err) {
-      // Never let observer errors break the dispatch chain.
       if (typeof console !== 'undefined') {
         console.warn('[M1.5 agent.progress] observer threw:', err)
       }
