@@ -9,6 +9,7 @@ import { useLocation } from 'react-router'
 import type { SubmitTextOptions } from '@/app/session/hooks/use-prompt-actions/utils'
 import { sessionShouldHaveTranscript } from '@/app/session/hooks/use-session-actions/utils'
 import { Thread } from '@/components/assistant-ui/thread'
+import { AgentProgressPanel } from '@/components/assistant-ui/thread/agent-progress-panel'
 import { TranscriptWindowProvider } from '@/components/assistant-ui/thread/transcript-window'
 import { Backdrop } from '@/components/Backdrop'
 import { COMPOSER_HEART_CONFIG, HeartField } from '@/components/chat/vibe-hearts'
@@ -666,6 +667,18 @@ const ChatViewContent = memo(function ChatViewContent({
           selectedSessionId={selectedSessionId}
         />
       )}
+
+      {/* M1.5: group-chat room activity stream. Renders nothing while
+          the per-session ring buffer is empty (hideWhenEmpty) so a
+          non-room session does not pay the render cost. Phase 4 of
+          M1.5 will gate this on room membership and a collapsible
+          disclosure — for now it just surfaces whatever agent.*
+          events the gateway has emitted for the active session. */}
+      <AgentProgressPanel
+        hideWhenEmpty
+        className="shrink-0 border-b border-(--ui-border) bg-(--ui-muted)/30 px-3 py-2"
+        maxRows={6}
+      />
 
       {/* Mounted for the primary AND every tile, each scoped to its own session
           so a tiled/background session's blocking prompt surfaces instead of
