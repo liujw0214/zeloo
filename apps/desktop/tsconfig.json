@@ -17,6 +17,8 @@
     "jsx": "react-jsx",
     "paths": {
       "@/*": ["./src/*"],
+      "@/Zeloo": ["./src/zeloo.ts"],
+      "@/types/Zeloo": ["./src/types/zeloo.ts"],
       "@Zeloo/plugin-sdk": ["./src/sdk/index.ts"],
       "@Zeloo/shared/billing": ["../shared/src/billing-types.ts"],
       "@Zeloo/shared/translucency": ["../shared/src/translucency.ts"],

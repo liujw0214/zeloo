@@ -199,10 +199,28 @@ export default defineConfig(({ command }) => ({
   resolve: {
     alias: {
       '@/debug/dev-only': debugEntry(command, process.env as Record<string, string>),
+      // Capital-Z historical import paths must come BEFORE the catch-all
+      // '@' rule below. Vite picks the first matching alias, so
+      // '@/Zeloo' would otherwise resolve via '@' -> './src' and
+      // mismatch the lowercase canonical 'zeloo.ts'. Same for
+      // '@/types/Zeloo'. See apps/desktop/AGENTS.md "case-sensitivity
+      // boundary (e1fdbf17)" for the rename history that left these
+      // 173 + 204 import sites behind.
+      '@/Zeloo': path.resolve(__dirname, './src/zeloo.ts'),
+      '@/types/Zeloo': path.resolve(__dirname, './src/types/zeloo.ts'),
       '@': path.resolve(__dirname, './src'),
       '@Zeloo/plugin-sdk': path.resolve(__dirname, './src/sdk/index.ts'),
       '@Zeloo/shared/billing': path.resolve(__dirname, '../shared/src/billing-types.ts'),
       '@Zeloo/shared': path.resolve(__dirname, '../shared/src'),
+      // Capital-Z historical import paths left over from the e1fdbf17
+      // "Hermes -> Zeloo" rename. The actual files live at the lowercase
+      // paths (Linux is case-sensitive and `core.ignorecase=true` makes
+      // git track only one of the two). Explicit aliases here let the
+      // 173 + 204 historical `@/Zeloo` / `@/types/Zeloo` import sites
+      // resolve at dev / build / test time without renaming the
+      // canonical files. Prefer the lowercase forms in new code.
+      '@/Zeloo': path.resolve(__dirname, './src/zeloo.ts'),
+      '@/types/Zeloo': path.resolve(__dirname, './src/types/zeloo.ts'),
       // The tour tool's preview surface injects driver.js's prebuilt IIFE into
       // the pane's guest page as raw source; the package's exports map doesn't
       // expose that dist file (nor ./package.json), so resolve the main entry
