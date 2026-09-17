@@ -315,7 +315,13 @@ const FORBIDDEN_REMOTE_HEADER_NAMES = new Set([
   'trailer',
   'transfer-encoding',
   'upgrade',
-  'x-Zeloo-session-token'
+  // Lowercase form. The comparator above (line 332) lowercases the
+  // incoming header name, so the set must also be fully lowercase.
+  // Historical bug: this entry was 'x-Zeloo-session-token' with a
+  // capital Z, so `X-Zeloo-Session-Token` (input) lowercased to
+  // 'x-zeloo-session-token' and slipped through the filter — the
+  // session token would then be forwarded to the proxy.
+  'x-zeloo-session-token'
 ])
 
 function normalizeRemoteHeaders(raw) {
