@@ -267,6 +267,42 @@ class CLITuiMixin:
         # RMS 0-32767 → index 0-7; typical speech is 500-5000, display caps at ~8000.
         return " ▁▂▃▄▅▆▇"[min(rec.current_rms, 8000) * 7 // 8000]
 
+
+
+    def _has_active_goal(self) -> bool:
+        try:
+            m = getattr(self, "_goal_manager", None)
+            if m is None:
+                g = getattr(self, "_get_goal_manager", None)
+                if g:
+                    m = g()
+            return bool(m and m.is_active())
+        except Exception:
+            return False
+
+    def _active_goal_info(self) -> str:
+        try:
+            m = getattr(self, "_goal_manager", None)
+            if m is None:
+                g = getattr(self, "_get_goal_manager", None)
+                if g:
+                    m = g()
+            if not (m and m.has_goal()):
+                return ""
+            st = m._state
+            if st is None:
+                return ""
+            h = getattr(st, "goal", "") or ""
+            t = getattr(st, "turns_used", 0) or 0
+            mx = getattr(st, "max_turns", 0) or 50
+            pct = min(100, t * 100 // mx) if mx else 0
+            status = getattr(st, "status", "active") or "active"
+            icon_map = {"paused": chr(0x23f8), "done": chr(0x2713), "active": chr(0x229e)}
+            icon = icon_map.get(status, chr(0x229e))
+            label = h[:40] + ("..." if len(h) > 40 else "")
+            return icon + " GOAL: " + label + " [" + str(pct) + "%]"
+        except Exception:
+            return ""
     def _get_tui_prompt_fragments(self):
         """prompt_toolkit fragments for the current interactive state."""
         symbol, state_suffix = self._get_tui_prompt_symbols()
@@ -302,6 +338,9 @@ class CLITuiMixin:
             return _state_fragment("class:prompt-working", "⚕")
         if self._voice_mode:
             return _state_fragment("class:voice-prompt", "🎤")
+        goal_info = self._active_goal_info()
+        if goal_info:
+            return _state_fragment("class:prompt-working", goal_info, "")
         return [("class:prompt", symbol)]
 
     def _get_tui_prompt_text(self) -> str:
@@ -345,8 +384,52 @@ class CLITuiMixin:
         self._invalidate(min_interval=0.0)
         return True
 
+
     def _get_extra_tui_widgets(self) -> list:
-        """Extension hook: wrapper CLIs return widgets inserted between the spacer and status bar."""
+        try:
+            if not self._has_active_goal():
+                return []
+        except Exception:
+            return []
+        try:
+            from prompt_toolkit.widgets import Label
+            from prompt_toolkit.formatted_text import FormattedText
+            from prompt_toolkit.layout.dimension import Dimension
+
+            def _goal_frag():
+                try:
+                    m = getattr(self, "_goal_manager", None)
+                    if m is None:
+                        g = getattr(self, "_get_goal_manager", None)
+                        if g:
+                            m = g()
+                    if not (m and m.has_goal()):
+                        return []
+                    st = m._state
+                    if st is None:
+                        return []
+                    t = getattr(st, "turns_used", 0) or 0
+                    mx = getattr(st, "max_turns", 0) or 50
+                    pct = min(100, t * 100 // mx) if mx else 0
+                    bar = "█" * (pct // 10) + "░" * max(0, 10 - pct // 10)
+                    h = getattr(st, "goal", "") or ""
+                    label = h[:36] + ("..." if len(h) > 36 else "")
+                    status = getattr(st, "status", "active") or "active"
+                    icon = {"paused": "⏸", "done": "✓",
+                            "active": "⊞"}.get(status, "⊞")
+                    return [("class:prompt-working",
+                             " " + icon + " GOAL: " + label + "  [" + bar + "] " + str(pct) + "%  ")]
+                except Exception:
+                    return []
+
+            lw = Label(
+                text=FormattedText(_goal_frag),
+                width=Dimension(preferred=56, max=72),
+                style="class:status-bar",
+            )
+            return [lw]
+        except Exception:
+            pass
         return []
 
     def _register_extra_tui_keybindings(self, kb, *, input_area) -> None:

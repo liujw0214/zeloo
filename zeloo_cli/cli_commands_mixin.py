@@ -1894,6 +1894,18 @@ class CLICommandsMixin:
               else "\n📋 Planning from this conversation's context...")
         self._queue_prompt_turn(build_plan_prompt(task), "/plan")
 
+    def _handle_spec_command(self, cmd: str):
+        '''Handle /spec -- SPEC MODE: authoritative three-document specification (spec.md +
+        tasks.md + checklist.md) saved under .Zeloo/specs/<slug>/. No execution.'''
+        from agent.spec_prompt import build_spec_prompt
+        task = _command_arg(cmd)
+        if task:
+            print("\n[SPEC] SPEC MODE: drafting spec for: " + task[:80])
+        else:
+            print("\n[SPEC] SPEC MODE: drafting specification documents...")
+        self._queue_prompt_turn(build_spec_prompt(task), "/spec")
+
+
     def _handle_init_command(self, cmd: str):
         """Handle /init — generate or update AGENTS.md from a project scan performed by the
         live agent with its own read-only tools."""
@@ -2272,6 +2284,124 @@ class CLICommandsMixin:
             return True
         except Exception:
             return False
+
+    def _handle_pipeline_command(self, cmd: str):
+        """Handle /pipeline [load|start|status|run|pause|stop|list] <name>.
+
+        Manages the Agent full-day pipeline closed loop:
+          /pipeline load       - load from workspace_templates/PIPELINE.md
+          /pipeline list       - list loaded pipelines
+          /pipeline start <n>  - mark pipeline active (cron + goal hooks drive it)
+          /pipeline status <n> - show stage-by-stage progress
+          /pipeline run <stage> - manually trigger a stage (skips dep check)
+          /pipeline pause      - pause the active pipeline (no new cron ticks)
+          /pipeline stop       - stop and reset the active pipeline
+        """
+        from agent.pipeline import (
+            parse_pipeline_markdown, PipelineStore, PipelineRunner,
+        )
+        from pathlib import Path as _P
+        from zeloo_constants import get_zeloo_home
+
+        parts = (cmd or "").strip().split(None, 1)
+        arg = parts[1].strip() if len(parts) > 1 else ""
+        tokens = arg.split(None, 1)
+        verb = tokens[0].lower() if tokens else "status"
+        rest = tokens[1].strip() if len(tokens) > 1 else ""
+
+        home = get_zeloo_home()
+        db_path = home / "state.db"
+        store = PipelineStore(db_path)
+
+        def _runner():
+            return PipelineRunner(store, self._queue_prompt_turn,
+                                   lambda: getattr(self, "_goal_manager", None))
+
+        if verb in ("", "status"):
+            # /pipeline status daily
+            name = rest or "daily"
+            runner = _runner()
+            print(runner.status_report(name))
+            return
+        if verb == "list":
+            names = store.list_pipelines()
+            if not names:
+                print("  No pipelines loaded. Try /pipeline load daily")
+                return
+            for n in names:
+                p = store.load(n)
+                print(f"  - {n}: {len(p.stages)} stages, enabled={p.enabled}")
+            return
+        if verb == "load":
+            # load from workspace_templates/PIPELINE.md (or workspace dir)
+            candidates = [
+                home / "workspace_templates" / "PIPELINE.md",
+                _P.cwd() / ".zeloo" / "workspace" / "PIPELINE.md",
+                home / "workspace" / "PIPELINE.md",
+            ]
+            md = None
+            for c in candidates:
+                if c.exists():
+                    md = c.read_text(encoding="utf-8")
+                    print(f"  Loading from {c}")
+                    break
+            if md is None:
+                print("  PIPELINE.md not found in workspace_templates/ or .zeloo/workspace/")
+                return
+            pipeline = parse_pipeline_markdown(md)
+            store.save(pipeline)
+            print(f"  Loaded pipeline {pipeline.name!r} with {len(pipeline.stages)} stages.")
+            for s in pipeline.stages:
+                errs = s.validate()
+                tag = "ok" if not errs else "INVALID"
+                print(f"    [{tag}] {s.name} ({s.kind}) cron={s.cron or '-'}")
+                if errs:
+                    print(f"         errors: {errs}")
+            return
+        if verb == "start":
+            name = rest or "daily"
+            p = store.load(name)
+            if not p:
+                print(f"  Pipeline {name!r} not loaded. Try /pipeline load first.")
+                return
+            self._pipeline_runner = _runner()
+            self._pipeline_runner.start(name)
+            print(f"  Pipeline {name!r} started. cron + goal hooks will drive stages.")
+            return
+        if verb == "pause":
+            r = getattr(self, "_pipeline_runner", None)
+            if r:
+                r.stop()
+                print("  Pipeline paused.")
+            else:
+                print("  No active pipeline.")
+            return
+        if verb == "stop":
+            r = getattr(self, "_pipeline_runner", None)
+            if r:
+                r.stop()
+            # Mark all running stages back to pending
+            active = getattr(self, "_active_pipeline", "daily")
+            p = store.load(active)
+            if p:
+                for s in p.stages:
+                    if s.status == "running":
+                        store.mark_stage(active, s.name, status="pending")
+            print(f"  Pipeline {active!r} stopped. State retained in state.db.")
+            return
+        if verb == "run":
+            # manually trigger a stage (bypasses cron)
+            active = getattr(self, "_active_pipeline", "daily") or "daily"
+            runner = _runner()
+            runner.start(active)
+            prompt = runner.on_cron_tick(active, rest)
+            if prompt:
+                self._queue_prompt_turn(prompt, f"/pipeline run {rest}")
+                print(f"  Triggered {rest!r} -> prompt queued.")
+            else:
+                print(f"  Stage {rest!r} not ready (deps / state).")
+            return
+        print(f"  Unknown verb: {verb!r}. Use: load|start|status|run|pause|stop|list")
 
     def _handle_loop_command(self, cmd: str) -> None:
         """Dispatch /loop — recurring in-session wakeups: ``/loop [interval] <prompt> [--times N]

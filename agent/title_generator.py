@@ -153,14 +153,34 @@ def _summarize_user_message(user_message: str) -> str:
 
 
 def is_titleable_user_message(user_message: str) -> bool:
-    """False for machine-authored openers and turns that reduce to nothing once scaffolding is stripped."""
-    return (isinstance(user_message, str) and bool(user_message.strip()) and not user_message.lstrip().startswith(_MACHINE_PREFIXES)
-            and bool(_summarize_user_message(user_message).strip()))
+    """False for machine openers, empty strings, and single-char/punctuation openers.
+    Bug A fix: single Chinese/ASCII punctuation (eg '？', '?', '.') was passing all
+    guards and yielding a garbage instant title like 'Friendly greeting'."""
+    if not isinstance(user_message, str) or not user_message.strip():
+        return False
+    if user_message.lstrip().startswith(_MACHINE_PREFIXES):
+        return False
+    summarized = _summarize_user_message(user_message).strip()
+    if not summarized:
+        return False
+    non_ws = [c for c in summarized if not c.isspace()]
+    if len(non_ws) < 3:
+        return False
+    if len(summarized.split()) < 2 and len(non_ws) < 5:
+        return False
+    return True
 
 
 def derive_title(user_message: str) -> Optional[str]:
-    """Instant title: first meaningful line trimmed to a word boundary. No model, never fails."""
-    line = " ".join(_first_line(_summarize_user_message(user_message)).split())
+    """Instant title: first meaningful line trimmed to a word boundary. No model, never fails.
+    Bug A fix: depth guard against single-char / punctuation-only messages."""
+    summarized = _summarize_user_message(user_message).strip()
+    if not summarized:
+        return None
+    non_ws = [c for c in summarized if not c.isspace()]
+    if len(non_ws) < 3:
+        return None
+    line = " ".join(summarized.split())
     if len(line) > MAX_DERIVED_TITLE_CHARS:
         cut = line[:MAX_DERIVED_TITLE_CHARS]
         space = cut.rfind(" ")
