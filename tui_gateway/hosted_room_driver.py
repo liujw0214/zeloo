@@ -728,9 +728,11 @@ class HostedRoomRuntime:
                 attempt, RuntimeError(f"terminal result could not be committed: {exc}"))
         # M1.2: emit agent.done / agent.failed now that the task is durably settled
         progress_kind = "agent.done" if terminal.status == "settled" else "agent.failed"
-        progress_extra = {}
+        progress_extra: dict[str, Any] = {}
         if terminal.status == "settled" and terminal.result.get("text"):
             progress_extra["text"] = terminal.result["text"][:1024]
+        elif terminal.status != "settled" and terminal.result.get("error"):
+            progress_extra["text"] = str(terminal.result["error"])[:512]
         self._emit_progress(binding, task, progress_kind, **progress_extra)
         self.wakeup()
 

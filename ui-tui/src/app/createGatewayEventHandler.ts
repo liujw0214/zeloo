@@ -1462,6 +1462,54 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
         return
 
+      case 'agent.thinking':
+      case 'agent.done':
+      case 'agent.failed':
+      case 'agent.tool':
+      case 'agent.progress': {
+        // M1.4: render agent.* progress events from hosted room bot members.
+        // These are emitted by bot members in a group chat while the main agent is working.
+        // We surface them as transient activity items in the current turn.
+        const p = ev.payload
+        const displayName = p.display_name ?? p.member_id
+        let text = ''
+        let tone: 'info' | 'warn' | 'error' = 'info'
+
+        switch (ev.type) {
+          case 'agent.thinking':
+            text = `${displayName} is thinking…`
+            break
+          case 'agent.tool':
+            text = `${displayName} › ${p.tool_name ?? 'tool'}`
+            if (p.tool_preview) {
+              text += ` ${p.tool_preview.slice(0, 80)}`
+            }
+            break
+          case 'agent.progress':
+            text = `${displayName}: ${p.text ?? ''}`
+            break
+          case 'agent.done':
+            text = `${displayName} ✓`
+            if (p.output_tail) {
+              text += ` — ${p.output_tail.slice(0, 120)}`
+            }
+            break
+          case 'agent.failed':
+            text = `${displayName} ✗`
+            if (p.text) {
+              text += ` ${p.text.slice(0, 120)}`
+            }
+            tone = 'error'
+            break
+        }
+
+        if (text) {
+          turnController.pushActivity(text, tone)
+        }
+
+        return
+      }
+
       case 'message.delta':
         turnController.recordMessageDelta(ev.payload ?? {})
 
