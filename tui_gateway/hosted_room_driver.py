@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any, ContextManager, Protocol, cast
 
 from gateway import hosted_room_driver as state
+from gateway import hosted_room_discussion as discussion
+from gateway import hosted_rooms
 
 _CANCEL_ROUTE_RETRIES = 8
 _STOP_ACK_STATUSES = {"cancelled", "interrupted"}
@@ -594,6 +596,8 @@ class HostedRoomRuntime:
                     **_session_kw(profile, session_id), prompt=task["payload"]["prompt"],
                     task=attempt.identity, execution_generation=attempt.execution_generation,
                     on_terminal=lambda receipt: self._on_terminal(binding, attempt, receipt))
+                # M1.2: emit agent.thinking so TUI can show progress while model works
+                self._emit_progress(binding, dict(task), "agent.thinking")
                 self._unavailable_route_retries.pop(
                     (task["identity"].room_id, _member_id(task)), None)
                 receipt = self._wait_for_terminal(
@@ -634,6 +638,59 @@ class HostedRoomRuntime:
         self._drop_lease(binding.room_id)
         self._ambiguous_rooms[binding.room_id] = attempt.lease.expires_at
 
+    # M1.2: progress event emission helpers
+
+    def _emit_progress(self, binding: HostedRoomBinding, task: Mapping[str, Any], kind: str, **extra: Any) -> None:
+        """M1.2: best-effort emit of one progress event. Errors are logged, never propagate."""
+        try:
+            room_row = hosted_rooms.room_state(self.db_path, room_id=binding.room_id)
+            plan = discussion.make_progress_event(
+                kind=kind,
+                task=self._reconstruct_task_plan(task, room_row),
+                room_gateway_id=room_row["authority_gateway_id"],
+                room_epoch=room_row["authority_epoch"],
+                **extra)
+            hosted_rooms.append_event(self.db_path, **plan.append_kwargs(binding.room_id))
+        except Exception as exc:
+            self._record_error(f"progress emit {kind} failed: {exc}")
+
+    def _reconstruct_task_plan(
+        self, task: Mapping[str, Any], room_row: dict[str, Any],
+    ) -> discussion.DiscussionTaskPlan:
+        """Reconstruct a DiscussionTaskPlan from a driver task row + room state.
+
+        Used for progress event emission where the discussion-layer task plan is not directly available.
+        """
+        from gateway.hosted_room_discussion import DiscussionMember
+        member_id = str(task["payload"].get("target_member_id") or task["payload"].get("target_profile") or "")
+        members = room_row["members"]
+        raw = None
+        if members:
+            try:
+                raw = next(m for m in members if m.get("member_id") == member_id)
+            except StopIteration:
+                pass
+        if raw is not None:
+            member = DiscussionMember(
+                member_id=raw.get("member_id", member_id),
+                profile=raw.get("profile", task["payload"]["target_profile"]),
+                handle=raw.get("handle", member_id),
+                display_name=raw.get("display_name"),
+                target=raw.get("target"),
+            )
+        else:
+            member = DiscussionMember(member_id=member_id, profile=task["payload"]["target_profile"], handle=member_id)
+        source_event_seq = task["payload"].get("source_event_seq", 0)
+        return discussion.DiscussionTaskPlan(
+            identity=task["identity"],
+            payload=task["payload"],
+            discussion_event_id=f"ev{int(source_event_seq)}",
+            member=member,
+            member_index=0,
+            round_index=0,
+            seen_through_seq=int(source_event_seq),
+        )
+
     def _on_terminal(
         self, binding: HostedRoomBinding, attempt: state.TaskAttempt, receipt: Mapping[str, Any]
     ) -> None:
@@ -647,6 +704,8 @@ class HostedRoomRuntime:
             settlement_id=receipt.get("settlement_id")
             or f"reply:{attempt.identity.task_id}:{attempt.execution_generation}",
             result=_bounded_terminal_result(receipt))
+        # M1.2: get task record for both settling and progress emit
+        task = state.get_task(self.db_path, attempt.identity)
         try:
             self._publish(
                 binding,
@@ -667,6 +726,12 @@ class HostedRoomRuntime:
             # A malformed receipt must not escape the callback and hold the profile lock.
             self._settle_failure_if_current(
                 attempt, RuntimeError(f"terminal result could not be committed: {exc}"))
+        # M1.2: emit agent.done / agent.failed now that the task is durably settled
+        progress_kind = "agent.done" if terminal.status == "settled" else "agent.failed"
+        progress_extra = {}
+        if terminal.status == "settled" and terminal.result.get("text"):
+            progress_extra["text"] = terminal.result["text"][:1024]
+        self._emit_progress(binding, task, progress_kind, **progress_extra)
         self.wakeup()
 
     def _wait_for_terminal(

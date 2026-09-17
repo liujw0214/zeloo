@@ -86,6 +86,42 @@ _PROGRESS_EVENT_FIELDS = {
         ("task_id",),
     ),
 }
+# M1.2: event_id scheme for progress events (stable, deterministic)
+_PROGRESS_EVENT_ID_SALT = "agent.progress/v1"
+
+
+def _make_progress_event_id(kind: str, task: DiscussionTaskPlan, extra: str = "") -> str:
+    """Deterministic event_id for a progress event: sha256(salt + kind + task_id + extra)."""
+    data = f"{_PROGRESS_EVENT_ID_SALT}/{kind}/{task.identity.task_id}/{extra}"
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()[:48]
+
+
+def make_progress_event(
+    kind: str, task: DiscussionTaskPlan, room_gateway_id: str, room_epoch: int,
+    **extra_fields: Any,
+) -> EventPlan:
+    """M1.2: Build one agent.* progress EventPlan from a task + room authority + kind-specific fields.
+
+    Callers (driver emit)::
+        # agent.thinking
+        ev = make_progress_event("agent.thinking", task, room.gateway_id, room.authority_epoch, model="gpt-4o", round=0)
+        hosted_rooms.append_event(db_path, **ev.append_kwargs(room_id))
+
+    All progress events are member-authored; the actor is the task's member.
+    Best-effort: if append_event raises, the error is logged and the turn proceeds normally.
+    """
+    if kind not in _PROGRESS_EVENT_FIELDS:
+        raise DiscussionValidationError(f"unknown progress event kind: {kind}")
+    return EventPlan(
+        event_id=_make_progress_event_id(kind, task),
+        kind=kind,
+        actor=_member_actor(task.member),
+        payload={**_turn_coordinates(task), **extra_fields},
+        authority_gateway_id=room_gateway_id,
+        authority_epoch=room_epoch,
+    )
+
+
 # Gateway-authored control events: kind -> (exact payload fields, identifier fields).
 _GATEWAY_EVENT_FIELDS = {
     "room.activity": (
