@@ -2403,6 +2403,108 @@ class CLICommandsMixin:
             return
         print(f"  Unknown verb: {verb!r}. Use: load|start|status|run|pause|stop|list")
 
+    def _handle_room_command(self, cmd: str) -> None:
+        """Handle /room [list|create <id> <name...>|disband <id>|show <id>] — manage hosted rooms.
+
+        Hosted rooms are the multi-bot group-chat substrate (gateway/hosted_rooms.py).
+        M1.x added the 6 agent.* event kinds for room-internal progress events
+        (agent.thinking, agent.done, agent.failed, agent.tool_call,
+        agent.tool_result, agent.waiting_child) emitted by the room driver. This
+        command lets a user create, list, inspect, and disband rooms from the CLI.
+
+        Storage: gateway.shared-state.db (NOT state.db). The hosted-room tables live
+        in a dedicated file so profile gateways never open the master session store
+        writable (multi-writer corruption vector, 2026-09-03).
+        """
+        from gateway.hosted_rooms import (
+            create_room as _create_room,
+            list_rooms as _list_rooms,
+            disband_room as _disband_room,
+            default_db_path,
+            local_authority_gateway_id,
+        )
+
+        parts = (cmd or "").strip().split(None, 1)
+        arg = parts[1].strip() if len(parts) > 1 else ""
+        tokens = arg.split(None, 2)
+        verb = tokens[0].lower() if tokens else "list"
+        rest = tokens[1].strip() if len(tokens) > 1 else ""
+
+        db = default_db_path()
+        gw = local_authority_gateway_id()
+
+        if verb in ("", "list"):
+            rooms = _list_rooms(db)
+            if not rooms:
+                print("  No active rooms.")
+                return
+            print(f"  {len(rooms)} room(s):")
+            for r in rooms:
+                members = r.get("members") or []
+                print(f"    - {r['room_id']}  name={r['name']!r}  members={len(members)}  "
+                      f"updated_at={r.get('updated_at', '?')}")
+            return
+
+        if verb == "create":
+            # /room create <id> <name...>
+            if not rest:
+                return print("  Usage: /room create <id> <name...>")
+            id_rest = rest.split(None, 1)
+            room_id = id_rest[0]
+            name = id_rest[1].strip() if len(id_rest) > 1 else room_id
+            try:
+                room = _create_room(
+                    db,
+                    room_id=room_id,
+                    name=name,
+                    members=[],  # user can add members later via gateway API
+                    authority_gateway_id=gw,
+                )
+            except Exception as exc:
+                return print(f"  Failed: {type(exc).__name__}: {exc}")
+            print(f"  ✓ Created room {room['room_id']!r}  name={room['name']!r}")
+            print("    Note: M1.1 event schema + driver are wired in gateway/hosted_room_*.py.")
+            print("          Add members and post events via the hosted-room gateway API.")
+            return
+
+        if verb == "show":
+            if not rest:
+                return print("  Usage: /room show <id>")
+            rooms = _list_rooms(db)
+            for r in rooms:
+                if r["room_id"] == rest:
+                    print(f"  Room {r['room_id']}")
+                    for k, v in r.items():
+                        if k == "members":
+                            print(f"    {k}: {len(v)} member(s)")
+                        else:
+                            print(f"    {k}: {v}")
+                    return
+            print(f"  Room {rest!r} not found (or disbanded).")
+            return
+
+        if verb == "disband":
+            if not rest:
+                return print("  Usage: /room disband <id>")
+            # disband needs authority_epoch — fetch from list first
+            rooms = _list_rooms(db)
+            target = next((r for r in rooms if r["room_id"] == rest), None)
+            if not target:
+                return print(f"  Room {rest!r} not found.")
+            try:
+                _disband_room(
+                    db,
+                    room_id=rest,
+                    expected_gateway_id=gw,
+                    expected_epoch=int(target["authority_epoch"]),
+                )
+            except Exception as exc:
+                return print(f"  Failed: {type(exc).__name__}: {exc}")
+            print(f"  ✓ Disbanded room {rest!r}.")
+            return
+
+        print(f"  Unknown verb: {verb!r}. Use: list|create|show|disband")
+
     def _handle_loop_command(self, cmd: str) -> None:
         """Dispatch /loop — recurring in-session wakeups: ``/loop [interval] <prompt> [--times N]
         [--until <cond>]`` starts one; ``status | pause | resume | stop`` control it."""
