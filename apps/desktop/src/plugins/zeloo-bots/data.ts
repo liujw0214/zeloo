@@ -980,8 +980,14 @@ export function mentionNameForms(value: null | string | undefined): string[] {
   const slug = name.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
   const collapsed = name.replace(/[^a-z0-9_-]+/g, '')
 
+  // Reserved tokens are lowercased because the value of `form` is
+  // already lowercased (line above: `name.toLowerCase()`). The
+  // historical capital 'Zeloo' here never matched anything and the
+  // test "drops reserved tokens so a rename cannot hijack a built-in
+  // tag" failed. The display name elsewhere is still Zeloo — this
+  // list is just the slug-drop list.
   return [...new Set([slug, collapsed])].filter(
-    form => /^[a-z0-9][a-z0-9_-]*$/.test(form) && !['all', 'everyone', 'user', 'default', 'Zeloo'].includes(form)
+    form => /^[a-z0-9][a-z0-9_-]*$/.test(form) && !['all', 'everyone', 'user', 'default', 'zeloo'].includes(form)
   )
 }
 
