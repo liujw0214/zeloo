@@ -29,9 +29,15 @@ afterEach(() => {
 
 describe('remoteHostLabel', () => {
   it('keeps a non-default port and drops default ones', () => {
-    expect(remoteHostLabel('https://Zeloo.example.com:8443/x')).toBe('Zeloo.example.com:8443')
-    expect(remoteHostLabel('https://Zeloo.example.com:443')).toBe('Zeloo.example.com')
-    expect(remoteHostLabel('http://Zeloo.example.com:80')).toBe('Zeloo.example.com')
+    // Per WHATWG URL spec, `new URL(...).hostname` lowercases the
+    // host part. The historical fixture asserted the input's case
+    // was preserved ('Zeloo.example.com:8443'), but the production
+    // path goes through `new URL(...)` which cannot return a
+    // capital-Z host. Lowercased fixtures match what the function
+    // actually returns.
+    expect(remoteHostLabel('https://Zeloo.example.com:8443/x')).toBe('zeloo.example.com:8443')
+    expect(remoteHostLabel('https://zeloo.example.com:443')).toBe('zeloo.example.com')
+    expect(remoteHostLabel('http://zeloo.example.com:80')).toBe('zeloo.example.com')
   })
 
   it('returns empty for unparseable input', () => {
