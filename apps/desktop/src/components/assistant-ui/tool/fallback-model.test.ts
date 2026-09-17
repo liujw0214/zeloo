@@ -160,7 +160,12 @@ describe('buildToolView browser_navigate title', () => {
     )
 
     expect(view.status).toBe('error')
-    expect(view.title).toBe('Failed to open Zeloo-agent.nousresearch.com/docs')
+    // Per WHATWG URL spec, the hostname returned by `new URL(...).hostname`
+    // is lowercased. The historical fixture asserted the input case
+    // ('Zeloo-agent.nousresearch.com') was preserved, but the
+    // production path goes through `new URL(...)` and the title
+    // builder uses the canonical lowercase form.
+    expect(view.title).toBe('Failed to open zeloo-agent.nousresearch.com/docs')
   })
 
   it('shows opened title on success', () => {
@@ -174,7 +179,8 @@ describe('buildToolView browser_navigate title', () => {
     )
 
     expect(view.status).toBe('success')
-    expect(view.title).toBe('Opened Zeloo-agent.nousresearch.com/docs')
+    // Same WHATWG URL spec as the error test above.
+    expect(view.title).toBe('Opened zeloo-agent.nousresearch.com/docs')
   })
 })
 
