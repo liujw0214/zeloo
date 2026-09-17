@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from utils import atomic_write_text
 from tools.threat_patterns import first_threat_message as _first_threat_message
+import shutil
 
 logger = logging.getLogger("tools.memory_tool")
 
@@ -108,11 +109,44 @@ class MemoryStore:
             "memory calls — leave memory unchanged for now and continue with your reply to the user. "
             "The fact can be saved in a later turn.")}
 
+    @staticmethod
+    def _bridge_missing_memory_file(filename, memory_dir, home_dir):
+        """Bug B fix: bridge workspace-tier MEMORY.md/USER.md to memories/ on demand.
+        When memory_dir/<filename> is empty/missing on first run, fall back to
+        project workspace, then home workspace, then workspace_templates. Single-
+        direction (workspace -> memories) so user edits stay authoritative once written.
+        """
+        try:
+            mem_path = Path(memory_dir) / filename
+            if mem_path.exists() and mem_path.stat().st_size > 0:
+                return
+            candidates = [
+                Path.cwd() / ".zeloo" / "workspace" / filename,
+                Path.home() / ".zeloo" / "workspace" / filename,
+                Path(home_dir) / "workspace_templates" / filename,
+            ]
+            for s in candidates:
+                if s.exists() and s.stat().st_size > 0:
+                    mem_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(str(s), str(mem_path))
+                    return
+        except Exception:
+            pass
+
     def load_from_disk(self):
         """Load MEMORY.md / USER.md and capture the frozen system-prompt snapshot.
+        Bug B: bridge workspace tier if memories/ is empty.
         Threat hits are replaced by a ``[BLOCKED: …]`` placeholder in the SNAPSHOT only;
         live lists keep the raw text so the user can see and remove poisoned entries
         (dropping them silently would hide the attack)."""
+        # Bug B: bridge workspace-tier templates into memories/ if empty.
+        try:
+            MemoryStore._bridge_missing_memory_file(
+                "MEMORY.md", self.memory_dir, self.home_dir)
+            MemoryStore._bridge_missing_memory_file(
+                "USER.md", self.memory_dir, self.home_dir)
+        except Exception:
+            pass
         from tools.threat_patterns import scan_for_threats
 
         def _sanitize(entry, filename):
