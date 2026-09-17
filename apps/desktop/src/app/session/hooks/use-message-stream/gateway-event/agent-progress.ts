@@ -2,10 +2,19 @@
  * M1.5: agent.* event handler for Desktop.
  *
  * Renders group-chat room progress events (agent.thinking, agent.done,
- * agent.failed, agent.tool, agent.progress, agent.waiting_child) emitted
- * by the room driver (gateway/hosted_room_driver.py, M1.2-M1.3) and
- * type-defined in TUI (ui-tui/src/gatewayTypes.ts: AgentProgressPayload,
+ * agent.failed, agent.tool_call, agent.tool_result, agent.waiting_child)
+ * emitted by the room driver (gateway/hosted_room_driver.py, M1.2-M1.3)
+ * and type-defined in TUI (ui-tui/src/gatewayTypes.ts: AgentProgressPayload,
  * M1.4).
+ *
+ * Phase 5 fix: the event-kind set in this handler used to include two
+ * names that the driver never emits (`agent.tool`, `agent.progress`) and
+ * was missing two names the driver DOES emit (`agent.tool_call`,
+ * `agent.tool_result`). With the wrong set, every driver-emitted tool
+ * event was silently swallowed by the AGENT_PROGRESS_EVENT_TYPES
+ * filter and never reached the panel. The names below now match the
+ * six kinds declared in `gateway/hosted_room_discussion.py:
+ * _PROGRESS_EVENT_FIELDS` — keep these two lists in sync.
  *
  * Per apps/desktop/src/AGENTS.md "Surface capability is a property of
  * the SESSION": this handler is a property of the session that owns the
@@ -25,15 +34,16 @@ import { pushAgentProgress } from '@/store/agent-progress'
 import type { GatewayEventContext, GatewayEventHandler } from './types'
 
 /**
- * M1.5 agent.* progress events. Names mirror ui-tui/src/gatewayTypes.ts
- * (TUI M1.4) and gateway/hosted_room_driver.py (M1.2-M1.3 emitter).
+ * M1.5 agent.* progress events. Names mirror the six kinds declared in
+ * `gateway/hosted_room_discussion.py: _PROGRESS_EVENT_FIELDS` and emitted
+ * by `hosted_room_driver.py`. Keep these two lists in sync.
  */
 const AGENT_PROGRESS_EVENT_TYPES = new Set([
   'agent.thinking',
   'agent.done',
   'agent.failed',
-  'agent.tool',
-  'agent.progress',
+  'agent.tool_call',
+  'agent.tool_result',
   'agent.waiting_child',
 ] as const)
 
@@ -42,8 +52,8 @@ const AGENT_EVENT_LABEL: Record<string, string> = {
   'agent.thinking': 'thinking',
   'agent.done': 'done',
   'agent.failed': 'failed',
-  'agent.tool': 'tool',
-  'agent.progress': 'progress',
+  'agent.tool_call': 'tool',
+  'agent.tool_result': 'tool result',
   'agent.waiting_child': 'waiting for child',
 }
 
@@ -63,6 +73,10 @@ interface AgentProgressPayload {
   error_class?: string
   error_message?: string
   tokens?: { input?: number; output?: number }
+  // Phase 5: agent.tool_result carries `status` (the tool call outcome
+  // string, e.g. "ok" / "error"); agent.tool_call carries a `call_id`
+  // for correlation. Both are already in the TUI contract; we just
+  // stopped swallowing them at the dispatcher.
 }
 
 /** Returns true if the event is a M1 agent.* progress event. */

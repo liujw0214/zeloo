@@ -47,8 +47,8 @@ describe('isAgentProgressEvent', () => {
     'agent.thinking',
     'agent.done',
     'agent.failed',
-    'agent.tool',
-    'agent.progress',
+    'agent.tool_call',
+    'agent.tool_result',
     'agent.waiting_child',
   ])('returns true for %s', (type) => {
     expect(isAgentProgressEvent(makeEvent(type))).toBe(true)
@@ -75,8 +75,8 @@ describe('handleAgentProgressEvent filtering', () => {
     'agent.thinking',
     'agent.done',
     'agent.failed',
-    'agent.tool',
-    'agent.progress',
+    'agent.tool_call',
+    'agent.tool_result',
     'agent.waiting_child',
   ])('consumes %s', (type) => {
     const consumed = handleAgentProgressEvent(makeContext(makeEvent(type)))
