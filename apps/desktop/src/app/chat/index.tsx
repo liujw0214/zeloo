@@ -12,6 +12,7 @@ import type { SubmitTextOptions } from '@/app/session/hooks/use-prompt-actions/u
 import { sessionShouldHaveTranscript } from '@/app/session/hooks/use-session-actions/utils'
 import { Thread } from '@/components/assistant-ui/thread'
 import { AgentProgressPanel } from '@/components/assistant-ui/thread/agent-progress-panel'
+import { CreateRoomButton } from '@/components/hosted-rooms/create-room-button'
 import { TranscriptWindowProvider } from '@/components/assistant-ui/thread/transcript-window'
 import { Backdrop } from '@/components/Backdrop'
 import { COMPOSER_HEART_CONFIG, HeartField } from '@/components/chat/vibe-hearts'
@@ -693,6 +694,16 @@ const ChatViewContent = memo(function ChatViewContent({
         className="shrink-0 border-b border-(--ui-border) bg-(--ui-muted)/30 px-3 py-2"
         maxRows={6}
       />
+
+      {/* M1.5 Phase 7: "+ Room" button. Clicking opens a dialog that
+          creates a new hosted room via createRoom(); the React Query
+          invalidation in the dialog immediately refreshes the room
+          list so the new room appears in AgentProgressPanel's room
+          gate (Phase 4) on the next paint, without waiting for the
+          30s poll. */}
+      <div className="flex items-center justify-end border-b border-(--ui-border) bg-(--ui-background) px-3 py-1.5">
+        <CreateRoomButton data-testid="chat-create-room-button" />
+      </div>
 
       {/* Mounted for the primary AND every tile, each scoped to its own session
           so a tiled/background session's blocking prompt surfaces instead of
