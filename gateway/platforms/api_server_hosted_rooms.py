@@ -35,6 +35,24 @@ if TYPE_CHECKING:
 
 
 def _http_routes(self: "APIServerAdapter") -> list[tuple[str, str, Any]]:
+    """Return the (method, path, handler) triples this module adds to
+    the api_server route table.
+
+    The route table iterates ``for method, path, handler in routes:
+    app.router.add_route(method, path, handler)``. aiohttp binds the
+    handler to the application at registration time, so the handler
+    can be either an unbound function (which aiohttp will call with
+    ``(request,)``) or a bound method (which aiohttp will call with
+    ``(self, request)``). The OpenAI mixin uses unbound functions
+    wrapped with ``_admit_api_agent_request``; the room-grants and
+    api-runs modules use the bound-method form (``self._handle_...``).
+
+    This module takes the simpler path: the four handlers are
+    module-level ``async def _handle_hosted_rooms_<verb>(self, request)``
+    functions. We bind them to the adapter instance via staticmethod
+    on the class body (see ``APIServerAdapter``), so the route table
+    can reference them the same way it does for room-grants and
+    api-runs (``self._handle_hosted_rooms_<verb>``)."""
     return [
         ("GET", "/api/hosted_rooms", self._handle_hosted_rooms_list),
         ("POST", "/api/hosted_rooms", self._handle_hosted_rooms_create),
