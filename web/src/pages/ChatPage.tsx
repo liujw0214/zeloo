@@ -25,8 +25,8 @@ import "@xterm/xterm/css/xterm.css";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { Typography } from "@nous-research/ui/ui/components/typography/index";
 import { cn } from "@/lib/utils";
-import { Copy, PanelRight, RotateCcw, X } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, ArrowUp, ChevronDown, ChevronRight, Copy, PanelRight, RotateCcw, X } from "lucide-react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useSearchParams } from "react-router";
 
@@ -34,7 +34,7 @@ import { ChatSidebar } from "@/components/ChatSidebar";
 import { ChatSessionList } from "@/components/ChatSessionList";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { useI18n } from "@/i18n";
-import { api } from "@/lib/api";
+import { api, fetchJSON } from "@/lib/api";
 import { latchChatActivation } from "@/lib/chat-activation";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { normalizeSessionTitle } from "@/lib/chat-title";
@@ -1995,7 +1995,182 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
           </div>
         )}
       </div>
+      <ChatFallbackPanel />
       <PluginSlot name="chat:bottom" />
+    </div>
+  );
+}
+
+
+function extractErrorDetail(e: unknown): string {
+  // fetchJSON throws ``new Error(`${res.status}: ${bodyText}`)``. Parse the
+  // body so callers see the server's ``detail`` rather than the raw JSON.
+  const raw = (e as Error)?.message ?? String(e);
+  const colon = raw.indexOf(":");
+  if (colon < 0) return raw;
+  const status = raw.slice(0, colon).trim();
+  const body = raw.slice(colon + 1).trim();
+  if (body.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(body) as { detail?: unknown };
+      const detail = parsed.detail;
+      if (typeof detail === "string") return `${status} · ${detail}`;
+      if (detail && typeof detail === "object" && "message" in detail) {
+        return `${status} · ${String((detail as Record<string, unknown>).message)}`;
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  return raw;
+}
+
+function ChatFallbackPanel(): React.JSX.Element {
+  // Always-visible HTTP fallback composer for the dashboard /chat tab.
+  // Works even when the PTY + TUI stack (xterm.js + node TUI) is broken,
+  // because it just POSTs the prompt to /api/chat/send which spawns
+  // `Zeloo -z <prompt>` in the background and returns the reply as JSON.
+  const [open, setOpen] = React.useState(true);
+  const [prompt, setPrompt] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [reply, setReply] = React.useState<
+    { output: string; elapsed_s: number; note?: string | null } | null
+  >(null);
+  const [error, setError] = React.useState<string | null>(null);
+
+  async function send(): Promise<void> {
+    const text = prompt.trim();
+    if (!text || busy) return;
+    setBusy(true);
+    setError(null);
+    setReply(null);
+    try {
+      const r = await fetchJSON<{
+        ok: boolean;
+        output: string;
+        elapsed_s: number;
+        note?: string | null;
+      }>("/api/chat/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: text, timeout_s: 180 }),
+      });
+      setReply({ output: r.output, elapsed_s: r.elapsed_s, note: r.note ?? null });
+    } catch (e: unknown) {
+      setError(extractErrorDetail(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className={cn(
+        "mx-4 mb-4 rounded-xl border border-current/10",
+        "bg-card/30 backdrop-blur-sm",
+        "shadow-sm shadow-midground/5",
+        "transition-colors",
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className={cn(
+          "flex w-full items-center justify-between gap-3",
+          "rounded-t-xl px-4 py-3 text-left",
+          "text-xs font-medium tracking-wide text-text-secondary",
+          "hover:bg-midground/[0.03]",
+          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-midground/30",
+          "transition-colors duration-150",
+        )}
+      >
+        <span className="inline-flex items-center gap-2">
+          {open ? (
+            <ChevronDown className="h-4 w-4 shrink-0 opacity-70" />
+          ) : (
+            <ChevronRight className="h-4 w-4 shrink-0 opacity-70" />
+          )}
+          <span className="uppercase tracking-[0.12em]">
+            HTTP fallback · sends to /api/chat/send
+          </span>
+        </span>
+        <span className="text-[10px] font-normal text-text-tertiary">
+          {open ? "hide" : "use when the terminal above is broken"}
+        </span>
+      </button>
+      {open && (
+        <div className="flex flex-col gap-3 border-t border-current/10 px-4 py-4">
+          <textarea
+            className={cn(
+              "min-h-[88px] w-full resize-y rounded-lg border border-current/15",
+              "bg-background/50 px-4 py-3 text-sm leading-relaxed text-foreground",
+              "placeholder:text-text-tertiary placeholder:text-[13px]",
+              "transition-all duration-150",
+              "hover:border-current/25",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-midground/30 focus-visible:border-current/30",
+              "disabled:cursor-not-allowed disabled:opacity-50",
+            )}
+            placeholder="Type a prompt. Ctrl+Enter to send. Runs Zeloo -z in the background and shows the reply here."
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            disabled={busy}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+          />
+          <div className="flex items-center justify-between gap-3 px-1">
+            <span className="text-[11px] font-normal tracking-wide text-text-tertiary">
+              {busy ? "running Zeloo -z …" : "POST /api/chat/send"}
+            </span>
+            <Button
+              size="sm"
+              onClick={() => void send()}
+              disabled={busy || prompt.trim().length === 0}
+              className="gap-1.5"
+            >
+              <ArrowUp className="h-3.5 w-3.5" />
+              {busy ? "Sending…" : "Send"}
+            </Button>
+          </div>
+          {error && (
+            <div
+              role="alert"
+              className={cn(
+                "flex items-start gap-2.5 rounded-lg border border-destructive/30",
+                "bg-destructive/[0.07] px-3.5 py-2.5 text-xs text-destructive",
+              )}
+            >
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span className="wrap-break-word font-mono leading-relaxed">{error}</span>
+            </div>
+          )}
+          {reply && (
+            <div
+              className={cn(
+                "rounded-lg border border-current/10 bg-background/30",
+                "max-h-[420px] overflow-auto px-4 py-3",
+              )}
+            >
+              <div className="mb-2 text-[11px] font-normal tracking-wide text-text-tertiary">
+                {reply.elapsed_s}s · {reply.output.length} chars
+                {reply.note ? ` · ${reply.note}` : ""}
+              </div>
+              <pre
+                className={cn(
+                  "m-0 whitespace-pre-wrap wrap-break-word",
+                  "font-mono text-[12.5px] leading-[1.7] text-foreground/90",
+                )}
+              >
+                {reply.output}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

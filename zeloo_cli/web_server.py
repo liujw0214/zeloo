@@ -949,6 +949,7 @@ from zeloo_cli.web_routers import (  # noqa: E402
     tools as _tools_routes,
     analytics as _analytics_routes,
     chat_ws as _chat_ws_routes,
+    chat as _chat_routes,  # HTTP fallback for /chat tab
     dashboard_ui as _dashboard_ui_routes,
     # M1.5 Phase 6 part 3: hosted-rooms CRUD + event log for the
     # desktop renderer (which fetches 9119, not 8642). The
@@ -983,6 +984,7 @@ app.include_router(_skills_routes.router)
 app.include_router(_tools_routes.router)
 app.include_router(_analytics_routes.router)
 app.include_router(_chat_ws_routes.router)
+app.include_router(_chat_routes.router)  # HTTP /api/chat/{send,status}
 # M1.5 Phase 6 part 3: hosted-rooms CRUD + event log surfaces on the
 # same FastAPI app that already serves /api/profiles etc. so the
 # desktop renderer (which fetches 9119, not 8642) can read rooms
