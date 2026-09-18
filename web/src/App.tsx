@@ -107,8 +107,16 @@ import { isDashboardEmbeddedChatEnabled } from "@/lib/dashboard-flags";
 import { latchChatActivation } from "@/lib/chat-activation";
 import { api } from "@/lib/api";
 import type { StatusResponse, UpdateCheckResponse } from "@/lib/api";
+import { SystemPageSkeleton } from "@/components/SystemPageSkeleton";
 
 function RouteFallback({ label = "Loading…" }: { label?: string }) {
+  // Match the destination of a lazy route so the suspense fallback can mirror
+  // the final layout instead of a bare spinner. Currently only /system has a
+  // bespoke skeleton (its chunk is the largest and the spinner was the most
+  // jarring); every other page keeps the generic spinner.
+  if (typeof window !== "undefined" && window.location.pathname === "/system") {
+    return <SystemPageSkeleton />;
+  }
   return (
     <div
       className="flex min-h-[12rem] flex-1 items-center justify-center"
