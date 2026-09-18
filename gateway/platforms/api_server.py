@@ -1122,9 +1122,29 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
     _handle_chat_completions = _admit_api_agent_request(OpenAICompatRoutesMixin._handle_chat_completions)
     _handle_responses = _admit_api_agent_request(OpenAICompatRoutesMixin._handle_responses)
 
+    # M1.5 Phase 6: hosted-rooms CRUD endpoints. Handlers live in
+    # ``gateway.platforms.api_server_hosted_rooms``; the route table
+    # references them as ``self._handle_hosted_rooms_<verb>``, so we
+    # bind them to the adapter instance in __init__ below. Doing the
+    # bind in __init__ (instead of as class-level attributes) keeps
+    # the class body free of late imports, and it lets aiohttp's
+    # ``app.router.add_route`` see a real bound method that takes
+    # ``(self, request)`` exactly as the OpenAI mixin and the
+    # room-grants module do.
+
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform.API_SERVER)
         extra = config.extra or {}
+        # M1.5 Phase 6: bind the hosted-rooms handlers as bound
+        # methods so the route table's ``self._handle_hosted_rooms_<verb>``
+        # references resolve to the adapter instance. Late import keeps
+        # the class body free of dependencies that might break
+        # test environments without aiohttp.
+        from gateway.platforms import api_server_hosted_rooms as _hosted_rooms_module
+        self._handle_hosted_rooms_list = _hosted_rooms_module._handle_hosted_rooms_list.__get__(self)
+        self._handle_hosted_rooms_create = _hosted_rooms_module._handle_hosted_rooms_create.__get__(self)
+        self._handle_hosted_rooms_get = _hosted_rooms_module._handle_hosted_rooms_get.__get__(self)
+        self._handle_hosted_rooms_disband = _hosted_rooms_module._handle_hosted_rooms_disband.__get__(self)
         self._host: str = extra.get("host", os.getenv("API_SERVER_HOST", DEFAULT_HOST))
         raw_port = extra.get("port")
         if raw_port is None:
