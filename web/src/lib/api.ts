@@ -657,6 +657,8 @@ export const api = {
     fetchJSON<ActiveProfileInfo>("/api/profiles/active"),
   getGroupChatStatus: () =>
     fetchJSON<GroupChatStatusResponse>("/api/group-chat/status"),
+  getRuntimeVersion: () =>
+    fetchJSON<RuntimeVersionResponse>("/api/runtime/version"),
   sendGroupChat: (body: {
     prompt: string;
     host: string;
@@ -2093,6 +2095,14 @@ export interface GroupChatWorkerResult {
   elapsed_s: number;
   ok: boolean;
   error: string | null;
+}
+
+
+export interface RuntimeVersionResponse {
+  running: string | null;
+  disk: string | null;
+  drift: boolean;
+  hint: string | null;
 }
 
 export interface GroupChatSendResponse {

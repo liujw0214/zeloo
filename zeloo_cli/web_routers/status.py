@@ -114,6 +114,51 @@ async def get_health():
             "auth_required": bool(getattr(app.state, "auth_required", False))}
 
 
+@router.get("/api/runtime/version")
+async def get_runtime_version():
+    """Report the running vs. on-disk commit so the SPA can prompt for a restart.
+
+    Mirrors the gateway's ``detect_code_skew`` check: a long-lived dashboard process
+    freezes ``sys.modules`` at boot, and a freshly-pulled checkout can drift underneath
+    it. The endpoint is cheap (one ``git rev-parse HEAD`` per call, no module imports)
+    so the SPA can poll it on dashboard mount and after long idle periods.
+
+    Returns ``{"running", "disk", "drift", "hint"}``. ``drift`` is True when the
+    process must be restarted to pick up new code. Non-git installs (or first boot
+    before ``record_boot_fingerprint`` runs) get ``drift=False`` with a single commit
+    string in both fields.
+    """
+    from gateway.code_skew import _boot_fingerprint, _short, _fingerprint
+
+    disk = _fingerprint()
+    boot = _boot_fingerprint
+    if disk is None:
+        # non-git install or git unavailable — nothing to drift against
+        return {
+            "running": None,
+            "disk": None,
+            "drift": False,
+            "hint": None,
+        }
+    if boot is None:
+        # No boot snapshot (very early lifecycle); treat the disk as the running rev.
+        return {
+            "running": _short(disk),
+            "disk": _short(disk),
+            "drift": False,
+            "hint": None,
+        }
+    drift = boot != disk
+    return {
+        "running": _short(boot),
+        "disk": _short(disk),
+        "drift": drift,
+        "hint": ("Restart required to load new code. "
+                 "Run: Zeloo dashboard --port <port> --skip-build "
+                 "(or use your service manager / Desktop's Restart backend)") if drift else None,
+    }
+
+
 # Profile segment mirrors zeloo_cli.profiles._PROFILE_ID_RE. Platform segment mirrors the
 # Platform enum's normalized values: built-in members plus plugin directory names
 # (lowercased), which allow hyphens as well as underscores (e.g. ``reviewer:foo-bar``).
