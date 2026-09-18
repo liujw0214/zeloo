@@ -950,6 +950,10 @@ from zeloo_cli.web_routers import (  # noqa: E402
     analytics as _analytics_routes,
     chat_ws as _chat_ws_routes,
     dashboard_ui as _dashboard_ui_routes,
+    # M1.5 Phase 6 part 3: hosted-rooms CRUD + event log for the
+    # desktop renderer (which fetches 9119, not 8642). The
+    # routes delegate to ``gateway.hosted_rooms`` in-process.
+    hosted_rooms as _hosted_rooms_routes,
 )
 
 app.include_router(_files_routes.router)
@@ -979,6 +983,12 @@ app.include_router(_skills_routes.router)
 app.include_router(_tools_routes.router)
 app.include_router(_analytics_routes.router)
 app.include_router(_chat_ws_routes.router)
+# M1.5 Phase 6 part 3: hosted-rooms CRUD + event log surfaces on the
+# same FastAPI app that already serves /api/profiles etc. so the
+# desktop renderer (which fetches 9119, not 8642) can read rooms
+# and append an event view without the api_server gateway
+# running as a separate process.
+app.include_router(_hosted_rooms_routes.router)
 app.include_router(_dashboard_ui_routes.router)
 
 # Plugin API routes and the dashboard auth routes (/login, /auth/*, /api/auth/*)
