@@ -20,6 +20,7 @@ def _make_adapter() -> Any:
         _handle_hosted_rooms_create = lambda self, req: None
         _handle_hosted_rooms_get = lambda self, req: None
         _handle_hosted_rooms_disband = lambda self, req: None
+        _handle_hosted_rooms_events = lambda self, req: None
     return _Stub()
 
 
@@ -101,20 +102,22 @@ def _get_handler(index: int):
         1: "_handle_hosted_rooms_create",
         2: "_handle_hosted_rooms_get",
         3: "_handle_hosted_rooms_disband",
+        4: "_handle_hosted_rooms_events",
     }
     return getattr(routes, verb_map[index])
 
 
 # -- _http_routes shape ---------------------------------------------------------
 
-def test_http_routes_returns_four_routes() -> None:
+def test_http_routes_returns_five_routes() -> None:
     routes_list = routes._http_routes(_make_adapter())
     methods_paths = [(m, p) for m, p, _ in routes_list]
     assert ("GET", "/api/hosted_rooms") in methods_paths
     assert ("POST", "/api/hosted_rooms") in methods_paths
     assert ("GET", "/api/hosted_rooms/{room_id}") in methods_paths
     assert ("DELETE", "/api/hosted_rooms/{room_id}") in methods_paths
-    assert len(routes_list) == 4
+    assert ("GET", "/api/hosted_rooms/{room_id}/events") in methods_paths
+    assert len(routes_list) == 5
 
 
 # -- _serialize_room -------------------------------------------------------------
@@ -241,3 +244,86 @@ async def test_disband_returns_404_for_unknown(temp_db: Path) -> None:
     handler = _get_handler(3)
     response = await handler(_make_adapter(), _make_request(match_info={"room_id": "nope"}))
     assert response.status == 404
+
+
+# -- events (Phase 9) ---------------------------------------------------------
+
+def _emit_event(db: Path, *, room_id: str, kind: str, payload: dict, actor_id: str = "test-actor") -> dict:
+    """Helper: append a hosted_room_events row via the gateway helpers
+    and return the loaded row. Bypasses the full append_event ceremony
+    (it requires a DiscussionTaskPlan); we only need a row for the
+    list_room_events test surface."""
+    from gateway import hosted_rooms
+    # room_state requires the room to exist; create one with create_room.
+    if not hosted_rooms.list_rooms(db, include_disbanded=True, limit=500):
+        hosted_rooms.create_room(
+            db, room_id=room_id, name="Events Test",
+            members=[{"member_id": "u", "kind": "user"}],
+            authority_gateway_id="test-gateway",
+        )
+    import json as _json
+    import time as _time
+    with hosted_rooms._transaction(db) as conn:  # type: ignore[attr-defined]
+        # Pick the next seq.
+        row = conn.execute(
+            "SELECT COALESCE(MAX(seq), 0) AS m FROM hosted_room_events WHERE room_id=?",
+            (room_id,),
+        ).fetchone()
+        seq = int(row["m"]) + 1
+        event_id = f"e-{kind}-{seq}"
+        conn.execute(
+            "INSERT INTO hosted_room_events(room_id, seq, event_id, kind, actor_json, authority_epoch, payload_json, created_at)"
+            " VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
+            (room_id, seq, event_id, kind, _json.dumps({"actor_id": actor_id, "kind": "agent"}), _json.dumps(payload), _time.time()),
+        )
+    return {"room_id": room_id, "seq": seq, "event_id": event_id, "kind": kind, "payload": payload}
+
+
+@pytest.mark.asyncio
+async def test_events_returns_appended_rows_oldest_first(temp_db: Path) -> None:
+    _emit_event(temp_db, room_id="R-evt", kind="agent.thinking", payload={"model": "x", "round": 0})
+    _emit_event(temp_db, room_id="R-evt", kind="agent.tool_call", payload={"tool": "read_file", "call_id": "c1"})
+    _emit_event(temp_db, room_id="R-evt", kind="agent.done", payload={"terminal_kind": "success"})
+
+    handler = _get_handler(4)  # events
+    response = await handler(
+        _make_adapter(),
+        _make_request(match_info={"room_id": "R-evt"}, query={"limit": "50"}),
+    )
+    body = _body(response)
+    assert response.status == 200
+    assert body["total"] == 3
+    kinds = [e["kind"] for e in body["events"]]
+    assert kinds == ["agent.thinking", "agent.tool_call", "agent.done"]
+    # payload_json / actor_json must be decoded into nested objects.
+    assert body["events"][0]["payload"] == {"model": "x", "round": 0}
+    assert body["events"][0]["actor"] == {"actor_id": "test-actor", "kind": "agent"}
+
+
+@pytest.mark.asyncio
+async def test_events_respects_kinds_filter(temp_db: Path) -> None:
+    _emit_event(temp_db, room_id="R-kf", kind="agent.thinking", payload={})
+    _emit_event(temp_db, room_id="R-kf", kind="agent.tool_call", payload={})
+    _emit_event(temp_db, room_id="R-kf", kind="agent.done", payload={})
+
+    handler = _get_handler(4)
+    response = await handler(
+        _make_adapter(),
+        _make_request(match_info={"room_id": "R-kf"}, query={"kinds": "agent.thinking,agent.done"}),
+    )
+    body = _body(response)
+    assert body["total"] == 2
+    kinds = [e["kind"] for e in body["events"]]
+    assert kinds == ["agent.thinking", "agent.done"]
+
+
+@pytest.mark.asyncio
+async def test_events_returns_empty_for_unknown_room(temp_db: Path) -> None:
+    handler = _get_handler(4)
+    response = await handler(
+        _make_adapter(),
+        _make_request(match_info={"room_id": "no-such-room"}),
+    )
+    body = _body(response)
+    assert response.status == 200
+    assert body == {"events": [], "total": 0, "limit": 100, "offset": 0}

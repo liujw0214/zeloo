@@ -58,6 +58,10 @@ def _http_routes(self: "APIServerAdapter") -> list[tuple[str, str, Any]]:
         ("POST", "/api/hosted_rooms", self._handle_hosted_rooms_create),
         ("GET", "/api/hosted_rooms/{room_id}", self._handle_hosted_rooms_get),
         ("DELETE", "/api/hosted_rooms/{room_id}", self._handle_hosted_rooms_disband),
+        # M1.5 Phase 9: per-room event log (oldest first). Bounded
+        # read so a chatty agent run cannot pin a desktop renderer
+        # to a single 100k-row query.
+        ("GET", "/api/hosted_rooms/{room_id}/events", self._handle_hosted_rooms_events),
     ]
 
 
@@ -208,3 +212,61 @@ async def _handle_hosted_rooms_disband(self: "APIServerAdapter", request: "web.R
     if result is None:
         return _json({"error": "room not found"}, status=404)
     return _json({"ok": True, "room": _serialize_room(result)})
+
+
+async def _handle_hosted_rooms_events(self: "APIServerAdapter", request: "web.Request") -> "web.Response":
+    """GET /api/hosted_rooms/{room_id}/events?limit=&offset=&kinds=
+
+    M1.5 Phase 9. Reads a bounded slice of a room's event log from
+    sqlite via ``hosted_rooms.list_room_events``. Returns the rows
+    in oldest-first order with payload_json / actor_json decoded
+    into nested objects so the desktop typed client sees the
+    same shape the gateway wrote.
+
+    Query params:
+      - limit (1-500, default 100)
+      - offset (>=0, default 0)
+      - kinds (comma-separated allowlist; e.g. "agent.thinking,
+        agent.done" returns only those kinds; absent = all kinds)
+    """
+    from gateway import hosted_rooms
+    room_id = request.match_info.get("room_id", "")
+    limit = int(request.query.get("limit", "100"))
+    offset = int(request.query.get("offset", "0"))
+    raw_kinds = request.query.get("kinds", "")
+    kinds = [k for k in (s.strip() for s in raw_kinds.split(",")) if k] if raw_kinds else None
+    try:
+        events = hosted_rooms.list_room_events(
+            _db_path(),
+            room_id=room_id,
+            limit=limit,
+            offset=offset,
+            kinds=kinds,
+        )
+    except (ValueError, TypeError) as exc:
+        return _json({"error": str(exc)}, status=400)
+    serialized = []
+    for ev in events:
+        # _event_from_row returns a dict with payload_json / actor_json
+        # as raw strings; decode so the JSON wire shape matches what
+        # the desktop typed client expects.
+        row = dict(ev)
+        pj = row.pop("payload_json", None)
+        aj = row.pop("actor_json", None)
+        if isinstance(pj, str):
+            try:
+                row["payload"] = json.loads(pj)
+            except json.JSONDecodeError:
+                row["payload"] = None
+        if isinstance(aj, str):
+            try:
+                row["actor"] = json.loads(aj)
+            except json.JSONDecodeError:
+                row["actor"] = None
+        serialized.append(row)
+    return _json({
+        "events": serialized,
+        "total": len(serialized),
+        "limit": limit,
+        "offset": offset,
+    })

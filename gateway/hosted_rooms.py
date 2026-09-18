@@ -1014,6 +1014,44 @@ def room_state(db_path: DbPath, *, room_id: Any, include_disbanded: bool = False
     return {**_room_from_row(row), **({"authority_claim": _event_from_row(claim_row)} if claim_row is not None else {})}
 
 
+# M1.5 Phase 9: list a room's event log, oldest first. Bounded read used
+# by the desktop room-event viewer (gateway/platforms/
+# api_server_hosted_rooms.py: ``GET /api/hosted_rooms/{room_id}/events``).
+# Limit is clamped to [_ROOM_LIST_MIN_LIMIT, _ROOM_LIST_MAX_LIMIT] via
+# _bounded_limit; offset must be non-negative. Returns an empty list
+# for an unknown room (callers can disambiguate via list_rooms()
+# if they need a 404).
+ROOM_EVENTS_MAX_LIMIT = 500
+
+
+def list_room_events(
+    db_path: DbPath, *, room_id: Any, limit: int = 100, offset: int = 0,
+    kinds: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """Return one bounded page of a room's event log, oldest first.
+
+    ``kinds`` is an optional allowlist (e.g. ``["agent.thinking",
+    "agent.done"]``); None means all kinds.
+    """
+    room_id = _room_id(room_id)
+    limit = _bounded_limit(limit, ROOM_EVENTS_MAX_LIMIT)
+    offset = _non_negative(offset, "offset")
+    where_extra = ""
+    params: list[Any] = [room_id]
+    if kinds is not None:
+        placeholders = ",".join("?" for _ in kinds)
+        where_extra = f" AND kind IN ({placeholders})"
+        params.extend(kinds)
+    sql = (
+        f"SELECT {_EVENT_COLUMNS} FROM hosted_room_events WHERE room_id=?"
+        f"{where_extra} ORDER BY seq ASC LIMIT ? OFFSET ?"
+    )
+    params.extend([limit, offset])
+    with closing(_read_connection(db_path)) as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [_event_from_row(row) for row in rows]
+
+
 def request_room_stop(
     db_path: DbPath, *, room_id: Any, cancel_id: Any, expected_gateway_id: Any, expected_epoch: Any) -> dict[str, Any]:
     """Append an idempotent fence that supersedes earlier user turns."""
