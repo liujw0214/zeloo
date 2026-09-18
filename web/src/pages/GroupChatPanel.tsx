@@ -24,6 +24,7 @@ import type {
   ProfileInfo,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import type { GroupChatPreset } from "@/lib/groupChatPreset";
 
 interface Round {
   id: string;
@@ -42,7 +43,14 @@ function newRoundId(): string {
   return `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
-export function GroupChatPanel(): React.JSX.Element {
+export function GroupChatPanel({
+  initialPreset = null,
+  onConsumed,
+}: {
+  initialPreset?: GroupChatPreset | null;
+  /** Called exactly once after a preset has been applied to component state. */
+  onConsumed?: () => void;
+} = {}): React.JSX.Element {
   const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
   const [status, setStatus] = useState<GroupChatStatusResponse | null>(null);
   const [host, setHost] = useState<string>("");
@@ -73,6 +81,37 @@ export function GroupChatPanel(): React.JSX.Element {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // Apply the @mention preset exactly once. Profiles are loaded async above,
+  // so we defer the apply until both `profiles` and `initialPreset` are
+  // ready; if the user landed here without a preset, this no-ops.
+  const [presetApplied, setPresetApplied] = React.useState(false);
+  React.useEffect(() => {
+    if (presetApplied) return;
+    if (!initialPreset) return;
+    if (profiles.length === 0) return;
+    // If the mentioned host no longer exists, fall back to whatever the
+    // dashboard considers default rather than silently dropping the preset.
+    const hostProfile =
+      profiles.find((p) => p.name === initialPreset.host) ??
+      profiles.find((p) => p.is_default) ??
+      profiles[0];
+    if (!hostProfile) return;
+    const effectiveHost = hostProfile.name;
+    setHost(effectiveHost);
+    setWorkers(
+      new Set(
+        initialPreset.workers.filter(
+          (w) =>
+            profiles.some((p) => p.name === w) && w !== effectiveHost,
+        ),
+      ),
+    );
+    setPrompt(initialPreset.prompt);
+    setCollapsed(false); // expand so user sees the prefilled state
+    setPresetApplied(true);
+    onConsumed?.();
+  }, [initialPreset, profiles, presetApplied, onConsumed]);
 
   const maxWorkers = status?.max_workers ?? 8;
   const hostProfile = profiles.find((p) => p.name === host);

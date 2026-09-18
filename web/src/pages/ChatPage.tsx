@@ -36,6 +36,15 @@ import { ChatSessionList } from "@/components/ChatSessionList";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { useI18n } from "@/i18n";
 import { api, fetchJSON } from "@/lib/api";
+import { MentionPreview } from "@/components/MentionPreview";
+import {
+  chooseHost,
+  parseProfileMentions,
+  stripValidMentions,
+  workersFromMentions,
+} from "@/lib/profileMentions";
+import { publishGroupChatPreset, useGroupChatPreset } from "@/lib/groupChatPreset";
+import type { ProfileInfo } from "@/lib/api";
 import { latchChatActivation } from "@/lib/chat-activation";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { normalizeSessionTitle } from "@/lib/chat-title";
@@ -2031,6 +2040,11 @@ function ChatFallbackPanel(): React.JSX.Element {
   // Works even when the PTY + TUI stack (xterm.js + node TUI) is broken,
   // because it just POSTs the prompt to /api/chat/send which spawns
   // `Zeloo -z <prompt>` in the background and returns the reply as JSON.
+  //
+  // Bonus: if the user's prompt contains ≥2 valid @profile mentions, the
+  // composer hands the prompt off to the Group tab via publishGroupChatPreset
+  // instead of running it through /api/chat/send. The mention chip strip
+  // below the textarea makes the fan-out visible while typing.
   const [open, setOpen] = React.useState(true);
   const [prompt, setPrompt] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -2039,9 +2053,55 @@ function ChatFallbackPanel(): React.JSX.Element {
   >(null);
   const [error, setError] = React.useState<string | null>(null);
 
+  // Profile list is loaded lazily on first render; cached for the life of
+  // the component (the dashboard only has a handful of profiles and they
+  // rarely change inside a single tab session).
+  const [profiles, setProfiles] = React.useState<ProfileInfo[]>([]);
+  React.useEffect(() => {
+    let cancelled = false;
+    api.getProfiles()
+      .then((r) => { if (!cancelled) setProfiles(r.profiles ?? []); })
+      .catch(() => { /* non-fatal — preview just stays empty */ });
+    return () => { cancelled = true; };
+  }, []);
+  const knownNames = React.useMemo(
+    () => profiles.map((p) => p.name),
+    [profiles],
+  );
+  const defaultProfile = React.useMemo(
+    () => profiles.find((p) => p.is_default)?.name ?? "",
+    [profiles],
+  );
+  const mentions = React.useMemo(
+    () => parseProfileMentions(prompt, knownNames),
+    [prompt, knownNames],
+  );
+
   async function send(): Promise<void> {
     const text = prompt.trim();
     if (!text || busy) return;
+
+    // @profile fan-out: ≥2 valid mentions short-circuit to the Group tab.
+    // We don't fire /api/chat/send here — the GroupChatPanel that mounts in
+    // the next tick will run the fan-out after we publish the preset.
+    if (mentions.valid.length >= 2) {
+      const host = chooseHost(mentions.valid, defaultProfile, knownNames) || defaultProfile;
+      const workers = workersFromMentions(mentions.valid, host);
+      const cleaned = stripValidMentions(text, mentions.valid);
+      publishGroupChatPreset({
+        prompt: cleaned.length > 0 ? cleaned : text,
+        host,
+        workers,
+      });
+      setPrompt("");
+      setReply(null);
+      setError(null);
+      // Flip the tab via a window event so ChatFallbackTabbedPanel can react
+      // without us threading a callback through props.
+      window.dispatchEvent(new CustomEvent("zeloo-chat-mode", { detail: "group" }));
+      return;
+    }
+
     setBusy(true);
     setError(null);
     setReply(null);
@@ -2102,7 +2162,8 @@ function ChatFallbackPanel(): React.JSX.Element {
       </button>
       {open && (
         <div className="flex flex-col gap-3 border-t border-current/10 px-4 py-4">
-          <textarea
+          <MentionPreview valid={mentions.valid} unknown={mentions.unknown} className="pb-1" />
+            <textarea
             className={cn(
               "min-h-[88px] w-full resize-y rounded-lg border border-current/15",
               "bg-background/50 px-4 py-3 text-sm leading-relaxed text-foreground",
@@ -2112,7 +2173,7 @@ function ChatFallbackPanel(): React.JSX.Element {
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-midground/30 focus-visible:border-current/30",
               "disabled:cursor-not-allowed disabled:opacity-50",
             )}
-            placeholder="Type a prompt. Ctrl+Enter to send. Runs Zeloo -z in the background and shows the reply here."
+          placeholder="Type a prompt. Ctrl+Enter to send. Runs Zeloo -z in the background and shows the reply here."
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             disabled={busy}
@@ -2183,11 +2244,39 @@ declare global {
   }
 }
 
+/**
+ * Thin wrapper around GroupChatPanel that consumes the @mention preset once
+ * on mount (host + workers + cleaned prompt) and clears it so the next visit
+ * doesn't re-fire. If no preset is pending it just renders the panel as-is.
+ *
+ * Kept separate so the original GroupChatPanel stays API-compatible for any
+ * other embed point (e.g. a future chat-sidebar mini-group).
+ */
+function GroupChatPanelWithPreset(): React.JSX.Element {
+  // Pull the preset and a one-shot consumer; the consumer is passed down to
+  // GroupChatPanel so it can clear the slot after applying (only once, never
+  // re-fire on parent re-renders).
+  const [preset, consume] = useGroupChatPreset();
+  return <GroupChatPanel initialPreset={preset} onConsumed={consume} />;
+}
+
 function ChatFallbackTabbedPanel(): React.JSX.Element {
   // Single / Group tab wrapper. Single keeps the one-shot HTTP composer
   // (existing ChatFallbackPanel). Group adds the multi-agent fan-out
   // composer (GroupChatPanel).
   const [mode, setMode] = React.useState<"single" | "group">("single");
+
+  // When ChatFallbackPanel publishes a group-chat preset (because the user
+  // typed ≥2 valid @profile mentions), switch the tab over to Group so the
+  // handoff feels like one gesture instead of two clicks.
+  React.useEffect(() => {
+    const onMode = (e: Event) => {
+      const next = (e as CustomEvent<"single" | "group">).detail;
+      if (next === "single" || next === "group") setMode(next);
+    };
+    window.addEventListener("zeloo-chat-mode", onMode);
+    return () => window.removeEventListener("zeloo-chat-mode", onMode);
+  }, []);
   return (
     <div data-testid="chat-fallback-tabbed-panel">
       <div
@@ -2228,7 +2317,7 @@ function ChatFallbackTabbedPanel(): React.JSX.Element {
           Group
         </button>
       </div>
-      {mode === "single" ? <ChatFallbackPanel /> : <GroupChatPanel />}
+      {mode === "single" ? <ChatFallbackPanel /> : <GroupChatPanelWithPreset />}
     </div>
   );
 }
