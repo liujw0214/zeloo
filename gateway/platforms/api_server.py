@@ -1557,6 +1557,9 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             ("POST", "/api/jobs/{job_id}/run", self._handle_run_job)]
         routes.extend(_room_grants._http_routes(self))
         routes.extend(_api_runs._http_routes(self))
+        # M1.5 Phase 6: hosted-rooms CRUD surface (list / get / create / disband).
+        from gateway.platforms.api_server_hosted_rooms import _http_routes as _hosted_rooms_routes
+        routes.extend(_hosted_rooms_routes(self))
         if _CRON_AVAILABLE:
             # Chronos fire webhook (NAS -> agent): authenticated by a NAS-minted JWT.
             routes.append(("POST", "/api/cron/fire", self._handle_cron_fire))
