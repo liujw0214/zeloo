@@ -13,6 +13,7 @@ import { sessionShouldHaveTranscript } from '@/app/session/hooks/use-session-act
 import { Thread } from '@/components/assistant-ui/thread'
 import { AgentProgressPanel } from '@/components/assistant-ui/thread/agent-progress-panel'
 import { CreateRoomButton } from '@/components/hosted-rooms/create-room-button'
+import { RoomListButton } from '@/components/hosted-rooms/room-list-button'
 import { TranscriptWindowProvider } from '@/components/assistant-ui/thread/transcript-window'
 import { Backdrop } from '@/components/Backdrop'
 import { COMPOSER_HEART_CONFIG, HeartField } from '@/components/chat/vibe-hearts'
@@ -701,7 +702,17 @@ const ChatViewContent = memo(function ChatViewContent({
           list so the new room appears in AgentProgressPanel's room
           gate (Phase 4) on the next paint, without waiting for the
           30s poll. */}
-      <div className="flex items-center justify-end border-b border-(--ui-border) bg-(--ui-background) px-3 py-1.5">
+      {/* M1.5 Phase 8: "Rooms" button (next to + Room) opens a
+          chooser dialog listing every active hosted room. The user
+          can copy a room id to use in /room show. We deliberately do
+          NOT navigate into a room from this button — the chat
+          surface cannot yet render a room session, and the
+          desktop AGENTS.md "offer; don't hijack" rule says
+          navigation must be a user-driven action, not a side
+          effect of opening a chooser. Phase 9+ will add the
+          per-room "open in this window" affordance. */}
+      <div className="flex items-center justify-end gap-2 border-b border-(--ui-border) bg-(--ui-background) px-3 py-1.5">
+        <RoomListButton data-testid="chat-room-list-button" />
         <CreateRoomButton data-testid="chat-create-room-button" />
       </div>
 
