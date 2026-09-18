@@ -110,6 +110,9 @@ export const SDK_CONTRACT_VERSION = "1.1.0";
 // here (duplicate ambient declarations with differing modifiers conflict).
 
 export function exposePluginSDK() {
+  // Notify any bundle that waits on the SDK before calling register()
+  // (e.g. zeloo-achievements' deferred-boot shim).
+  queueMicrotask(() => document.dispatchEvent(new Event("Zeloo:plugins-ready")));
   window.__ZELOO_PLUGINS__ = {
     register: registerPlugin,
     registerSlot,

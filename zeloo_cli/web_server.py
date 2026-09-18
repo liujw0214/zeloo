@@ -950,6 +950,7 @@ from zeloo_cli.web_routers import (  # noqa: E402
     analytics as _analytics_routes,
     chat_ws as _chat_ws_routes,
     chat as _chat_routes,  # HTTP fallback for /chat tab
+    group_chat as _group_chat_routes,  # Multi-agent fan-out for /chat tab
     dashboard_ui as _dashboard_ui_routes,
     # M1.5 Phase 6 part 3: hosted-rooms CRUD + event log for the
     # desktop renderer (which fetches 9119, not 8642). The
@@ -957,6 +958,28 @@ from zeloo_cli.web_routers import (  # noqa: E402
     hosted_rooms as _hosted_rooms_routes,
 )
 
+
+# --- debug: per-request access log for /api/* so we can trace what the
+# dashboard SPA actually invokes. Stripped in production builds.
+import time as _t
+from starlette.middleware.base import BaseHTTPMiddleware
+class _AccessLog(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        path = request.url.path
+        if path.startswith("/api/"):
+            _t0 = _t.perf_counter()
+            try:
+                resp = await call_next(request)
+                dt = (_t.perf_counter() - _t0) * 1000
+                _log.info("API %s %s -> %s (%.1fms)", request.method, path, resp.status_code, dt)
+                return resp
+            except Exception as exc:
+                dt = (_t.perf_counter() - _t0) * 1000
+                _log.exception("API %s %s -> EXC after %.1fms", request.method, path, dt)
+                raise
+        return await call_next(request)
+
+app.add_middleware(_AccessLog)
 app.include_router(_files_routes.router)
 app.include_router(_git_routes.router)
 app.include_router(_local_models_routes.router)
@@ -984,6 +1007,7 @@ app.include_router(_skills_routes.router)
 app.include_router(_tools_routes.router)
 app.include_router(_analytics_routes.router)
 app.include_router(_chat_ws_routes.router)
+app.include_router(_group_chat_routes.router)
 app.include_router(_chat_routes.router)  # HTTP /api/chat/{send,status}
 # M1.5 Phase 6 part 3: hosted-rooms CRUD + event log surfaces on the
 # same FastAPI app that already serves /api/profiles etc. so the
@@ -1188,7 +1212,7 @@ def _build_uvicorn_server(host: str, port: int, *, ssh_isolated: bool = False):
         ping_interval, ping_timeout = TUNNEL_WS_PING_INTERVAL_S, TUNNEL_WS_PING_TIMEOUT_S
 
     config = uvicorn.Config(
-        served_app, host=host, port=port, log_level="warning",
+        served_app, host=host, port=port, log_level="info",
         # Off by default so _ws_client_is_allowed sees the real peer, not
         # X-Forwarded-For. Gated mode runs behind a TLS terminator and needs
         # X-Forwarded-Proto for cookie Secure flags.

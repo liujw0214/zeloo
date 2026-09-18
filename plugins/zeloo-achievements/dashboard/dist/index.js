@@ -6,7 +6,6 @@
   // badges and UI iteration; the in-progress scan banner below is a small addition
   // layered on top of the original dist bundle.
   const SDK = window.__ZELOO_PLUGIN_SDK__;
-  if (!SDK || !window.__ZELOO_PLUGINS__) return;
 
   const React = SDK.React;
   const hooks = SDK.hooks;
@@ -723,4 +722,4 @@
   }
 
   window.__ZELOO_PLUGINS__.register("zeloo-achievements", AchievementsPage);
-})();
+  })();

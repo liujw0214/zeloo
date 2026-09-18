@@ -25,6 +25,7 @@ import "@xterm/xterm/css/xterm.css";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { Typography } from "@nous-research/ui/ui/components/typography/index";
 import { cn } from "@/lib/utils";
+import { GroupChatPanel } from "@/pages/GroupChatPanel";
 import { AlertCircle, ArrowUp, ChevronDown, ChevronRight, Copy, PanelRight, RotateCcw, X } from "lucide-react";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -1995,7 +1996,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
           </div>
         )}
       </div>
-      <ChatFallbackPanel />
+      <ChatFallbackTabbedPanel />
       <PluginSlot name="chat:bottom" />
     </div>
   );
@@ -2181,3 +2182,54 @@ declare global {
     __ZELOO_AUTH_REQUIRED__?: boolean;
   }
 }
+
+function ChatFallbackTabbedPanel(): React.JSX.Element {
+  // Single / Group tab wrapper. Single keeps the one-shot HTTP composer
+  // (existing ChatFallbackPanel). Group adds the multi-agent fan-out
+  // composer (GroupChatPanel).
+  const [mode, setMode] = React.useState<"single" | "group">("single");
+  return (
+    <div data-testid="chat-fallback-tabbed-panel">
+      <div
+        role="tablist"
+        aria-label="Chat mode"
+        className={cn(
+          "mx-4 mb-1 flex items-center gap-1",
+          "rounded-lg border border-current/10 bg-card/30 backdrop-blur-sm",
+          "p-1 w-fit font-mondwest text-xs tracking-[0.08em]",
+        )}
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === "single"}
+          onClick={() => setMode("single")}
+          className={cn(
+            "rounded-md px-3 py-1 transition-colors",
+            mode === "single"
+              ? "bg-current/15 text-text-primary"
+              : "text-text-tertiary hover:text-text-secondary",
+          )}
+        >
+          Single
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === "group"}
+          onClick={() => setMode("group")}
+          className={cn(
+            "rounded-md px-3 py-1 transition-colors",
+            mode === "group"
+              ? "bg-current/15 text-text-primary"
+              : "text-text-tertiary hover:text-text-secondary",
+          )}
+        >
+          Group
+        </button>
+      </div>
+      {mode === "single" ? <ChatFallbackPanel /> : <GroupChatPanel />}
+    </div>
+  );
+}
+

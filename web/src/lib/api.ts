@@ -655,6 +655,19 @@ export const api = {
     fetchJSON<{ profiles: ProfileInfo[] }>("/api/profiles"),
   getActiveProfile: () =>
     fetchJSON<ActiveProfileInfo>("/api/profiles/active"),
+  getGroupChatStatus: () =>
+    fetchJSON<GroupChatStatusResponse>("/api/group-chat/status"),
+  sendGroupChat: (body: {
+    prompt: string;
+    host: string;
+    workers: string[];
+    timeout_s?: number;
+  }) =>
+    fetchJSON<GroupChatSendResponse>("/api/group-chat/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   setActiveProfile: (name: string) =>
     fetchJSON<{ ok: boolean; active: string }>("/api/profiles/active", {
       method: "POST",
@@ -2071,6 +2084,33 @@ export interface SessionMessagesResponse {
 export interface LogsResponse {
   file: string;
   lines: string[];
+}
+
+
+export interface GroupChatWorkerResult {
+  name: string;
+  output: string;
+  elapsed_s: number;
+  ok: boolean;
+  error: string | null;
+}
+
+export interface GroupChatSendResponse {
+  ok: boolean;
+  host: string;
+  host_output: string;
+  host_elapsed_s: number;
+  workers: GroupChatWorkerResult[];
+  elapsed_s: number;
+  total_workers: number;
+  failed_workers: number;
+  note: string | null;
+}
+
+export interface GroupChatStatusResponse {
+  max_workers: number;
+  cli_path: string | null;
+  available: boolean;
 }
 
 export interface ManagedFileEntry {
