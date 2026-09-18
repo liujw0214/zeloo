@@ -103,3 +103,6 @@ optional-skills/
 skills/creative/
 test_durations.json
 export_recover.py
+
+# web build lock (added 2026-09-18, see a5c2e3a0 followup)
+.web_ui_build.lock
