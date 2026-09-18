@@ -1145,6 +1145,8 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         self._handle_hosted_rooms_create = _hosted_rooms_module._handle_hosted_rooms_create.__get__(self)
         self._handle_hosted_rooms_get = _hosted_rooms_module._handle_hosted_rooms_get.__get__(self)
         self._handle_hosted_rooms_disband = _hosted_rooms_module._handle_hosted_rooms_disband.__get__(self)
+        # M1.5 Phase 9: per-room event log handler.
+        self._handle_hosted_rooms_events = _hosted_rooms_module._handle_hosted_rooms_events.__get__(self)
         self._host: str = extra.get("host", os.getenv("API_SERVER_HOST", DEFAULT_HOST))
         raw_port = extra.get("port")
         if raw_port is None:

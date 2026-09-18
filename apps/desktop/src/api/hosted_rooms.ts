@@ -68,6 +68,70 @@ export async function getRoom(roomId: string): Promise<RoomInfo> {
   })
 }
 
+/**
+ * Phase 9: list one room's event log (oldest first). Bounded read
+ * so a chatty agent run cannot pin a desktop renderer to a single
+ * 100k-row query. The kinds allowlist is a future hook for an
+ * event-type filter chip; today we read all kinds.
+ */
+export interface RoomEvent {
+  room_id: string
+  seq: number
+  event_id: string
+  kind: string
+  actor_json?: string
+  actor?: { actor_id: string; kind: string; display_name?: string }
+  authority_epoch?: number
+  payload_json?: string
+  payload?: Record<string, unknown>
+  created_at: number
+}
+
+export interface ListRoomEventsResponse {
+  events: RoomEvent[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export async function listRoomEvents(
+  roomId: string,
+  options: { limit?: number; offset?: number; kinds?: string[] } = {}
+): Promise<ListRoomEventsResponse> {
+  const limit = options.limit ?? 100
+  const offset = options.offset ?? 0
+  let query = `limit=${limit}&offset=${offset}`
+  if (options.kinds && options.kinds.length > 0) {
+    query += `&kinds=${options.kinds.map(k => encodeURIComponent(k)).join(',')}`
+  }
+  const resp = await ZELOOApi<{ events: Array<Record<string, unknown>>; total: number; limit: number; offset: number }>({
+    path: `/api/hosted_rooms/${encodeURIComponent(roomId)}/events?${query}`,
+    timeoutMs: LIST_TIMEOUT_MS
+  })
+  return {
+    events: (resp.events ?? []).map((row) => {
+      const payload = typeof row.payload_json === 'string' ? safeParse(row.payload_json) : (row.payload as Record<string, unknown> | undefined)
+      const actor = typeof row.actor_json === 'string' ? safeParse(row.actor_json) : (row.actor as { actor_id: string; kind: string; display_name?: string } | undefined)
+      return {
+        ...row,
+        payload,
+        actor
+      } as RoomEvent
+    }),
+    total: resp.total,
+    limit: resp.limit,
+    offset: resp.offset
+  }
+}
+
+function safeParse(raw: string): unknown {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+}
+
 /** Phase 6: create a new room. */
 export async function createRoom(input: {
   name: string
