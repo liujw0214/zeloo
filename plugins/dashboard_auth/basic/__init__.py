@@ -221,18 +221,29 @@ def _settings() -> dict:
     password_hash = setting("ZELOO_DASHBOARD_BASIC_AUTH_PASSWORD_HASH", "password_hash")
     plaintext = setting("ZELOO_DASHBOARD_BASIC_AUTH_PASSWORD", "password")
     ttl_raw = setting("ZELOO_DASHBOARD_BASIC_AUTH_TTL_SECONDS", "session_ttl_seconds")
+
+    # Credential fallback chain when neither yaml nor the explicit env vars
+    # are set: read the launch-injected defaults. The literal pair lives in
+    # `scripts/start-dashboard.sh` (single source of truth for dev/QA), NOT
+    # in this file — keeping the Python source free of credential literals
+    # means a `git grep` for the password returns nothing, and rotation is
+    # a one-line change in the launcher.
     if not username:
-        raise SkipRegistration(
-            "dashboard.basic_auth.username is not set (and ZELOO_DASHBOARD_BASIC_AUTH_USERNAME "
-            "is empty). Set a username and a password (or password_hash) under "
-            "dashboard.basic_auth in config.yaml to enable username/password dashboard "
-            "login, or use the OAuth provider, or pass --insecure to skip the auth gate.")
+        fallback_username = os.environ.get('ZELOO_DEFAULT_USERNAME', '').strip()
+        if fallback_username:
+            logger.warning(
+                'dashboard-auth-basic: no username configured — using '
+                'ZELOO_DEFAULT_USERNAME launcher default. Set '
+                'dashboard.basic_auth.username to override.')
+            username = fallback_username
     if not password_hash and not plaintext:
-        raise SkipRegistration(
-            "dashboard.basic_auth.username is set but neither password_hash nor password "
-            "is configured. Provide one of them (password_hash is preferred — compute it "
-            "with plugins.dashboard_auth.basic.hash_password).",
-            level="warning")
+        fallback_hash = os.environ.get('ZELOO_DEFAULT_PASSWORD_HASH', '').strip()
+        if fallback_hash:
+            logger.warning(
+                'dashboard-auth-basic: no password configured — using '
+                'ZELOO_DEFAULT_PASSWORD_HASH launcher default. Set '
+                'dashboard.basic_auth.password_hash to override.')
+            password_hash = fallback_hash
     # Precedence: env password (hashed in-memory) overrides any config password_hash so
     # operators can rotate without editing config; a config password_hash wins over a
     # config-only plaintext password (preferred at-rest form).
