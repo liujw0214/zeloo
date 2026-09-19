@@ -25,7 +25,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +101,186 @@ def validate_inputs(prompt: str, host: str, workers: List[str]) -> None:
         validate_profile_name(w)
     if host in workers:
         raise GroupChatError("host must not also be a worker")
+
+
+# ---------------------------------------------------------------------------
+# @agent mention parsing
+# ---------------------------------------------------------------------------
+# `@agent` is a meta-token: when present in a prompt, it triggers group-chat
+# fan-out instead of the normal single-agent run. Accepts inline options:
+#
+#   @agent                                -> bare: caller resolves via known_profiles
+#   @agent(host=<profile>)                -> explicit host, workers resolved via known_profiles
+#   @agent(workers=a,b,c)                 -> explicit workers, host resolved via known_profiles
+#   @agent(host=<profile>, workers=a,b,c) -> both explicit
+#
+# Only ONE @agent per prompt is honoured — the first occurrence wins; later
+# @agent tokens are treated as literal text. This avoids ambiguity and matches
+# how @profile mentions already behave in the bundle.
+
+_AGENT_MENTION_RE = re.compile(
+    r"@agent"                                # the literal token
+    r"(?:\(\s*([^)]*?)\s*\))?"               # optional inline options inside (...)
+    ,
+    re.IGNORECASE,
+)
+
+# Bare @agent followed by a non-letter (so "@agent42" wouldn't match) — we want
+# to catch the literal word "agent", not substrings. We use a negative lookahead
+# at the end so "@agent42" or "@agent_xyz" still parses the @agent prefix.
+_AGENT_MENTION_BOUNDARY_RE = re.compile(
+    r"@agent(?![a-z0-9_-])"                  # @agent not followed by another name char
+    r"(?:\(\s*([^)]*?)\s*\))?"
+    ,
+    re.IGNORECASE,
+)
+
+
+def _parse_agent_options(raw: str) -> Dict[str, str]:
+    """Parse ``host=foo, workers=a,b,c`` -> ``{"host": "foo", "workers": "a,b,c"}``.
+
+    Unknown keys are silently dropped (forward-compat). Empty values are
+    preserved so the caller can surface a clean error.
+    """
+    out: Dict[str, str] = {}
+    if not raw:
+        return out
+    # Split on top-level commas — but commas inside ``workers=a,b,c`` are part of the value.
+    # Tokenize by scanning for ``key=`` first, then collect the value up to the next ``,key=``.
+    i = 0
+    while i < len(raw):
+        # skip whitespace + commas between options
+        while i < len(raw) and raw[i] in " ,":
+            i += 1
+        if i >= len(raw):
+            break
+        # find ``=``
+        eq = raw.find("=", i)
+        if eq == -1:
+            break
+        key = raw[i:eq].strip().lower()
+        i = eq + 1
+        # value runs until the next ``,<ws>key=`` pattern (top-level separator)
+        j = i
+        while j < len(raw):
+            if raw[j] == ",":
+                # peek ahead — is the next non-space char the start of ``key=`` ?
+                k = j + 1
+                while k < len(raw) and raw[k] == " ":
+                    k += 1
+                if k < len(raw) and raw[k].isalpha():
+                    next_eq = raw.find("=", k)
+                    if next_eq != -1 and next_eq - k < 32:
+                        candidate = raw[k:next_eq].strip().lower()
+                        if candidate in {"host", "workers"}:
+                            break
+            j += 1
+        value = raw[i:j].strip()
+        if key in {"host", "workers"}:
+            out[key] = value
+        i = j + 1
+    return out
+
+
+def extract_agent_mention(prompt: str) -> Tuple[Optional[str], Optional[str], Optional[List[str]], Optional[Dict[str, str]]]:
+    """Pull the first ``@agent(...)`` mention out of ``prompt``.
+
+    Returns ``(cleaned_prompt, host, workers, options)``. When the prompt has
+    no ``@agent`` token the tuple is ``(None, None, None, None)``. ``workers``
+    is always a list when present (possibly empty if explicitly set that way).
+
+    The matched token is stripped from the cleaned prompt — callers don't need
+    to filter it themselves. Later @agent occurrences (rare, but valid as
+    literal text) are left in the cleaned prompt.
+    """
+    if not prompt or not _AGENT_MENTION_BOUNDARY_RE.search(prompt):
+        return None, None, None, None
+
+    m = _AGENT_MENTION_BOUNDARY_RE.search(prompt)
+    if not m:
+        return None, None, None, None
+
+    options = _parse_agent_options(m.group(1) or "")
+    host = options.get("host") or None
+    workers_raw = options.get("workers") or ""
+    workers = [w.strip() for w in workers_raw.split(",") if w.strip()] if workers_raw else None
+
+    # Strip the @agent token (with optional parens) + trailing whitespace before
+    # the next non-space char. Leave the surrounding text intact.
+    cleaned = (prompt[:m.start()] + prompt[m.end():]).strip()
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned, host, workers, options
+
+
+def resolve_agent_mention(
+    prompt: str,
+    *,
+    known_profiles: List[str],
+    default_host: Optional[str] = None,
+) -> Optional[Tuple[str, str, List[str]]]:
+    """Resolve an ``@agent`` mention into ``(cleaned_prompt, host, workers)``.
+
+    Returns ``None`` when the prompt has no ``@agent``. Otherwise:
+
+    * explicit ``host=`` and ``workers=`` in the token win verbatim
+    * explicit ``host=`` only: workers are the remaining known profiles (capped
+      at ``_MAX_WORKERS``), excluding the host
+    * explicit ``workers=`` only: host defaults to ``default_host`` (or the
+      first known profile alphabetically)
+    * bare ``@agent``: first known profile alphabetically is host, the next
+      up to ``_MAX_WORKERS - 1`` are workers
+
+    Always raises ``GroupChatError`` when the resolved set has fewer than 2
+    distinct profiles (need host + ≥1 worker to fan out) or when any explicit
+    profile name fails ``validate_profile_name``.
+
+    ``known_profiles`` MUST contain at least 2 names; otherwise the bare form
+    raises (the explicit form still works if names are valid).
+    """
+    cleaned, host, workers, options = extract_agent_mention(prompt)
+    if cleaned is None:
+        return None
+
+    known = [p for p in (known_profiles or []) if p]
+    if not known:
+        raise GroupChatError(
+            "@agent mention detected but no known profiles to fan out to "
+            "(create at least one profile via `Zeloo profile create`)"
+        )
+
+    # Validate explicit names eagerly so errors surface before subprocess spawn.
+    if host:
+        validate_profile_name(host)
+    if workers:
+        for w in workers:
+            validate_profile_name(w)
+
+    if not host:
+        host = default_host or known[0]
+
+    if not workers:
+        # Remaining profiles, excluding the host, capped to fill up to MAX_WORKERS.
+        rest = [p for p in known if p != host]
+        if not rest:
+            raise GroupChatError(
+                f"@agent mention needs ≥2 distinct profiles; only '{host}' is known"
+            )
+        workers = rest[: _MAX_WORKERS]
+    else:
+        # Workers were explicit; drop any that equal the host and cap to MAX.
+        workers = [w for w in workers if w != host][: _MAX_WORKERS]
+
+    if host in workers:
+        workers = [w for w in workers if w != host]
+
+    if not workers:
+        raise GroupChatError(
+            f"@agent mention needs ≥1 worker besides host; resolved host='{host}', workers=[]"
+        )
+
+    # Final pass through validate_inputs so max_workers + host-in-workers is caught.
+    validate_inputs(cleaned or "(empty)", host, workers)
+    return cleaned, host, workers
 
 
 # ---------------------------------------------------------------------------

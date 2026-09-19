@@ -69,6 +69,44 @@ def _resolve_cli() -> Optional[str]:
 
 async def _run_oneshot(prompt: str, model: Optional[str], timeout_s: int) -> ChatSendReply:
     """Spawn ``Zeloo -z PROMPT`` and return its stdout as a JSON reply."""
+    # `@agent` mention triggers the multi-agent fan-out path. We do this BEFORE
+    # the subprocess spawn so the user gets the synthesized host reply instead
+    # of a raw single-agent response.
+    GroupChatError = None
+    try:
+        from zeloo_cli.group_chat_lib import (
+            GroupChatError as _GCError,
+            resolve_agent_mention,
+            run_group_chat_fan_out_sync,
+        )
+        from zeloo_cli import profiles as profiles_mod
+        GroupChatError = _GCError
+        known = profiles_mod.list_profile_names()
+        resolved = resolve_agent_mention(prompt, known_profiles=known)
+    except Exception as exc:
+        # Import / profile-listing / resolver crash → fall back to normal path.
+        # Resolver-raised GroupChatError → surface as 400.
+        if GroupChatError is not None and isinstance(exc, GroupChatError):
+            raise HTTPException(status_code=400, detail=f"@agent: {exc}") from exc
+        resolved = None
+
+    if resolved is not None:
+        cleaned, host, workers = resolved
+        try:
+            result = await asyncio.to_thread(
+                run_group_chat_fan_out_sync, cleaned, host, workers, timeout_s=timeout_s,
+            )
+        except GroupChatError as exc:
+            raise HTTPException(status_code=400, detail=f"@agent: {exc}") from exc
+        return ChatSendReply(
+            ok=result.ok,
+            output=result.host_output or "(empty)",
+            model=f"@agent fan-out host={result.host} workers={','.join(w.name for w in result.workers)}",
+            elapsed_s=result.elapsed_s,
+            truncated=False,
+            note=result.note,
+        )
+
     cli_python = _resolve_cli()
     if not cli_python:
         raise HTTPException(status_code=503, detail="Zeloo CLI interpreter not found")
