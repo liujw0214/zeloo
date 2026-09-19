@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -27,6 +27,11 @@ import { Input } from "@nous-research/ui/ui/components/input";
 import { Label } from "@nous-research/ui/ui/components/label";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { cn, themedBody } from "@/lib/utils";
+import { MentionPreview } from "@/components/MentionPreview";
+import {
+  parseAgentMention,
+  parseProfileMentions,
+} from "@/lib/profileMentions";
 
 interface CreatedWebhook {
   url: string;
@@ -56,6 +61,44 @@ function CopyButton({ value }: { value: string }) {
   );
 }
 
+/**
+ * Inline @agent / @profile preview for the webhook-subscription prompt textarea.
+ *
+ * No send-time tab switch here — webhooks fire from external HTTP events and
+ * the dispatch path is `deliver=group_chat` vs `deliver=<other>`. The preview
+ * still tells the operator what the webhook adapter will do when the route
+ * receives its next event.
+ */
+function WebhookPromptPreview({
+  prompt,
+  profiles,
+}: {
+  prompt: string;
+  profiles: string[];
+ }): React.JSX.Element | null {
+  const mentions = useMemo(
+    () => parseProfileMentions(prompt, profiles),
+    [prompt, profiles],
+  );
+  const agentMention = useMemo(
+    () => parseAgentMention(prompt),
+    [prompt],
+  );
+  return (
+    <MentionPreview
+      valid={mentions.valid}
+      unknown={mentions.unknown}
+      className="px-0"
+      agent={{
+        present: agentMention.present,
+        optionsValid: agentMention.optionsValid,
+        host: agentMention.host,
+        workers: agentMention.workers,
+      }}
+    />
+  );
+}
+
 export default function WebhooksPage() {
   const [data, setData] = useState<WebhooksResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -76,6 +119,7 @@ export default function WebhooksPage() {
   const [deliverOnly, setDeliverOnly] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [creating, setCreating] = useState(false);
+  const [profiles, setProfiles] = useState<string[]>([]);
   const [created, setCreated] = useState<CreatedWebhook | null>(null);
 
   const closeCreateModal = useCallback(() => {
@@ -97,6 +141,15 @@ export default function WebhooksPage() {
       .catch(() => showToast("Failed to load webhooks", "error"))
       .finally(() => setLoading(false));
   }, [showToast]);
+
+  // Profiles are loaded once for the @agent / @profile live preview under the
+  // prompt textarea. Cheap — names only.
+  useEffect(() => {
+    api
+      .getProfiles()
+      .then((res) => setProfiles((res.profiles ?? []).map((p) => p.name)))
+      .catch(() => setProfiles([]));
+  }, []);
 
   useEffect(() => {
     loadWebhooks();
@@ -440,6 +493,7 @@ export default function WebhooksPage() {
                     value={prompt}
                     onChange={(e) => setPrompt(e.target.value)}
                   />
+                  <WebhookPromptPreview prompt={prompt} profiles={profiles} />
                 </div>
 
                 <div className="flex justify-end">

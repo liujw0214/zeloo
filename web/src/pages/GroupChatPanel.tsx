@@ -24,6 +24,40 @@ import type {
   ProfileInfo,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+/**
+ * Inline @profile preview for the GroupChatPanel prompt textarea.
+ *
+ * `agent` is intentionally not threaded in: by the time a prompt arrives
+ * here, the upstream caller has already resolved `@agent(...)` into a
+ * concrete (host, workers) tuple via the GroupChatPreset, so showing an
+ * `@agent` chip again would be confusing.
+ */
+function GroupPromptPreview({
+  prompt,
+  profiles,
+}: {
+  prompt: string;
+  profiles: ProfileInfo[];
+}): React.JSX.Element | null {
+  const knownNames = React.useMemo(
+    () => profiles.map((p) => p.name),
+    [profiles],
+  );
+  const mentions = React.useMemo(
+    () => parseProfileMentions(prompt, knownNames),
+    [prompt, knownNames],
+  );
+  return (
+    <MentionPreview
+      valid={mentions.valid}
+      unknown={mentions.unknown}
+      className="px-0 mt-1"
+    />
+  );
+}
+
+import { MentionPreview } from "@/components/MentionPreview";
+import { parseProfileMentions } from "@/lib/profileMentions";
 import type { GroupChatPreset } from "@/lib/groupChatPreset";
 
 interface Round {
@@ -56,6 +90,13 @@ export function GroupChatPanel({
   const [host, setHost] = useState<string>("");
   const [workers, setWorkers] = useState<Set<string>>(new Set());
   const [prompt, setPrompt] = useState("");
+
+  // The panel already has `profiles: ProfileInfo[]` loaded by the existing
+  // useEffect above — we reuse it directly for the @profile live preview
+  // under the prompt textarea. By the time a prompt arrives here, the
+  // upstream caller (ChatPage / CronPage / WebhooksPage) has already
+  // resolved `@agent(...)` into a concrete (host, workers) tuple via the
+  // GroupChatPreset, so we deliberately skip the @agent chip here.
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rounds, setRounds] = useState<Round[]>([]);
@@ -309,6 +350,7 @@ export function GroupChatPanel({
                 "px-3 py-2 text-sm resize-y focus:outline-none focus:ring-1 focus:ring-current/30",
               )}
             />
+            <GroupPromptPreview prompt={prompt} profiles={profiles} />
             <div className="mt-2 flex items-center justify-between">
               <p className="text-[11px] text-text-tertiary">
                 Fans out to {workers.size || 0} worker{workers.size === 1 ? "" : "s"} in

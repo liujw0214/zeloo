@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useMemo, useState } from "react";
 import {
   type CronTriggerController,
   createCronTriggerController,
@@ -51,6 +51,11 @@ import { PluginSlot } from "@/plugins";
 import { Segmented } from "@nous-research/ui/ui/components/segmented";
 import { AutomationBlueprints } from "@/components/AutomationBlueprints";
 import { cn, themedBody } from "@/lib/utils";
+import { MentionPreview } from "@/components/MentionPreview";
+import {
+  parseAgentMention,
+  parseProfileMentions,
+} from "@/lib/profileMentions";
 
 function formatTime(iso?: string | null): string {
   if (!iso) return "—";
@@ -131,6 +136,9 @@ interface CronJobFormResources {
   availableToolsets: ToolsetInfo[];
   modelOptions: ModelOptionsResponse | null;
   deliveryTargets: CronDeliveryTarget[];
+  /** Live preview chip strip under the prompt textarea needs the profile
+   *  name list to resolve `@profile` mentions. Same source as ChatPage. */
+  profiles: ProfileInfo[];
 }
 
 function emptyCronJobForm(): CronJobEditorState {
@@ -330,6 +338,48 @@ function CronAdvancedFields({
   );
 }
 
+/**
+ * Inline @agent / @profile preview for the CronJobFormFields prompt textarea.
+ *
+ * Cron jobs are dispatched via the backend scheduler (`kind=group_chat` /
+ * `kind=agent`), so there's no Send-time tab switch here — the preview is
+ * purely a write-time hint. Still useful so the operator sees what the
+ * scheduler will fan out to before clicking Create.
+ */
+function CronPromptPreview({
+  prompt,
+  profiles,
+}: {
+  prompt: string;
+  profiles: ProfileInfo[];
+ }): React.JSX.Element | null {
+  const knownNames = useMemo(
+    () => profiles.map((p) => p.name),
+    [profiles],
+  );
+  const mentions = useMemo(
+    () => parseProfileMentions(prompt, knownNames),
+    [prompt, knownNames],
+  );
+  const agentMention = useMemo(
+    () => parseAgentMention(prompt),
+    [prompt],
+  );
+  return (
+    <MentionPreview
+      valid={mentions.valid}
+      unknown={mentions.unknown}
+      className="px-0"
+      agent={{
+        present: agentMention.present,
+        optionsValid: agentMention.optionsValid,
+        host: agentMention.host,
+        workers: agentMention.workers,
+      }}
+    />
+  );
+}
+
 interface CronJobFormFieldsProps {
   idPrefix: string;
   autoFocus?: boolean;
@@ -390,6 +440,7 @@ function CronJobFormFields({
           value={form.prompt}
           onChange={(e) => update("prompt", e.target.value)}
         />
+        <CronPromptPreview prompt={form.prompt} profiles={resources.profiles} />
       </div>
 
       <ScheduleBuilder
@@ -958,6 +1009,7 @@ export default function CronPage() {
                   availableToolsets,
                   modelOptions,
                   deliveryTargets,
+                  profiles,
                 }}
               />
 
@@ -1018,6 +1070,7 @@ export default function CronPage() {
                   availableToolsets,
                   modelOptions,
                   deliveryTargets,
+                  profiles,
                 }}
               />
 
