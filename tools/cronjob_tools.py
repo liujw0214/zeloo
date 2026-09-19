@@ -542,6 +542,19 @@ def _action_create(a: Dict[str, Any]) -> str:
                 success=False)
     elif not prompt and not canonical_skills:
         return tool_error("create requires either prompt or at least one skill", success=False)
+    # group_chat jobs: require --host + --workers, allow empty prompt (the
+    # scheduler fills the prompt from the stored job["prompt"] on each fire).
+    if (a.get("kind") or "").strip() == "group_chat":
+        from zeloo_cli.group_chat_cron import validate_group_chat_job
+        try:
+            validate_group_chat_job({
+                "kind": "group_chat",
+                "group_chat_host": a.get("group_chat_host"),
+                "group_chat_workers": a.get("group_chat_workers") or [],
+                "prompt": prompt or "",
+            })
+        except Exception as exc:
+            return tool_error(str(exc), success=False)
     error = (
         (prompt and _scan_cron_prompt(prompt))
         or (script and _validate_cron_script_path(script))
@@ -578,7 +591,11 @@ def _action_create(a: Dict[str, Any]) -> str:
             reasoning_effort=a["reasoning_effort"],
             failure_deliver=_resolve_cron_context_deliver(_normalize_deliver_param(a["failure_deliver"])),
             **({"paused": a["paused"], "paused_reason": a["paused_reason"]}
-               if a["paused"] is not False or a["paused_reason"] is not None else {}))
+               if a["paused"] is not False or a["paused_reason"] is not None else {}),
+            kind=a.get("kind"),
+            group_chat_host=a.get("group_chat_host"),
+            group_chat_workers=a.get("group_chat_workers") or None,
+    )
     except CronSchedulerRegistrationError as exc:
         _partial = exc.to_dict()
         return tool_error(_partial.pop("error"), success=False, **_partial)
@@ -882,7 +899,15 @@ def cronjob(
     task_id: str = None,
     session_id: Optional[str] = None,
     paused: bool = False,
-    paused_reason: Optional[str] = None) -> str:
+    paused_reason: Optional[str] = None,
+    # group_chat fields — when ``kind="group_chat"`` the scheduler fans out
+    # the prompt across ``group_chat_workers[]`` in parallel and synthesizes
+    # the final reply via ``group_chat_host`` (no LLM/agent stack on the cron
+    # run path). Mirrors the dashboard /chat Group tab and the new
+    # ``Zeloo group-chat send`` CLI.
+    kind: Optional[str] = None,
+    group_chat_host: Optional[str] = None,
+    group_chat_workers: Optional[List[str]] = None) -> str:
     """Unified cron job management tool."""
     a = dict(locals())
     del a["task_id"]  # unused but kept for handler signature compatibility

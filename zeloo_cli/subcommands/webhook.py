@@ -36,6 +36,12 @@ def build_webhook_parser(subparsers, *, cmd_webhook: Callable) -> None:
         help="Filter/transform script under ~/.Zeloo/scripts/. The route "
         "payload is passed as JSON on stdin; empty stdout, [SILENT], or a "
         "nonzero exit code ignores the webhook.")
+    wh_sub.add_argument(
+        "--group-chat-host", dest="group_chat_host", default="",
+        help="--deliver=group_chat only: profile that synthesizes the final reply.")
+    wh_sub.add_argument(
+        "--group-chat-workers", dest="group_chat_workers", default="",
+        help="--deliver=group_chat only: comma-separated worker profile names (1..8).")
 
     webhook_subparsers.add_parser("list", aliases=["ls"], help="List all dynamic subscriptions")
 

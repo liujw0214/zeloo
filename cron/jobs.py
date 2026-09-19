@@ -1706,6 +1706,9 @@ def create_job(
     failure_deliver: Optional[str] = None,
     paused: bool = False,
     paused_reason: Optional[str] = None,
+    kind: Optional[str] = None,
+    group_chat_host: Optional[str] = None,
+    group_chat_workers: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Create a new cron job and return the stored record.
 
@@ -1746,6 +1749,18 @@ def create_job(
     # Reject gateway-lifecycle commands (respawn loops) here, not just in the CLI: covers the tool.
     from cron.lifecycle_guard import check_gateway_lifecycle
     check_gateway_lifecycle(prompt_text, f["script"])
+    # ``kind=group_chat`` jobs use a different run path (no LLM call); validate
+    # host/workers eagerly so a hand-edited jobs.json can't quietly fail every tick.
+    if (kind or "").strip() == "group_chat":
+        from zeloo_cli.group_chat_cron import validate_group_chat_job
+        # We feed the partially-built dict back so validation sees the persisted shape.
+        _scratch = {
+            "kind": "group_chat",
+            "group_chat_host": group_chat_host,
+            "group_chat_workers": list(group_chat_workers) if group_chat_workers else [],
+            "prompt": prompt_text,
+        }
+        validate_group_chat_job(_scratch)
 
     label_source = (
         prompt_text
@@ -1795,6 +1810,9 @@ def create_job(
         "origin": origin,  # Tracks where job was created for "origin" delivery
         "enabled_toolsets": f["enabled_toolsets"],
         "workdir": f["workdir"],
+        "kind": (kind or "agent").strip(),
+        "group_chat_host": (group_chat_host or None),
+        "group_chat_workers": list(group_chat_workers) if group_chat_workers else None,
     }
     # Optional keys are persisted only when explicitly set: an absent key falls back to global
     # config (attach/reasoning) or to ``deliver`` (failure_deliver), byte-identical to pre-feature

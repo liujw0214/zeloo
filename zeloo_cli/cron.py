@@ -550,12 +550,28 @@ _JOB_ARG_FIELDS = (("name", "name"), ("deliver", "deliver"), ("failure_deliver",
                    ("repeat", "repeat"), ("script", "script"), ("workdir", "workdir"),
                    ("model", "model"), ("provider", "model_provider"),
                    ("monitor_script", "monitor_script"), ("monitor_url", "monitor_url"),
-                   ("continuity", "continuity"), ("reasoning_effort", "reasoning_effort"))
+                   ("continuity", "continuity"), ("reasoning_effort", "reasoning_effort"),
+                   ("kind", "kind"), ("group_chat_host", "group_chat_host"))
+
+
+def _group_chat_workers_kw(args):
+    """``group_chat_workers`` arrives as a comma-separated string from the
+    CLI; convert it to a list of trimmed non-empty names so the tool layer
+    (which expects a List[str]) sees a clean value. None when absent.
+    """
+    raw = getattr(args, "group_chat_workers", None)
+    if not raw:
+        return None
+    return [w.strip() for w in raw.split(",") if w.strip()]
 
 
 def _job_api_kwargs(args) -> Dict[str, Any]:
     """Collect the create/update kwargs shared by ``cron create`` and ``cron edit``."""
-    return {api_key: getattr(args, attr, None) for api_key, attr in _JOB_ARG_FIELDS}
+    out = {api_key: getattr(args, attr, None) for api_key, attr in _JOB_ARG_FIELDS}
+    # group_chat_workers needs string → list conversion; merge it in so the
+    # dict-comprehension stays simple for the other scalar fields.
+    out["group_chat_workers"] = _group_chat_workers_kw(args)
+    return out
 
 
 _JOB_DETAIL_LINES = (

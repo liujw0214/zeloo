@@ -48,6 +48,23 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
         help="Skip the LLM entirely — run --script on schedule and deliver "
             "its stdout directly. Empty stdout = silent. Classic watchdog "
             "pattern (memory alerts, disk alerts, CI pings).")
+    cron_create.add_argument(
+        "--kind", dest="kind", default=None,
+        help=("Job execution kind. Default 'agent' (run an LLM-backed agent "
+              "with the assembled prompt). 'group_chat' fans the prompt out "
+              "across multiple worker profiles in parallel and synthesizes "
+              "the final reply via a host profile — no LLM call on the cron "
+              "run path; reuses the dashboard /chat Group tab flow. Requires "
+              "--group-chat-host and --group-chat-workers."))
+    cron_create.add_argument(
+        "--group-chat-host", dest="group_chat_host", default=None,
+        help=("kind=group_chat only: profile name that produces the "
+              "synthesized final reply."))
+    cron_create.add_argument(
+        "--group-chat-workers", dest="group_chat_workers", default=None,
+        help=("kind=group_chat only: comma-separated worker profile names "
+              "(1..8). Each runs in parallel with the prompt; the host sees "
+              "all worker outputs and integrates them."))
     cron_create.add_argument("--monitor-script", dest="monitor_script",
         help="Monitor mode: path to a cheap source script under "
             "~/.Zeloo/scripts/ that runs each tick BEFORE the agent. "

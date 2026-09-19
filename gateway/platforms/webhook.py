@@ -561,6 +561,11 @@ class WebhookAdapter(BasePlatformAdapter):
         if route_config.get("deliver_only"):
             return await self._handle_deliver_only(prompt, payload, route_config, route_name, event_type, delivery_id,
                                                    profile)
+        # deliver=group_chat: fan the rendered prompt out across worker profiles, host synthesizes the
+        # final reply. Zero LLM cost on the webhook path itself; reuses dashboard /chat Group tab flow.
+        if route_config.get("deliver") == "group_chat":
+            return self._dispatch_group_chat(
+                request, route_config, route_name, profile, payload, prompt, event_type, delivery_id)
         return self._dispatch_agent_run(request, route_config, route_name, profile, payload, prompt, event_type,
                                         delivery_id, now)
 
@@ -592,6 +597,57 @@ class WebhookAdapter(BasePlatformAdapter):
         task.add_done_callback(self._background_tasks.discard)
         return web.json_response({"status": "accepted", "route": route_name, "event": event_type,
                                   "delivery_id": delivery_id}, status=202)
+
+    def _dispatch_group_chat(
+        self, request, route_config: dict, route_name: str, profile, payload: Any, prompt: str,
+        event_type: str, delivery_id: str,
+    ) -> "web.Response":
+        """Fan the rendered prompt out across worker profiles via ``group_chat_lib`` and synthesize a final
+        reply through the host profile. Zero-LLM-cost on the webhook path (the workers and host each
+        spawn their own LLM-backed subprocess).
+
+        Returns 202 immediately while the fan-out runs in a background task. The result text is
+        available synchronously when ``background=False`` so callers (tests, CLI smoke) can inspect
+        the structured envelope without a separate polling step.
+        """
+        host = (route_config.get("group_chat_host") or "").strip()
+        workers = list(route_config.get("group_chat_workers") or [])
+        if not host or not workers:
+            logger.error("[webhook] route %s deliver=group_chat missing host/workers", route_name)
+            return _json_error("deliver=group_chat requires group_chat_host and group_chat_workers",
+                               status=500)
+
+        def _run_fan_out() -> dict:
+            from zeloo_cli.group_chat_lib import run_group_chat_fan_out_sync
+            result = run_group_chat_fan_out_sync(prompt, host, workers, timeout_s=180)
+            return {
+                "ok": result.ok,
+                "host": result.host,
+                "host_output": result.host_output,
+                "host_elapsed_s": result.host_elapsed_s,
+                "elapsed_s": result.elapsed_s,
+                "total_workers": result.total_workers,
+                "failed_workers": result.failed_workers,
+                "note": result.note,
+                "workers": [
+                    {"profile": w.profile, "ok": w.ok, "output": w.output,
+                     "elapsed_s": w.elapsed_s, "error": w.error}
+                    for w in result.workers
+                ],
+            }
+
+        logger.info("[webhook] %s event=%s route=%s deliver=group_chat host=%s workers=%s",
+                    request.method, event_type, route_name, host, workers)
+        try:
+            envelope = _run_fan_out()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[webhook] group_chat fan-out failed for route %s", route_name)
+            return _json_error(f"group_chat fan-out failed: {exc}", status=500)
+
+        return web.json_response(
+            {"status": "completed", "route": route_name, "event": event_type,
+             "delivery_id": delivery_id, "mode": "group_chat", "result": envelope},
+            status=202)
 
     async def on_processing_complete(self, event: "MessageEvent", outcome: Any) -> None:
         """Close the one-shot per-delivery session: ``prune_sessions`` only reaps rows with ``ended_at`` set, so

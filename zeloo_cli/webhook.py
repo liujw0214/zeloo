@@ -13,6 +13,11 @@ from typing import Dict
 from zeloo_constants import display_zeloo_home
 from utils import atomic_json_write
 from zeloo_cli.config import cfg_get
+from zeloo_cli.group_chat_lib import (
+    MAX_WORKERS,
+    validate_inputs,
+    validate_profile_name,
+)
 
 
 _SUBSCRIPTIONS_FILENAME = "webhook_subscriptions.json"
@@ -135,6 +140,27 @@ def _cmd_subscribe(args):
         route["script"] = script
     if args.deliver_chat_id:
         route["deliver_extra"] = {"chat_id": args.deliver_chat_id}
+    # deliver=group_chat requires --group-chat-host + --group-chat-workers.
+    if route.get("deliver") == "group_chat":
+        host = (getattr(args, "group_chat_host", "") or "").strip()
+        workers_raw = (getattr(args, "group_chat_workers", "") or "").strip()
+        if not host:
+            print("Error: --deliver=group_chat requires --group-chat-host <profile>.")
+            return
+        if not workers_raw:
+            print("Error: --deliver=group_chat requires --group-chat-workers a,b,c.")
+            return
+        workers = [w.strip() for w in workers_raw.split(",") if w.strip()]
+        try:
+            validate_profile_name(host)
+            for w in workers:
+                validate_profile_name(w)
+            validate_inputs("placeholder", host, workers)
+        except Exception as exc:
+            print(f"Error: --deliver=group_chat invalid profiles: {exc}")
+            return
+        route["group_chat_host"] = host
+        route["group_chat_workers"] = workers
     subs[name] = route
     _save_subscriptions(subs)
 
@@ -143,6 +169,10 @@ def _cmd_subscribe(args):
     print(f"  Secret: {secret}")
     print(f"  Events: {', '.join(events) or '(all)'}")
     print(f"  Deliver: {route['deliver']}")
+    if route.get("deliver") == "group_chat":
+        workers = ",".join(route.get("group_chat_workers", []))
+        print(f"  Group-chat host: {route.get('group_chat_host')}")
+        print(f"  Group-chat workers: {workers}")
     if route.get("deliver_only"):
         print("  Mode: direct delivery (no agent, zero LLM cost)")
     if route.get("prompt"):

@@ -1947,6 +1947,20 @@ def _prepare_job_prompt(
     if job.get("no_agent"):
         return _run_no_agent_job(job, job_id, job_name, cancel_event), None
 
+    # group_chat jobs fan out across profiles in parallel and skip the LLM/agent
+    # stack entirely (mirrors the dashboard /chat Group tab flow). Same contract
+    # as no_agent: returns (ok, doc_markdown, alert, error) for the deliver path.
+    if (job.get("kind") or "agent") == "group_chat":
+        from zeloo_cli.group_chat_cron import run_group_chat_cron_job_sync
+        try:
+            return run_group_chat_cron_job_sync(job, job_id, job_name), None
+        except Exception as exc:  # noqa: BLE001 — surface as a normal cron failure
+            logger.exception("Job '%s': group_chat fan-out raised unexpectedly", job_id)
+            now_iso = _zeloo_now().strftime("%Y-%m-%d %H:%M:%S")
+            header = _job_doc_header(job_name, job_id, now_iso, "group_chat (raised)")
+            msg = f"Group chat fan-out raised: {exc}"
+            return (False, f"{header}**Status:** raised\n\n{msg}\n", msg, msg), None
+
     # Legacy / hand-edited job with nothing to run: pause it instead of waking the LLM every fire.
     from cron.jobs import EMPTY_PAYLOAD_ERROR, job_payload_is_empty
 

@@ -1815,6 +1815,7 @@ cmd_auth = _forward_command("cmd_auth", "zeloo_cli.auth_commands", "auth_command
 cmd_status = _forward_command("cmd_status", "zeloo_cli.status", "show_status", doc='Show status of all components.')
 cmd_cron = _forward_command("cmd_cron", "zeloo_cli.cron", "cron_command", forward_return=True, doc='Cron job management.')
 cmd_webhook = _forward_command("cmd_webhook", "zeloo_cli.webhook", "webhook_command", doc='Webhook subscription management.')
+cmd_group_chat = _forward_command("cmd_group_chat", "zeloo_cli.group_chat_cmd", "cmd_group_chat", forward_return=True, doc='Multi-agent fan-out (CLI). Reuses the dashboard /chat Group tab flow for cron / webhook / kanban callers.')
 cmd_kanban = _forward_command("cmd_kanban", "zeloo_cli.kanban", "kanban_command", forward_return=True, doc='Multi-profile collaboration board.')
 cmd_project = _forward_command("cmd_project", "zeloo_cli.projects_cmd", "projects_command", forward_return=True, doc='Manage projects (named, multi-folder workspaces).')
 cmd_hooks = _forward_command("cmd_hooks", "zeloo_cli.hooks", "hooks_command", doc='Shell-hook inspection and management.')
@@ -3242,6 +3243,8 @@ def _build_cli_parser():
     build_cron_parser(subparsers, cmd_cron=cmd_cron)
     build_sync_parser(subparsers, cmd_sync=cmd_sync)
     build_webhook_parser(subparsers, cmd_webhook=cmd_webhook)
+    from zeloo_cli.group_chat_cmd import register_group_chat_subparser
+    register_group_chat_subparser(subparsers)
 
     from zeloo_cli.subcommands.peer import build_peer_parser
     build_peer_parser(subparsers)
