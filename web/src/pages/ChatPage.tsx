@@ -39,7 +39,9 @@ import { api, fetchJSON } from "@/lib/api";
 import { MentionPreview } from "@/components/MentionPreview";
 import {
   chooseHost,
+  parseAgentMention,
   parseProfileMentions,
+  resolveAgentFanOut,
   stripValidMentions,
   workersFromMentions,
 } from "@/lib/profileMentions";
@@ -2076,10 +2078,47 @@ function ChatFallbackPanel(): React.JSX.Element {
     () => parseProfileMentions(prompt, knownNames),
     [prompt, knownNames],
   );
+  const agentMention = React.useMemo(
+    () => parseAgentMention(prompt),
+    [prompt],
+  );
 
   async function send(): Promise<void> {
     const text = prompt.trim();
     if (!text || busy) return;
+
+    // @agent meta-mention: routes through the Group tab so the user gets the
+    // rich envelope view (host reply + per-worker trail). The backend's
+    // `resolve_agent_mention` does the actual fan-out (also reachable via
+    // /api/chat/send — see web_routers/chat.py), but the Group panel renders
+    // the worker trail so we prefer it here. Mirrors how @profile ≥2 fan-out
+    // already short-circuits below.
+    const agentFanOut = resolveAgentFanOut(agentMention, knownNames, defaultProfile || undefined);
+    if (agentFanOut !== null) {
+      publishGroupChatPreset({
+        prompt: agentFanOut.prompt.length > 0 ? agentFanOut.prompt : text,
+        host: agentFanOut.host,
+        workers: agentFanOut.workers,
+      });
+      setPrompt("");
+      setReply(null);
+      setError(null);
+      window.dispatchEvent(new CustomEvent("zeloo-chat-mode", { detail: "group" }));
+      return;
+    }
+
+    // @agent present but unresolvable — surface as an inline error rather
+    // than silently falling through to a single-agent reply.
+    if (agentMention.present && !agentMention.optionsValid) {
+      setError("@agent: invalid profile name in host= or workers= option");
+      return;
+    }
+    if (agentMention.present) {
+      // present + optionsValid but resolveAgentFanOut returned null — known
+      // profile set is too small (<2) or the explicit host doesn't exist.
+      setError("@agent: needs ≥2 known profiles, or check that host= exists");
+      return;
+    }
 
     // @profile fan-out: ≥2 valid mentions short-circuit to the Group tab.
     // We don't fire /api/chat/send here — the GroupChatPanel that mounts in
@@ -2162,7 +2201,17 @@ function ChatFallbackPanel(): React.JSX.Element {
       </button>
       {open && (
         <div className="flex flex-col gap-3 border-t border-current/10 px-4 py-4">
-          <MentionPreview valid={mentions.valid} unknown={mentions.unknown} className="pb-1" />
+          <MentionPreview
+            valid={mentions.valid}
+            unknown={mentions.unknown}
+            className="pb-1"
+            agent={{
+              present: agentMention.present,
+              optionsValid: agentMention.optionsValid,
+              host: agentMention.host,
+              workers: agentMention.workers,
+            }}
+          />
             <textarea
             className={cn(
               "min-h-[88px] w-full resize-y rounded-lg border border-current/15",
